@@ -327,7 +327,7 @@ private:
 	void AddrMode_StkRel();
 	void AddrMode_StkRelIndIdxY();
 	
-	void RunOp();
+	__forceinline void RunOp();
 	__noinline void ProcessHaltedState();
 	__forceinline void CheckForInterrupts();
 

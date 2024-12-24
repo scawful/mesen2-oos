@@ -1,6 +1,39 @@
 #include "pch.h"
 #include "SNES/Spc.h"
+#include "SNES/SnesMemoryManager.h"
+#include "Shared/Emulator.h"
 #include "Utilities/HexUtilities.h"
+
+void Spc::Run()
+{
+	if(!_enabled) {
+		//Used to temporarily disable the SPC when overclocking is enabled
+		return;
+	} else if(_state.StopState != SnesCpuStopState::Running) {
+		//STOP or SLEEP were executed - execution is stopped forever.
+		_emu->ProcessHaltedCpu<CpuType::Spc>();
+		return;
+	}
+
+	uint64_t targetCycle = (uint64_t)(_memoryManager->GetMasterClock() * _clockRatio);
+	while(_state.Cycle < targetCycle) {
+		ProcessCycle();
+	}
+}
+
+void Spc::ProcessCycle()
+{
+	if(_opStep == SpcOpStep::ReadOpCode) {
+#ifndef DUMMYSPC
+		_emu->ProcessInstruction<CpuType::Spc>();
+#endif
+		_opCode = GetOpCode();
+		_opStep = SpcOpStep::Addressing;
+		_opSubStep = 0;
+	} else {
+		Exec();
+	}
+}
 
 void Spc::EndOp()
 {
