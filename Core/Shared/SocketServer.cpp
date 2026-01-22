@@ -9,6 +9,8 @@
 #include "Core/Debugger/ScriptManager.h"
 #include "Core/Debugger/DebugTypes.h"
 #include "Core/Debugger/MemoryDumper.h"
+#include "SNES/SnesCpuTypes.h"
+#include "Shared/Video/VideoDecoder.h"
 #include "Utilities/HexUtilities.h"
 
 #include <sys/socket.h>
@@ -64,6 +66,9 @@ void SocketServer::RegisterHandlers() {
 	_handlers["SCREENSHOT"] = HandleScreenshot;
 	_handlers["CPU"] = HandleGetCpuState;
 	_handlers["INPUT"] = HandleSetInput;
+	_handlers["DISASM"] = HandleDisasm;
+	_handlers["STEP"] = HandleStep;
+	_handlers["FRAME"] = HandleRunFrame;
 }
 
 void SocketServer::RegisterHandler(const string& command, CommandHandler handler) {
@@ -243,7 +248,7 @@ SocketCommand SocketServer::ParseCommand(const string& json) {
 	};
 
 	// Common params
-	vector<string> commonParams = {"addr", "value", "len", "slot", "path", "name", "content", "buttons", "frames", "hex"};
+	vector<string> commonParams = {"addr", "value", "len", "slot", "path", "name", "content", "buttons", "frames", "hex", "player", "count", "mode"};
 	for (const auto& param : commonParams) {
 		string val = extractParam(param);
 		if (!val.empty()) {
@@ -617,20 +622,137 @@ SocketResponse SocketServer::HandleLoadScript(Emulator* emu, const SocketCommand
 SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
 
-	// Get the current frame buffer and encode as PNG base64
-	// For now, just indicate the feature exists
-	resp.success = false;
-	resp.error = "Screenshot not yet implemented - use Lua script instead";
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	// Capture screenshot to PNG stream
+	std::stringstream pngStream;
+	emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+
+	string pngData = pngStream.str();
+	if (pngData.empty()) {
+		resp.success = false;
+		resp.error = "Failed to capture screenshot";
+		return resp;
+	}
+
+	// Base64 encode the PNG data
+	static const char* base64Chars =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		"abcdefghijklmnopqrstuvwxyz"
+		"0123456789+/";
+
+	string encoded;
+	encoded.reserve(((pngData.size() + 2) / 3) * 4);
+
+	uint32_t i = 0;
+	uint8_t a3[3];
+	uint8_t a4[4];
+
+	for (char c : pngData) {
+		a3[i++] = (uint8_t)c;
+		if (i == 3) {
+			a4[0] = (a3[0] & 0xfc) >> 2;
+			a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+			a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+			a4[3] = a3[2] & 0x3f;
+			for (int j = 0; j < 4; j++) {
+				encoded += base64Chars[a4[j]];
+			}
+			i = 0;
+		}
+	}
+
+	if (i > 0) {
+		for (uint32_t j = i; j < 3; j++) {
+			a3[j] = 0;
+		}
+		a4[0] = (a3[0] & 0xfc) >> 2;
+		a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+		a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+		for (uint32_t j = 0; j < i + 1; j++) {
+			encoded += base64Chars[a4[j]];
+		}
+		while (i++ < 3) {
+			encoded += '=';
+		}
+	}
+
+	resp.success = true;
+	resp.data = "\"" + encoded + "\"";
 	return resp;
 }
 
 SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
 
-	// CPU state retrieval requires console-specific handling
-	// For now, return basic info
-	resp.success = false;
-	resp.error = "CPU state not yet implemented - use Lua script GetState() instead";
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Get the CPU debugger for the main CPU type
+	CpuType cpuType = emu->GetCpuTypes()[0];
+	IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
+	if (!cpuDebugger) {
+		resp.success = false;
+		resp.error = "CPU debugger not available";
+		return resp;
+	}
+
+	// Get program counter and flags
+	uint32_t pc = cpuDebugger->GetProgramCounter(true);
+	uint8_t flags = cpuDebugger->GetCpuFlags();
+
+	stringstream ss;
+	ss << "{";
+	ss << "\"pc\":\"0x" << hex << uppercase << setw(6) << setfill('0') << pc << "\",";
+	ss << "\"flags\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)flags << "\",";
+
+	// Get more detailed state for SNES
+	if (emu->GetConsoleType() == ConsoleType::Snes) {
+		// Read key registers from memory
+		auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+
+		SnesCpuState& state = static_cast<SnesCpuState&>(cpuDebugger->GetState());
+		uint64_t cycleCount = state.CycleCount;
+		uint16_t a = state.A;
+		uint16_t x = state.X;
+		uint16_t y = state.Y;
+		uint16_t sp = state.SP;
+		uint16_t d = state.D;
+		uint16_t regPc = state.PC;
+		uint8_t k = state.K;
+		uint8_t dbr = state.DBR;
+		uint8_t ps = state.PS;
+
+		ss << "\"a\":\"0x" << hex << uppercase << setw(4) << setfill('0') << a << "\",";
+		ss << "\"x\":\"0x" << hex << uppercase << setw(4) << setfill('0') << x << "\",";
+		ss << "\"y\":\"0x" << hex << uppercase << setw(4) << setfill('0') << y << "\",";
+		ss << "\"sp\":\"0x" << hex << uppercase << setw(4) << setfill('0') << sp << "\",";
+		ss << "\"d\":\"0x" << hex << uppercase << setw(4) << setfill('0') << d << "\",";
+		ss << "\"k\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)k << "\",";
+		ss << "\"dbr\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)dbr << "\",";
+		ss << "\"p\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)ps << "\",";
+		ss << "\"cycles\":" << dec << cycleCount << ",";
+	}
+
+	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
+	ss << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
 	return resp;
 }
 
@@ -644,9 +766,228 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 		return resp;
 	}
 
-	// Input injection would need to go through the control manager
-	// This is a placeholder for the feature
-	resp.success = false;
-	resp.error = "Input injection not yet implemented - use Lua script instead";
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Parse button string - format: "A,B,UP,DOWN" or just "A" for single button
+	string buttons = buttonsIt->second;
+	DebugControllerState state = {};
+
+	// Parse comma-separated button names
+	size_t pos = 0;
+	string token;
+	while (pos < buttons.size()) {
+		size_t nextComma = buttons.find(',', pos);
+		if (nextComma == string::npos) {
+			token = buttons.substr(pos);
+			pos = buttons.size();
+		} else {
+			token = buttons.substr(pos, nextComma - pos);
+			pos = nextComma + 1;
+		}
+
+		// Trim whitespace
+		while (!token.empty() && token.front() == ' ') token.erase(0, 1);
+		while (!token.empty() && token.back() == ' ') token.pop_back();
+
+		// Convert to uppercase for matching
+		for (char& c : token) c = toupper(c);
+
+		// Set the button state
+		if (token == "A") state.A = true;
+		else if (token == "B") state.B = true;
+		else if (token == "X") state.X = true;
+		else if (token == "Y") state.Y = true;
+		else if (token == "L") state.L = true;
+		else if (token == "R") state.R = true;
+		else if (token == "UP") state.Up = true;
+		else if (token == "DOWN") state.Down = true;
+		else if (token == "LEFT") state.Left = true;
+		else if (token == "RIGHT") state.Right = true;
+		else if (token == "SELECT") state.Select = true;
+		else if (token == "START") state.Start = true;
+	}
+
+	// Get player index (default to player 1 / index 0)
+	uint32_t playerIndex = 0;
+	auto indexIt = cmd.params.find("player");
+	if (indexIt != cmd.params.end()) {
+		playerIndex = std::stoul(indexIt->second);
+		if (playerIndex > 7) playerIndex = 0;
+	}
+
+	// Set the input override via debugger
+	dbg.GetDebugger()->SetInputOverrides(playerIndex, state);
+
+	resp.success = true;
+	resp.data = "\"OK\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleDisasm(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	auto addrIt = cmd.params.find("addr");
+	if (addrIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing addr parameter";
+		return resp;
+	}
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	uint32_t addr = 0;
+	string addrStr = addrIt->second;
+	if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+		addr = std::stoul(addrStr.substr(2), nullptr, 16);
+	} else {
+		addr = std::stoul(addrStr, nullptr, 16);
+	}
+
+	// Get line count (default 10)
+	uint32_t count = 10;
+	auto countIt = cmd.params.find("count");
+	if (countIt != cmd.params.end()) {
+		count = std::stoul(countIt->second);
+		if (count > 100) count = 100;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	CpuType cpuType = emu->GetCpuTypes()[0];
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+
+	stringstream ss;
+	ss << "[";
+
+	bool first = true;
+	uint32_t currentAddr = addr;
+	for (uint32_t i = 0; i < count; i++) {
+		// Read opcode bytes (up to 4 for SNES)
+		uint8_t opcode = dumper->GetMemoryValue(MemoryType::SnesMemory, currentAddr);
+
+		if (!first) ss << ",";
+		first = false;
+
+		ss << "{";
+		ss << "\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << currentAddr << "\",";
+		ss << "\"opcode\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)opcode << "\"";
+		ss << "}";
+
+		// Move to next instruction (simplified - just increment by 1 for now)
+		// A proper implementation would use the instruction length
+		currentAddr++;
+	}
+
+	ss << "]";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleStep(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Get step count (default 1)
+	int32_t stepCount = 1;
+	auto countIt = cmd.params.find("count");
+	if (countIt != cmd.params.end()) {
+		stepCount = std::stoi(countIt->second);
+	}
+
+	// Get step mode (default: into)
+	string mode = "into";
+	auto modeIt = cmd.params.find("mode");
+	if (modeIt != cmd.params.end()) {
+		mode = modeIt->second;
+	}
+
+	CpuType cpuType = emu->GetCpuTypes()[0];
+	IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
+	if (!cpuDebugger) {
+		resp.success = false;
+		resp.error = "CPU debugger not available";
+		return resp;
+	}
+
+	StepType stepType = StepType::Step;
+	if (mode == "over") {
+		stepType = StepType::StepOver;
+	} else if (mode == "out") {
+		stepType = StepType::StepOut;
+	}
+
+	cpuDebugger->Step(stepCount, stepType);
+
+	resp.success = true;
+	resp.data = "\"OK\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	// Get frame count (default 1)
+	int32_t frameCount = 1;
+	auto countIt = cmd.params.find("count");
+	if (countIt != cmd.params.end()) {
+		frameCount = std::stoi(countIt->second);
+		if (frameCount > 600) frameCount = 600; // Max 10 seconds at 60fps
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (dbg.GetDebugger()) {
+		CpuType cpuType = emu->GetCpuTypes()[0];
+		IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
+		if (cpuDebugger) {
+			// Step by frames
+			cpuDebugger->Step(frameCount, StepType::PpuStep);
+		}
+	} else {
+		// Just run for a bit if no debugger
+		emu->Resume();
+	}
+
+	resp.success = true;
+	resp.data = "\"OK\"";
 	return resp;
 }

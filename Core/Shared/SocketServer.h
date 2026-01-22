@@ -58,6 +58,9 @@ private:
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleGetCpuState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSetInput(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleDisasm(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleStep(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleRunFrame(Emulator* emu, const SocketCommand& cmd);
 
 public:
 	SocketServer(Emulator* emu);
