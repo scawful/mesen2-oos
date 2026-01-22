@@ -9,6 +9,9 @@ namespace Mesen.Debugger.Utilities
 {
 	public static class WatchHudService
 	{
+		private static readonly object _updateLock = new();
+		private static readonly object _watchHookLock = new();
+		private static bool _watchHooksInstalled = false;
 		private static DateTime _lastUpdate = DateTime.MinValue;
 		private static List<WatchValueInfo> _previousValues = new();
 		private static string _lastText = "";
@@ -16,6 +19,7 @@ namespace Mesen.Debugger.Utilities
 
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
+			EnsureWatchHooks();
 			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
 				Clear();
 				return;
@@ -24,6 +28,11 @@ namespace Mesen.Debugger.Utilities
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.GameLoaded:
 					_previousValues = new();
+					UpdateHud(force: true);
+					break;
+				case ConsoleNotificationType.StateLoaded:
+				case ConsoleNotificationType.GamePaused:
+				case ConsoleNotificationType.CodeBreak:
 					UpdateHud(force: true);
 					break;
 				case ConsoleNotificationType.PpuFrameDone:
@@ -38,6 +47,13 @@ namespace Mesen.Debugger.Utilities
 
 		public static void Clear()
 		{
+			lock(_updateLock) {
+				ClearInternal();
+			}
+		}
+
+		private static void ClearInternal()
+		{
 			if(_cleared) {
 				return;
 			}
@@ -47,61 +63,91 @@ namespace Mesen.Debugger.Utilities
 			_cleared = true;
 		}
 
+		private static void EnsureWatchHooks()
+		{
+			if(_watchHooksInstalled) {
+				return;
+			}
+
+			lock(_watchHookLock) {
+				if(_watchHooksInstalled) {
+					return;
+				}
+
+				foreach(CpuType cpuType in Enum.GetValues<CpuType>()) {
+					WatchManager.GetWatchManager(cpuType).WatchChanged += WatchManager_WatchChanged;
+				}
+
+				_watchHooksInstalled = true;
+			}
+		}
+
+		private static void WatchManager_WatchChanged(bool resetSelection)
+		{
+			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
+				return;
+			}
+
+			UpdateHud(force: true);
+		}
+
 		private static void UpdateHud(bool force)
 		{
-			DateTime now = DateTime.UtcNow;
-			if(!force && (now - _lastUpdate).TotalMilliseconds < 50) {
-				return;
-			}
-
-			_lastUpdate = now;
-
-			DebuggerConfig cfg = ConfigManager.Config.Debug.Debugger;
-			if(!cfg.ShowWatchHud) {
-				Clear();
-				return;
-			}
-
-			RomInfo romInfo = EmuApi.GetRomInfo();
-			CpuType cpuType = romInfo.ConsoleType.GetMainCpuType();
-			WatchManager manager = WatchManager.GetWatchManager(cpuType);
-
-			if(manager.WatchEntries.Count == 0) {
-				Clear();
-				return;
-			}
-
-			List<WatchValueInfo> values = manager.GetWatchContent(_previousValues);
-			_previousValues = values;
-
-			int maxEntries = cfg.WatchHudMaxEntries;
-			int count = 0;
-			StringBuilder sb = new StringBuilder();
-			foreach(WatchValueInfo entry in values) {
-				if(string.IsNullOrWhiteSpace(entry.Expression)) {
-					continue;
-				}
-				if(maxEntries > 0 && count >= maxEntries) {
-					break;
+			lock(_updateLock) {
+				DateTime now = DateTime.UtcNow;
+				if(!force && (now - _lastUpdate).TotalMilliseconds < 50) {
+					return;
 				}
 
-				if(count > 0) {
-					sb.Append('\n');
+				_lastUpdate = now;
+
+				DebuggerConfig cfg = ConfigManager.Config.Debug.Debugger;
+				if(!cfg.ShowWatchHud) {
+					ClearInternal();
+					return;
 				}
-				sb.Append(entry.Expression);
-				sb.Append(" = ");
-				sb.Append(entry.Value);
-				count++;
-			}
 
-			string text = sb.ToString();
-			if(!force && text == _lastText) {
-				return;
-			}
+				RomInfo romInfo = EmuApi.GetRomInfo();
+				CpuType cpuType = romInfo.ConsoleType.GetMainCpuType();
+				WatchManager manager = WatchManager.GetWatchManager(cpuType);
 
-			EmuApi.SetWatchHudText(text);
-			_lastText = text;
-			_cleared = text.Length == 0;
+				if(manager.WatchEntries.Count == 0) {
+					ClearInternal();
+					return;
+				}
+
+				List<WatchValueInfo> values = manager.GetWatchContent(_previousValues);
+				_previousValues = values;
+
+				int maxEntries = cfg.WatchHudMaxEntries;
+				int count = 0;
+				StringBuilder sb = new StringBuilder();
+				foreach(WatchValueInfo entry in values) {
+					if(string.IsNullOrWhiteSpace(entry.Expression)) {
+						continue;
+					}
+					if(maxEntries > 0 && count >= maxEntries) {
+						break;
+					}
+
+					if(count > 0) {
+						sb.Append('\n');
+					}
+					sb.Append(entry.Expression);
+					sb.Append(" = ");
+					sb.Append(entry.Value);
+					count++;
+				}
+
+				string text = sb.ToString();
+				if(!force && text == _lastText) {
+					return;
+				}
+
+				EmuApi.SetWatchHudText(text);
+				_lastText = text;
+				_cleared = text.Length == 0;
+			}
 		}
 	}
 }
