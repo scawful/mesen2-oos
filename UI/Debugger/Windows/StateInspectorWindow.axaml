@@ -1,0 +1,48 @@
+<Window
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:m="clr-namespace:Mesen"
+	xmlns:vm="using:Mesen.Debugger.ViewModels"
+	xmlns:dv="using:Mesen.Debugger.Views"
+	xmlns:c="using:Mesen.Controls"
+	xmlns:l="using:Mesen.Localization"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="520"
+	x:Class="Mesen.Debugger.Windows.StateInspectorWindow"
+	Icon="/Assets/RegisterIcon.png"
+	Width="520" Height="520"
+	x:DataType="vm:StateInspectorWindowViewModel"
+	Title="{l:Translate wndTitle}"
+>
+	<Design.DataContext>
+		<vm:StateInspectorWindowViewModel />
+	</Design.DataContext>
+
+	<Window.Styles>
+		<Style Selector="DataBoxRow > Grid Rectangle#BackgroundRectangle">
+			<Setter Property="Fill" Value="{Binding Path=Background, DataType={x:Type vm:RegEntry}}"/>
+		</Style>
+	</Window.Styles>
+
+	<DockPanel>
+		<c:MesenMenu DockPanel.Dock="Top" Name="ActionMenu">
+			<MenuItem Header="{l:Translate mnuFile}" ItemsSource="{Binding FileMenuActions}" />
+			<MenuItem Header="{l:Translate mnuView}" ItemsSource="{Binding ViewMenuActions}" />
+		</c:MesenMenu>
+
+		<dv:RefreshTimingView DataContext="{Binding RefreshTiming}" DockPanel.Dock="Bottom" />
+
+		<DataBox
+			Items="{Binding Entries}"
+			GridLinesVisibility="All"
+			ColumnWidths="{Binding ColumnWidths}"
+		>
+			<DataBox.Columns>
+				<DataBoxTextColumn Header="{l:Translate colName}" Binding="{Binding Name, DataType={x:Type vm:RegEntry}}" CanUserResize="True" InitialWidth="220" />
+				<DataBoxTextColumn Header="{l:Translate colValue}" Binding="{Binding Value, DataType={x:Type vm:RegEntry}}" CanUserResize="True" InitialWidth="120" />
+				<DataBoxTextColumn Header="{l:Translate colValueHex}" Binding="{Binding ValueHex, DataType={x:Type vm:RegEntry}}" CanUserResize="True" InitialWidth="120" />
+			</DataBox.Columns>
+		</DataBox>
+	</DockPanel>
+</Window>

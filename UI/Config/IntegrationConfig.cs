@@ -17,6 +17,7 @@ namespace Mesen.Config
 		[Reactive] public bool AutoLoadSymFiles { get; set; } = true;
 		[Reactive] public bool AutoLoadElfFiles { get; set; } = true;
 		[Reactive] public bool AutoLoadFnsFiles { get; set; } = true;
+		[Reactive] public bool AutoLoadWatchFiles { get; set; } = true;
 
 		[Reactive] public bool ResetLabelsOnImport { get; set; } = true;
 

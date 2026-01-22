@@ -811,7 +811,7 @@ namespace Mesen.Debugger.ViewModels
 						ActionType = ActionType.ImportWatchEntries,
 						Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.ImportWatchEntries),
 						OnClick = async () => {
-							string? filename = await FileDialogHelper.OpenFile(null, wnd, FileDialogHelper.WatchFileExt);
+							string? filename = await FileDialogHelper.OpenFile(null, wnd, FileDialogHelper.WatchFileExt, FileDialogHelper.WatchFileLegacyExt);
 							if(filename != null) {
 								WatchManager.GetWatchManager(CpuType).Import(filename);
 							}
@@ -821,7 +821,7 @@ namespace Mesen.Debugger.ViewModels
 						ActionType = ActionType.ExportWatchEntries,
 						Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.ExportWatchEntries),
 						OnClick = async () => {
-							string? filename = await FileDialogHelper.SaveFile(null, null, wnd, FileDialogHelper.WatchFileExt);
+							string? filename = await FileDialogHelper.SaveFile(null, null, wnd, FileDialogHelper.WatchFileExt, FileDialogHelper.WatchFileLegacyExt);
 							if(filename != null) {
 								WatchManager.GetWatchManager(CpuType).Export(filename);
 							}

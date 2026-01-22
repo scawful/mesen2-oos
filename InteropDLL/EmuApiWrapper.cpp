@@ -256,6 +256,13 @@ extern "C" {
 		}
 	}
 
+	DllExport void __stdcall SetWatchHudText(char* text)
+	{
+		if(_emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->SetWatchHudText(text ? text : "");
+		}
+	}
+
 	DllExport double __stdcall GetAspectRatio()
 	{
 		return _emu->GetSettings()->GetAspectRatio(_emu->GetRegion(), _emu->GetVideoDecoder()->GetBaseFrameInfo(true));

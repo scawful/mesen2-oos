@@ -1,6 +1,7 @@
 ﻿using Avalonia.Controls;
 using Mesen.Config;
 using Mesen.Interop;
+using Mesen.Debugger.Utilities;
 using Mesen.Utilities;
 using Mesen.ViewModels;
 using ReactiveUI;
@@ -77,6 +78,10 @@ namespace Mesen.Debugger.ViewModels
 
 			ConfigManager.Config.Debug.ApplyConfig();
 			ConfigManager.Config.Debug.Fonts.ApplyConfig();
+
+			if(sender == Debugger && e.PropertyName == nameof(Debugger.ShowWatchHud) && !Debugger.ShowWatchHud) {
+				WatchHudService.Clear();
+			}
 		}
 
 		public void RevertChanges()
@@ -153,6 +158,7 @@ namespace Mesen.Debugger.ViewModels
 				DebuggerShortcut.OpenMemorySearch,
 				DebuggerShortcut.OpenDebugLog,
 				DebuggerShortcut.OpenNesHeaderEditor,
+				DebuggerShortcut.OpenStateInspector,
 
 				DebuggerShortcut.OpenTilemapViewer,
 				DebuggerShortcut.OpenTileViewer,

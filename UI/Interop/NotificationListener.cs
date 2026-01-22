@@ -48,10 +48,23 @@ namespace Mesen.Interop
 
 		public void ProcessNotification(int type, IntPtr parameter)
 		{
-			OnNotification?.Invoke(new NotificationEventArgs() {
+			if(OnNotification == null) {
+				return;
+			}
+
+			var args = new NotificationEventArgs() {
 				NotificationType = (ConsoleNotificationType)type,
 				Parameter = parameter
-			});
+			};
+
+			foreach(NotificationEventHandler handler in OnNotification.GetInvocationList()) {
+				try {
+					handler(args);
+				} catch(Exception ex) {
+					string handlerName = handler.Method.DeclaringType?.FullName + "." + handler.Method.Name;
+					EmuApi.WriteLogEntry("[UI] Notification handler error (" + handlerName + "): " + ex);
+				}
+			}
 		}
 	}
 

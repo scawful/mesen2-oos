@@ -87,6 +87,7 @@ namespace Mesen.Interop
 		[DllImport(DllPath)] public static extern Int32 GetGameMemorySize(MemoryType type);
 
 		[DllImport(DllPath)] public static extern void SetRendererSize(UInt32 width, UInt32 height);
+		[DllImport(DllPath)] public static extern void SetWatchHudText([MarshalAs(UnmanagedType.LPUTF8Str)]string text);
 
 		[DllImport(DllPath)] public static extern void ExecuteShortcut(ExecuteShortcutParams p);
 		[DllImport(DllPath)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool IsShortcutAllowed(EmulatorShortcut shortcut, UInt32 shortcutParam = 0);

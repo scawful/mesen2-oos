@@ -6,6 +6,7 @@
 #include "Shared/EmuSettings.h"
 #include "Shared/Video/DebugHud.h"
 #include "Shared/Video/SystemHud.h"
+#include "Shared/Video/WatchHud.h"
 #include "Shared/InputHud.h"
 #include "Shared/MessageManager.h"
 #include "Utilities/Video/IVideoRecorder.h"
@@ -20,6 +21,7 @@ VideoRenderer::VideoRenderer(Emulator* emu)
 	_rendererHud.reset(new DebugHud());
 	_systemHud.reset(new SystemHud(_emu));
 	_inputHud.reset(new InputHud(emu, _rendererHud.get()));
+	_watchHud.reset(new WatchHud());
 }
 
 VideoRenderer::~VideoRenderer()
@@ -96,6 +98,7 @@ void VideoRenderer::RenderThread()
 				auto lock = _hudLock.AcquireSafe();
 				_systemHud->Draw(_rendererHud.get(), size.Width, size.Height);
 			}
+			_watchHud->Draw(_rendererHud.get(), size.Width, size.Height);
 			
 			_emuHudSurface.IsDirty = _rendererHud->Draw(_emuHudSurface.Buffer, size, {}, 0, {}, true);
 			_scriptHudSurface.IsDirty = DrawScriptHud(frame);
@@ -157,6 +160,15 @@ std::pair<FrameInfo, OverscanDimensions> VideoRenderer::GetScriptHudSize()
 	overscan.Left *= _scriptHudScale;
 	overscan.Right *= _scriptHudScale;
 	return { scriptHudSize, overscan };
+}
+
+void VideoRenderer::SetWatchHudText(string text)
+{
+	if(_watchHud) {
+		_watchHud->SetText(std::move(text));
+		_needRedraw = true;
+		_waitForRender.Signal();
+	}
 }
 
 void VideoRenderer::UpdateFrame(RenderedFrame& frame)

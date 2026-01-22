@@ -66,6 +66,8 @@ namespace Mesen.Config
 
 		[Reactive] public bool ShowSelectionLength { get; set; } = false;
 		[Reactive] public WatchFormatStyle WatchFormat { get; set; } = WatchFormatStyle.Hex;
+		[Reactive] public bool ShowWatchHud { get; set; } = false;
+		[Reactive] public int WatchHudMaxEntries { get; set; } = 10;
 
 		[Reactive] public UInt32 CodeOpcodeColor  { get; set; } = Color.FromRgb(22, 37, 37).ToUInt32();
 		[Reactive] public UInt32 CodeLabelDefinitionColor { get; set; } = Colors.Blue.ToUInt32();

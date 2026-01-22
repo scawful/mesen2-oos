@@ -87,6 +87,7 @@ namespace Mesen.Debugger.Utilities
 					Dispatcher.UIThread.RunJobs();
 				}
 				DebugWorkspaceManager.Save(true);
+				WatchHudService.Clear();
 				DebugApi.ReleaseDebugger();
 			}
 		}
@@ -102,6 +103,7 @@ namespace Mesen.Debugger.Utilities
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
 			if(_openedWindows.Count == 0) {
+				WatchHudService.Clear();
 				return;
 			}
 
@@ -126,6 +128,7 @@ namespace Mesen.Debugger.Utilities
 			}
 
 			if(!_loadingGame) {
+				WatchHudService.ProcessNotification(e);
 				lock(_windowNotifLock) {
 					foreach(Window window in _openedWindows.Keys) {
 						if(window is INotificationHandler handler) {

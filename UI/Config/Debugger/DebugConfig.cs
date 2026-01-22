@@ -24,6 +24,7 @@ namespace Mesen.Config
 		public PaletteViewerConfig PaletteViewer { get; set; } = new();
 		public TileEditorConfig TileEditor { get; set; } = new();
 		public RegisterViewerConfig RegisterViewer { get; set; } = new();
+		public StateInspectorConfig StateInspector { get; set; } = new();
 		public SpriteViewerConfig SpriteViewer { get; set; } = new();
 		public IntegrationConfig Integration { get; set; } = new();
 		public ScriptWindowConfig ScriptWindow { get; set; } = new();

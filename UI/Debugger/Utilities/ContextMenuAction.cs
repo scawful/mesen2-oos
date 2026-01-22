@@ -516,6 +516,9 @@ namespace Mesen.Debugger.Utilities
 		[IconFile("RegisterIcon")]
 		OpenRegisterViewer,
 
+		[IconFile("RegisterIcon")]
+		OpenStateInspector,
+
 		[IconFile("LogWindow")]
 		OpenTraceLogger,
 		

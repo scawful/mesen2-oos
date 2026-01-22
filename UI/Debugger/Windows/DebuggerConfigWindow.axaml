@@ -55,6 +55,17 @@
 							Content="{l:Translate chkKeepActiveStatementInCenter}"
 						/>
 					</c:OptionSection>
+
+					<c:OptionSection Header="{l:Translate lblWatchHudSettings}">
+						<CheckBox
+							IsChecked="{Binding Debugger.ShowWatchHud}"
+							Content="{l:Translate chkShowWatchHud}"
+						/>
+						<StackPanel Orientation="Horizontal" Margin="18 2 0 0" IsEnabled="{Binding Debugger.ShowWatchHud}">
+							<TextBlock Text="{l:Translate lblWatchHudMaxEntries}" VerticalAlignment="Center" />
+							<NumericUpDown Margin="3 0" Minimum="1" Maximum="50" Width="70" Value="{Binding Debugger.WatchHudMaxEntries}" />
+						</StackPanel>
+					</c:OptionSection>
 					
 					<c:OptionSection Header="{l:Translate lblCopyCodeSettings}">
 						<CheckBox
@@ -218,6 +229,10 @@
 							<CheckBox
 								IsChecked="{Binding Integration.AutoLoadFnsFiles}"
 								Content="{l:Translate chkAutoLoadFnsFiles}"
+							/>
+							<CheckBox
+								IsChecked="{Binding Integration.AutoLoadWatchFiles}"
+								Content="{l:Translate chkAutoLoadWatchFiles}"
 							/>
 							<CheckBox
 								IsChecked="{Binding Integration.AutoLoadCdlFiles}"

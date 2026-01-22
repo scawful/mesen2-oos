@@ -539,6 +539,7 @@
     <ClInclude Include="Shared\Video\RotateFilter.h" />
     <ClInclude Include="Shared\Video\ScanlineFilter.h" />
     <ClInclude Include="Shared\Video\SystemHud.h" />
+    <ClInclude Include="Shared\Video\WatchHud.h" />
     <ClInclude Include="SNES\Debugger\SnesCodeDataLogger.h" />
     <ClInclude Include="SNES\AluMulDiv.h" />
     <ClInclude Include="SNES\Debugger\SnesPpuTools.h" />
@@ -871,6 +872,7 @@
     <ClCompile Include="Shared\Video\RotateFilter.cpp" />
     <ClCompile Include="Shared\Video\SoftwareRenderer.cpp" />
     <ClCompile Include="Shared\Video\SystemHud.cpp" />
+    <ClCompile Include="Shared\Video\WatchHud.cpp" />
     <ClCompile Include="SMS\Carts\SmsCart.cpp" />
     <ClCompile Include="SMS\Debugger\DummySmsCpu.cpp" />
     <ClCompile Include="SMS\Debugger\SmsAssembler.cpp" />

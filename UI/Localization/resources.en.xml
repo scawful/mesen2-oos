@@ -1348,6 +1348,10 @@
 			<Control ID="lblDisassemblySettings">Disassembly settings</Control>
 			<Control ID="chkKeepActiveStatementInCenter">Keep active statement in the center</Control>
 
+			<Control ID="lblWatchHudSettings">Watch HUD</Control>
+			<Control ID="chkShowWatchHud">Show watch list on screen</Control>
+			<Control ID="lblWatchHudMaxEntries">Max entries:</Control>
+
 			<Control ID="lblCopyCodeSettings">Copy selected code settings</Control>
 			<Control ID="chkCopyAddresses">Copy addresses</Control>
 			<Control ID="chkCopyByteCode">Copy byte code</Control>
@@ -1403,6 +1407,7 @@
 			<Control ID="chkAutoLoadElfFiles">.ELF files (devkitARM - GBA)</Control>
 			<Control ID="chkAutoLoadMlbFiles">.MLB files (Mesen label file)</Control>
 			<Control ID="chkAutoLoadFnsFiles">.FNS files (NESASM)</Control>
+			<Control ID="chkAutoLoadWatchFiles">.WATCH files (watch list)</Control>
 			<Control ID="chkAutoLoadCdlFiles">.CDL files (Code/data log)</Control>
 
 			<Control ID="lblImportFilters">Import filters</Control>
@@ -1531,6 +1536,16 @@
 
 			<Control ID="mnuFile">_File</Control>
 			<Control ID="mnuView">_View</Control>
+		</Form>
+
+		<Form ID="StateInspectorWindow">
+			<Control ID="wndTitle">State Inspector</Control>
+
+			<Control ID="mnuFile">_File</Control>
+			<Control ID="mnuView">_View</Control>
+			<Control ID="colName">Name</Control>
+			<Control ID="colValue">Value</Control>
+			<Control ID="colValueHex">Value (Hex)</Control>
 		</Form>
 		
 		<Form ID="RegisterTabView">
@@ -2951,6 +2966,7 @@ E
 			<Value ID="OpenTraceLogger">Open Trace Logger</Value>
 			<Value ID="OpenMemorySearch">Open Memory Search</Value>
 			<Value ID="OpenRegisterViewer">Open Register Viewer</Value>
+			<Value ID="OpenStateInspector">Open State Inspector</Value>
 			<Value ID="OpenDebugLog">Open Debug Log</Value>
 			<Value ID="OpenNesHeaderEditor">Open NES Header Editor</Value>
 			<Value ID="OpenTilemapViewer">Open Tilemap Viewer</Value>
@@ -3229,6 +3245,7 @@ E
 			<Value ID="OpenMemorySearch">Memory Search</Value>
 			<Value ID="OpenTraceLogger">Trace Logger</Value>
 			<Value ID="OpenRegisterViewer">Register Viewer</Value>
+			<Value ID="OpenStateInspector">State Inspector</Value>
 			<Value ID="OpenDebugLog">Debug Log</Value>
 			<Value ID="OpenNesHeaderEditor">NES Header Editor</Value>
 			<Value ID="OpenTilemapViewer">Tilemap Viewer</Value>

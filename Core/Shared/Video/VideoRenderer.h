@@ -13,6 +13,7 @@ class Emulator;
 class SystemHud;
 class DebugHud;
 class InputHud;
+class WatchHud;
 
 class IVideoRecorder;
 enum class VideoCodec;
@@ -42,6 +43,7 @@ private:
 	unique_ptr<DebugHud> _rendererHud;
 	unique_ptr<SystemHud> _systemHud;
 	unique_ptr<InputHud> _inputHud;
+	unique_ptr<WatchHud> _watchHud;
 	SimpleLock _hudLock;
 
 	RenderSurfaceInfo _aviRecorderSurface = {};
@@ -75,6 +77,7 @@ public:
 	
 	void SetScriptHudScale(uint32_t scale) { _scriptHudScale = scale; }
 	std::pair<FrameInfo, OverscanDimensions> GetScriptHudSize();
+	void SetWatchHudText(string text);
 
 	void StartThread();
 	void StopThread();

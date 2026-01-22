@@ -1,4 +1,5 @@
 ﻿using Mesen.Config;
+using Mesen.Debugger;
 using Mesen.Debugger.Integration;
 using Mesen.Debugger.Labels;
 using Mesen.Interop;
@@ -44,6 +45,19 @@ namespace Mesen.Debugger.Utilities
 			path = _romInfo.RomPath + "." + ext;
 			if(File.Exists(path)) {
 				return path;
+			}
+
+			// Support asar's ".symbols" output as an alias for .sym
+			if(ext == FileDialogHelper.SymFileExt) {
+				string? symbolsPath = Path.ChangeExtension(_romInfo.RomPath, FileDialogHelper.SymFileAltExt);
+				if(File.Exists(symbolsPath)) {
+					return symbolsPath;
+				}
+
+				symbolsPath = _romInfo.RomPath + "." + FileDialogHelper.SymFileAltExt;
+				if(File.Exists(symbolsPath)) {
+					return symbolsPath;
+				}
 			}
 
 			return null;
@@ -104,6 +118,20 @@ namespace Mesen.Debugger.Utilities
 					LoadCdlFile(cdlPath);
 				}
 			}
+
+			if(ConfigManager.Config.Debug.Integration.AutoLoadWatchFiles) {
+				bool hasWatchEntries = _romInfo.CpuTypes.Any(cpuType => WatchManager.GetWatchManager(cpuType).WatchEntries.Count > 0);
+				if(!hasWatchEntries) {
+					string? watchPath = GetMatchingFile(FileDialogHelper.WatchFileExt);
+					if(watchPath == null) {
+						watchPath = GetMatchingFile(FileDialogHelper.WatchFileLegacyExt);
+					}
+
+					if(watchPath != null) {
+						WatchManager.GetWatchManager(_romInfo.ConsoleType.GetMainCpuType()).Import(watchPath);
+					}
+				}
+			}
 			LabelManager.ResumeEvents();
 			SymbolProviderChanged?.Invoke(null, EventArgs.Empty);
 		}
@@ -134,7 +162,12 @@ namespace Mesen.Debugger.Utilities
 
 		public static void LoadSymFile(string path, bool showResult)
 		{
-			if(File.Exists(path) && Path.GetExtension(path).ToLower() == "." + FileDialogHelper.SymFileExt) {
+			if(File.Exists(path)) {
+				string extension = Path.GetExtension(path).ToLowerInvariant();
+				if(extension != "." + FileDialogHelper.SymFileExt && extension != "." + FileDialogHelper.SymFileAltExt) {
+					return;
+				}
+
 				string symContent = File.ReadAllText(path);
 				if(symContent.Contains("[labels]") || symContent.Contains("this file was created with wlalink")) {
 					//Assume WLA-DX symbol files
@@ -204,6 +237,7 @@ namespace Mesen.Debugger.Utilities
 			switch(Path.GetExtension(filename).ToLower().Substring(1)) {
 				case FileDialogHelper.DbgFileExt: LoadDbgSymbolFile(filename, showResult); break;
 				case FileDialogHelper.SymFileExt: LoadSymFile(filename, showResult); break;
+				case FileDialogHelper.SymFileAltExt: LoadSymFile(filename, showResult); break;
 				case FileDialogHelper.ElfFileExt: LoadElfFile(filename, showResult); break;
 				case FileDialogHelper.MesenLabelExt: LoadMesenLabelFile(filename, showResult); break;
 				case FileDialogHelper.NesAsmLabelExt: LoadNesAsmLabelFile(filename, showResult); break;

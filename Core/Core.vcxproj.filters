@@ -1099,7 +1099,13 @@
     <ClCompile Include="Shared\Video\SystemHud.cpp">
       <Filter>Shared\Video</Filter>
     </ClCompile>
+    <ClCompile Include="Shared\Video\WatchHud.cpp">
+      <Filter>Shared\Video</Filter>
+    </ClCompile>
     <ClInclude Include="Shared\Video\SystemHud.h">
+      <Filter>Shared\Video</Filter>
+    </ClInclude>
+    <ClInclude Include="Shared\Video\WatchHud.h">
       <Filter>Shared\Video</Filter>
     </ClInclude>
     <ClCompile Include="Shared\Video\VideoDecoder.cpp">

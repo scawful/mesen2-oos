@@ -38,6 +38,45 @@ namespace Mesen.Config
 
 		public static bool DisableSaveSettings { get; internal set; }
 
+		private static string? GetLegacyConfigFolder(string defaultFolder, string portableFolder)
+		{
+			var candidates = new List<string>();
+			try {
+				string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments, Environment.SpecialFolderOption.Create);
+				if(!string.IsNullOrWhiteSpace(documentsPath)) {
+					candidates.Add(Path.Combine(documentsPath, "Mesen2"));
+				}
+			} catch {
+			}
+
+			try {
+				string homePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.Create);
+				if(!string.IsNullOrWhiteSpace(homePath)) {
+					candidates.Add(Path.Combine(homePath, ".config", "Mesen2"));
+				}
+			} catch {
+			}
+
+			string? bestFolder = null;
+			DateTime bestTimestamp = DateTime.MinValue;
+			foreach(string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase)) {
+				if(string.Equals(candidate, defaultFolder, StringComparison.OrdinalIgnoreCase) || string.Equals(candidate, portableFolder, StringComparison.OrdinalIgnoreCase)) {
+					continue;
+				}
+
+				string settingsPath = Path.Combine(candidate, "settings.json");
+				if(File.Exists(settingsPath)) {
+					DateTime timestamp = File.GetLastWriteTimeUtc(settingsPath);
+					if(timestamp > bestTimestamp) {
+						bestTimestamp = timestamp;
+						bestFolder = candidate;
+					}
+				}
+			}
+
+			return bestFolder;
+		}
+
 		public static string GetConfigFile()
 		{
 			return Path.Combine(HomeFolder, "settings.json");
@@ -174,18 +213,35 @@ namespace Mesen.Config
 			_homeFolder = null;
 		}
 
-		public static string HomeFolder {
-			get
-			{
-				if(_homeFolder == null) {
-					string portableFolder = DefaultPortableFolder;
-					string documentsFolder = DefaultDocumentsFolder;
+			public static string HomeFolder {
+				get
+				{
+					if(_homeFolder == null) {
+						string? overrideFolder = Environment.GetEnvironmentVariable("MESEN2_HOME");
+						if(!string.IsNullOrWhiteSpace(overrideFolder)) {
+							_homeFolder = overrideFolder;
+							Directory.CreateDirectory(_homeFolder);
+							EmuApi.WriteLogEntry("[UI] Using MESEN2_HOME override: " + _homeFolder);
+							return _homeFolder;
+						}
+
+						string portableFolder = DefaultPortableFolder;
+						string documentsFolder = DefaultDocumentsFolder;
 
 					string portableConfig = Path.Combine(portableFolder, "settings.json");
+					string defaultConfig = Path.Combine(documentsFolder, "settings.json");
 					if(File.Exists(portableConfig)) {
 						_homeFolder = portableFolder;
-					} else {
+					} else if(File.Exists(defaultConfig)) {
 						_homeFolder = documentsFolder;
+					} else {
+						string? legacyFolder = GetLegacyConfigFolder(documentsFolder, portableFolder);
+						if(!string.IsNullOrWhiteSpace(legacyFolder)) {
+							_homeFolder = legacyFolder;
+							EmuApi.WriteLogEntry("[UI] Using legacy config folder: " + _homeFolder);
+						} else {
+							_homeFolder = documentsFolder;
+						}
 					}
 
 					Directory.CreateDirectory(_homeFolder);

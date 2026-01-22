@@ -25,7 +25,8 @@ namespace Mesen.Utilities
 		public const string AviExt = "avi";
 		public const string WaveExt = "wav";
 		public const string MesenSaveStateExt = "mss";
-		public const string WatchFileExt = "txt";
+		public const string WatchFileExt = "watch";
+		public const string WatchFileLegacyExt = "txt";
 		public const string LuaExt = "lua";
 		public const string PngExt = "png";
 		public const string DmpExt = "dmp";
@@ -34,6 +35,7 @@ namespace Mesen.Utilities
 		public const string DbgFileExt = "dbg";
 		public const string ElfFileExt = "elf";
 		public const string SymFileExt = "sym";
+		public const string SymFileAltExt = "symbols";
 		public const string MesenLabelExt = "mlb";
 		public const string NesAsmLabelExt = "fns";
 		public const string BinExt = "bin";
@@ -60,7 +62,7 @@ namespace Mesen.Utilities
 					} else if(ext == FileDialogHelper.FirmwareExt) {
 						filter.Add(new FilePickerFileType("All firmware files") { Patterns = new List<string>() { "*.sfc", "*.pce", "*.nes", "*.bin", "*.rom" } });
 					} else if(ext == FileDialogHelper.LabelFileExt) {
-						filter.Add(new FilePickerFileType("All label files") { Patterns = new List<string>() { "*.mlb", "*.sym", "*.dbg", "*.fns" } });
+						filter.Add(new FilePickerFileType("All label files") { Patterns = new List<string>() { "*.mlb", "*.sym", "*." + FileDialogHelper.SymFileAltExt, "*.dbg", "*.fns" } });
 					} else {
 						filter.Add(new FilePickerFileType(ext.ToUpper() + " files") { Patterns = new List<string>() { "*." + ext } });
 					}

@@ -917,6 +917,12 @@ namespace Mesen.ViewModels
 					OnClick = () => DebugWindowManager.OpenDebugWindow(() => new RegisterViewerWindow(new RegisterViewerWindowViewModel()))
 				},
 				new ContextMenuAction() {
+					ActionType = ActionType.OpenStateInspector,
+					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.OpenStateInspector),
+					IsEnabled = () => IsGameRunning,
+					OnClick = () => DebugWindowManager.GetOrOpenDebugWindow(() => new StateInspectorWindow(new StateInspectorWindowViewModel()))
+				},
+				new ContextMenuAction() {
 					ActionType = ActionType.OpenTraceLogger,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.OpenTraceLogger),
 					IsEnabled = () => IsGameRunning,
