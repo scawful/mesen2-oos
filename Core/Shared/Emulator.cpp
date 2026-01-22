@@ -21,6 +21,7 @@
 #include "Shared/BatteryManager.h"
 #include "Shared/CheatManager.h"
 #include "Shared/SystemActionManager.h"
+#include "Shared/SocketServer.h"
 #include "Shared/Movies/MovieManager.h"
 #include "Shared/TimingInfo.h"
 #include "Shared/HistoryViewer.h"
@@ -94,11 +95,21 @@ void Emulator::Initialize(bool enableShortcuts)
 
 	_videoDecoder->StartThread();
 	_videoRenderer->StartThread();
+
+	// Start socket server for CLI integration
+	_socketServer.reset(new SocketServer(this));
+	_socketServer->Start();
 }
 
 void Emulator::Release()
 {
 	Stop(true);
+
+	// Stop socket server
+	if(_socketServer) {
+		_socketServer->Stop();
+		_socketServer.reset();
+	}
 
 	_gameClient->Disconnect();
 	_gameServer->StopServer();

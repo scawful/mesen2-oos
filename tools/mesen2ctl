@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+"""
+mesen2ctl - Command-line interface for Mesen2 socket server
+
+Usage:
+    mesen2ctl [OPTIONS] <command> [args...]
+
+Examples:
+    mesen2ctl state                    # Get emulator state
+    mesen2ctl read 0x7E0010           # Read byte from address
+    mesen2ctl write 0x7E0010 0x09     # Write byte to address
+    mesen2ctl pause                    # Pause emulation
+    mesen2ctl resume                   # Resume emulation
+    mesen2ctl savestate --slot 1      # Save state to slot 1
+    mesen2ctl loadstate --slot 1      # Load state from slot 1
+    mesen2ctl loadscript /path/to.lua # Load Lua script
+    mesen2ctl --pid 12345 state       # Connect to specific instance
+"""
+
+import argparse
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+from typing import Optional
+
+
+def find_mesen_sockets() -> list[str]:
+    """Find all running Mesen2 socket files."""
+    sockets = []
+    tmp_dir = Path("/tmp")
+    for f in tmp_dir.glob("mesen2-*.sock"):
+        if f.is_socket():
+            sockets.append(str(f))
+    return sorted(sockets)
+
+
+def send_command(socket_path: str, command: dict, timeout: float = 5.0) -> dict:
+    """Send a command to Mesen2 and return the response."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect(socket_path)
+        request = json.dumps(command) + "\n"
+        sock.sendall(request.encode())
+
+        # Read response
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+            if b"\n" in response:
+                break
+
+        return json.loads(response.decode().strip())
+    finally:
+        sock.close()
+
+
+def cmd_list(args):
+    """List running Mesen2 instances."""
+    sockets = find_mesen_sockets()
+    if not sockets:
+        print("No running Mesen2 instances found.")
+        return 1
+
+    print("Running Mesen2 instances:")
+    for sock in sockets:
+        pid = sock.split("-")[1].split(".")[0]
+        try:
+            resp = send_command(sock, {"type": "PING"}, timeout=1.0)
+            status = "✓ responding" if resp.get("success") else "✗ error"
+        except Exception as e:
+            status = f"✗ {e}"
+        print(f"  PID {pid}: {sock} [{status}]")
+    return 0
+
+
+def cmd_ping(args, socket_path: str):
+    """Ping the emulator."""
+    resp = send_command(socket_path, {"type": "PING"})
+    print(resp.get("data", resp))
+    return 0 if resp.get("success") else 1
+
+
+def cmd_state(args, socket_path: str):
+    """Get emulator state."""
+    resp = send_command(socket_path, {"type": "STATE"})
+    if resp.get("success"):
+        data = resp.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except:
+                pass
+        print(json.dumps(data, indent=2))
+        return 0
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+
+
+def cmd_pause(args, socket_path: str):
+    """Pause emulation."""
+    resp = send_command(socket_path, {"type": "PAUSE"})
+    print("Paused" if resp.get("success") else f"Error: {resp.get('error')}")
+    return 0 if resp.get("success") else 1
+
+
+def cmd_resume(args, socket_path: str):
+    """Resume emulation."""
+    resp = send_command(socket_path, {"type": "RESUME"})
+    print("Resumed" if resp.get("success") else f"Error: {resp.get('error')}")
+    return 0 if resp.get("success") else 1
+
+
+def cmd_reset(args, socket_path: str):
+    """Reset emulation."""
+    resp = send_command(socket_path, {"type": "RESET"})
+    print("Reset" if resp.get("success") else f"Error: {resp.get('error')}")
+    return 0 if resp.get("success") else 1
+
+
+def cmd_read(args, socket_path: str):
+    """Read memory."""
+    resp = send_command(socket_path, {"type": "READ", "addr": args.addr})
+    if resp.get("success"):
+        print(resp.get("data", "").strip('"'))
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_read16(args, socket_path: str):
+    """Read 16-bit value from memory."""
+    resp = send_command(socket_path, {"type": "READ16", "addr": args.addr})
+    if resp.get("success"):
+        print(resp.get("data", "").strip('"'))
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_write(args, socket_path: str):
+    """Write memory."""
+    resp = send_command(socket_path, {
+        "type": "WRITE",
+        "addr": args.addr,
+        "value": args.value
+    })
+    if resp.get("success"):
+        print("OK")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_write16(args, socket_path: str):
+    """Write 16-bit value to memory."""
+    resp = send_command(socket_path, {
+        "type": "WRITE16",
+        "addr": args.addr,
+        "value": args.value
+    })
+    if resp.get("success"):
+        print("OK")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_readblock(args, socket_path: str):
+    """Read a block of memory."""
+    resp = send_command(socket_path, {
+        "type": "READBLOCK",
+        "addr": args.addr,
+        "len": str(args.length)
+    })
+    if resp.get("success"):
+        hex_data = resp.get("data", "").strip('"')
+        if args.raw:
+            print(hex_data)
+        else:
+            # Format as hex dump
+            addr = int(args.addr, 16) if args.addr.startswith("0x") else int(args.addr)
+            for i in range(0, len(hex_data), 32):
+                chunk = hex_data[i:i+32]
+                addr_str = f"{addr + i//2:06X}"
+                hex_bytes = " ".join(chunk[j:j+2] for j in range(0, len(chunk), 2))
+                print(f"{addr_str}: {hex_bytes}")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_savestate(args, socket_path: str):
+    """Save state."""
+    cmd = {"type": "SAVESTATE"}
+    if args.slot is not None:
+        cmd["slot"] = str(args.slot)
+    elif args.path:
+        cmd["path"] = args.path
+    else:
+        print("Error: Must specify --slot or --path", file=sys.stderr)
+        return 1
+
+    resp = send_command(socket_path, cmd)
+    if resp.get("success"):
+        print("State saved")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_loadstate(args, socket_path: str):
+    """Load state."""
+    cmd = {"type": "LOADSTATE"}
+    if args.slot is not None:
+        cmd["slot"] = str(args.slot)
+    elif args.path:
+        cmd["path"] = args.path
+    else:
+        print("Error: Must specify --slot or --path", file=sys.stderr)
+        return 1
+
+    resp = send_command(socket_path, cmd)
+    if resp.get("success"):
+        print("State loaded")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_loadscript(args, socket_path: str):
+    """Load a Lua script."""
+    path = args.script
+    name = os.path.basename(path)
+
+    # Read content if path is a file
+    content = ""
+    if os.path.isfile(path):
+        with open(path, "r") as f:
+            content = f.read()
+
+    cmd = {
+        "type": "LOADSCRIPT",
+        "name": name,
+        "path": path,
+        "content": content
+    }
+
+    resp = send_command(socket_path, cmd)
+    if resp.get("success"):
+        print(f"Script loaded (ID: {resp.get('data')})")
+    else:
+        print(f"Error: {resp.get('error')}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_raw(args, socket_path: str):
+    """Send raw JSON command."""
+    try:
+        cmd = json.loads(args.json)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON: {e}", file=sys.stderr)
+        return 1
+
+    resp = send_command(socket_path, cmd)
+    print(json.dumps(resp, indent=2))
+    return 0 if resp.get("success") else 1
+
+
+def get_socket_path(args) -> Optional[str]:
+    """Determine which socket to use."""
+    if args.socket:
+        return args.socket
+
+    if args.pid:
+        path = f"/tmp/mesen2-{args.pid}.sock"
+        if os.path.exists(path):
+            return path
+        print(f"Socket not found for PID {args.pid}", file=sys.stderr)
+        return None
+
+    # Find most recently used socket
+    sockets = find_mesen_sockets()
+    if not sockets:
+        print("No running Mesen2 instances found.", file=sys.stderr)
+        print("Start Mesen2 or specify --socket/--pid", file=sys.stderr)
+        return None
+
+    if len(sockets) == 1:
+        return sockets[0]
+
+    # Multiple instances - try to find one that responds
+    for sock in sockets:
+        try:
+            resp = send_command(sock, {"type": "PING"}, timeout=0.5)
+            if resp.get("success"):
+                return sock
+        except:
+            pass
+
+    # Default to first one
+    return sockets[0]
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Control running Mesen2 instances",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+
+    parser.add_argument("--socket", "-s", help="Socket path to connect to")
+    parser.add_argument("--pid", "-p", type=int, help="PID of Mesen2 instance")
+    parser.add_argument("--timeout", "-t", type=float, default=5.0, help="Command timeout")
+
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # list
+    subparsers.add_parser("list", help="List running instances")
+
+    # ping
+    subparsers.add_parser("ping", help="Ping emulator")
+
+    # state
+    subparsers.add_parser("state", help="Get emulator state")
+
+    # pause/resume/reset
+    subparsers.add_parser("pause", help="Pause emulation")
+    subparsers.add_parser("resume", help="Resume emulation")
+    subparsers.add_parser("reset", help="Reset emulation")
+
+    # read
+    p_read = subparsers.add_parser("read", help="Read byte from memory")
+    p_read.add_argument("addr", help="Address to read (hex)")
+
+    # read16
+    p_read16 = subparsers.add_parser("read16", help="Read 16-bit value from memory")
+    p_read16.add_argument("addr", help="Address to read (hex)")
+
+    # write
+    p_write = subparsers.add_parser("write", help="Write byte to memory")
+    p_write.add_argument("addr", help="Address to write (hex)")
+    p_write.add_argument("value", help="Value to write (hex)")
+
+    # write16
+    p_write16 = subparsers.add_parser("write16", help="Write 16-bit value to memory")
+    p_write16.add_argument("addr", help="Address to write (hex)")
+    p_write16.add_argument("value", help="Value to write (hex)")
+
+    # readblock
+    p_readblock = subparsers.add_parser("readblock", help="Read block of memory")
+    p_readblock.add_argument("addr", help="Start address (hex)")
+    p_readblock.add_argument("length", type=int, help="Number of bytes")
+    p_readblock.add_argument("--raw", action="store_true", help="Output raw hex")
+
+    # savestate
+    p_save = subparsers.add_parser("savestate", help="Save state")
+    p_save.add_argument("--slot", type=int, help="Slot number (1-10)")
+    p_save.add_argument("--path", help="File path")
+
+    # loadstate
+    p_load = subparsers.add_parser("loadstate", help="Load state")
+    p_load.add_argument("--slot", type=int, help="Slot number (1-10)")
+    p_load.add_argument("--path", help="File path")
+
+    # loadscript
+    p_script = subparsers.add_parser("loadscript", help="Load Lua script")
+    p_script.add_argument("script", help="Path to Lua script")
+
+    # raw
+    p_raw = subparsers.add_parser("raw", help="Send raw JSON command")
+    p_raw.add_argument("json", help="JSON command")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    # Handle list command specially (doesn't need a socket)
+    if args.command == "list":
+        return cmd_list(args)
+
+    # Get socket path
+    socket_path = get_socket_path(args)
+    if not socket_path:
+        return 1
+
+    # Dispatch command
+    commands = {
+        "ping": cmd_ping,
+        "state": cmd_state,
+        "pause": cmd_pause,
+        "resume": cmd_resume,
+        "reset": cmd_reset,
+        "read": cmd_read,
+        "read16": cmd_read16,
+        "write": cmd_write,
+        "write16": cmd_write16,
+        "readblock": cmd_readblock,
+        "savestate": cmd_savestate,
+        "loadstate": cmd_loadstate,
+        "loadscript": cmd_loadscript,
+        "raw": cmd_raw,
+    }
+
+    handler = commands.get(args.command)
+    if not handler:
+        print(f"Unknown command: {args.command}", file=sys.stderr)
+        return 1
+
+    try:
+        return handler(args, socket_path)
+    except socket.timeout:
+        print("Command timed out", file=sys.stderr)
+        return 1
+    except ConnectionRefusedError:
+        print(f"Connection refused: {socket_path}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"Socket not found: {socket_path}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
