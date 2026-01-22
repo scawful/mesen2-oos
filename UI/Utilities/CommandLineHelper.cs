@@ -17,6 +17,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using Avalonia.Threading;
 
 namespace Mesen.Utilities;
 
@@ -31,6 +32,9 @@ public class CommandLineHelper
 	public int TestRunnerTimeout { get; private set; } = 100;
 	public List<string> LuaScriptsToLoad { get; private set; } = new();
 	public List<string> FilesToLoad { get; private set; } = new();
+	public bool OpenDebuggerRequested { get; private set; }
+	public bool OpenStateInspectorRequested { get; private set; }
+	public bool EnableWatchHudRequested { get; private set; }
 
 	private List<string> _errorMessages = new();
 
@@ -63,6 +67,14 @@ public class CommandLineHelper
 					case "fullscreen": Fullscreen = true; break;
 					case "donotsavesettings": ConfigManager.DisableSaveSettings = true; break;
 					case "loadlastsession": LoadLastSessionRequested = true; break;
+					case "opendebugger": OpenDebuggerRequested = true; break;
+					case "openstateinspector": OpenStateInspectorRequested = true; break;
+					case "enablewatchhud": EnableWatchHudRequested = true; break;
+					case "autodebug":
+						OpenDebuggerRequested = true;
+						OpenStateInspectorRequested = true;
+						EnableWatchHudRequested = true;
+						break;
 					default:
 						if(switchArg.StartsWith("recordmovie=")) {
 							string[] values = switchArg.Split('=');
@@ -108,6 +120,40 @@ public class CommandLineHelper
 		if(Fullscreen && FilesToLoad.Count == 0) {
 			wnd.ToggleFullscreen();
 			Fullscreen = false;
+		}
+
+		if(OpenDebuggerRequested || OpenStateInspectorRequested || EnableWatchHudRequested) {
+			Task.Run(async () => {
+				const int timeoutMs = 10000;
+				const int pollMs = 100;
+				int waitedMs = 0;
+				RomInfo romInfo = EmuApi.GetRomInfo();
+				while(romInfo.Format == RomFormat.Unknown && waitedMs < timeoutMs) {
+					await Task.Delay(pollMs).ConfigureAwait(false);
+					waitedMs += pollMs;
+					romInfo = EmuApi.GetRomInfo();
+				}
+
+				Dispatcher.UIThread.Post(() => {
+					RomInfo activeRom = EmuApi.GetRomInfo();
+					if(EnableWatchHudRequested) {
+						ConfigManager.Config.Debug.Debugger.ShowWatchHud = true;
+						ConfigManager.Config.Debug.ApplyConfig();
+					}
+
+					if(activeRom.Format == RomFormat.Unknown) {
+						return;
+					}
+
+					CpuType cpuType = activeRom.ConsoleType.GetMainCpuType();
+					if(OpenDebuggerRequested) {
+						DebuggerWindow.GetOrOpenWindow(cpuType);
+					}
+					if(OpenStateInspectorRequested) {
+						DebugWindowManager.GetOrOpenDebugWindow(() => new StateInspectorWindow(new StateInspectorWindowViewModel()));
+					}
+				});
+			});
 		}
 	}
 
@@ -174,7 +220,11 @@ public class CommandLineHelper
 		string general = @"--fullscreen - Start in fullscreen mode
 --doNotSaveSettings - Prevent settings from being saved to the disk (useful to prevent command line options from becoming the default settings)
 --recordMovie=""filename.mmo"" - Start recording a movie after the specified game is loaded.
---loadLastSession - Resumes the game in the state it was left in when it was last played.";
+--loadLastSession - Resumes the game in the state it was left in when it was last played.
+--openDebugger - Open the main debugger window after a ROM loads.
+--openStateInspector - Open the State Inspector window after a ROM loads.
+--enableWatchHud - Enable the watch HUD overlay.
+--autoDebug - Enable watch HUD and open Debugger + State Inspector after a ROM loads.";
 
 		result["General"] = general;
 		result["Audio"] = GetSwichesForObject("audio.", typeof(AudioConfig));

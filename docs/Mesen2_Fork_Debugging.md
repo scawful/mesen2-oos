@@ -24,3 +24,14 @@ This fork adds a few quality-of-life features for live debugging and state inspe
 
 ## .symbols auto-load
 - `.symbols` files (asar output) are accepted as aliases for `.sym` when auto-loading symbols.
+
+## CLI automation
+You can automate the debugging setup from the command line:
+
+- `--openDebugger` - Open the main debugger window after a ROM loads.
+- `--openStateInspector` - Open the State Inspector window after a ROM loads.
+- `--enableWatchHud` - Enable the watch HUD overlay.
+- `--autoDebug` - Enable watch HUD and open Debugger + State Inspector after a ROM loads.
+
+Example:
+`Mesen <rom>.sfc --autoDebug`
