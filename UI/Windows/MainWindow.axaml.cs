@@ -41,6 +41,7 @@ namespace Mesen.Windows
 		private bool _testModeEnabled;
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
+		private bool _shutdownStarted = false;
 		
 		private bool _preventFullscreenToggle = false;
 
@@ -149,9 +150,17 @@ namespace Mesen.Windows
 					return;
 				}
 
+				if(_shutdownStarted) {
+					return;
+				}
+
+				_shutdownStarted = true;
 				_timerBackgroundFlag.Stop();
-				EmuApi.Stop();
+				NotificationListener.SuppressCallbacks = true;
+				SingleInstance.Instance.ArgumentsReceived -= Instance_ArgumentsReceived;
 				_listener?.Dispose();
+				EmuApi.Stop();
+				EmuApi.Release();
 				ConfigManager.Config.MainWindow.SaveWindowSettings(this);
 				ConfigManager.Config.Save();
 			}
@@ -259,6 +268,10 @@ namespace Mesen.Windows
 
 		private void OnNotification(NotificationEventArgs e)
 		{
+			if(_shutdownStarted) {
+				return;
+			}
+
 			DebugWindowManager.ProcessNotification(e);
 
 			switch(e.NotificationType) {

@@ -6,6 +6,13 @@ namespace Mesen.Interop
 {
 	public class NotificationListener : IDisposable
 	{
+		private static volatile bool _suppressCallbacks;
+		public static bool SuppressCallbacks
+		{
+			get => _suppressCallbacks;
+			set => _suppressCallbacks = value;
+		}
+
 		public delegate void NotificationCallback(int type, IntPtr parameter);
 		public delegate void NotificationEventHandler(NotificationEventArgs e);
 		public event NotificationEventHandler? OnNotification;
@@ -48,6 +55,10 @@ namespace Mesen.Interop
 
 		public void ProcessNotification(int type, IntPtr parameter)
 		{
+			if(_suppressCallbacks) {
+				return;
+			}
+
 			if(OnNotification == null) {
 				return;
 			}
