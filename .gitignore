@@ -161,6 +161,9 @@ $RECYCLE.BIN/
 
 # Mac desktop service store files
 .DS_Store
+.context/
+.vscode/
+checks.json
 *.nes
 *.sfc
 *.gb
