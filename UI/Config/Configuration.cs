@@ -190,6 +190,18 @@ namespace Mesen.Config
 				return requestedFont;
 			}
 
+			if(OperatingSystem.IsMacOS()) {
+				string[] preferredFonts = preferMonoFont
+					? new[] { "SF Mono", "Menlo", "Monaco", "Andale Mono" }
+					: new[] { "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Helvetica", "Arial" };
+
+				foreach(string name in preferredFonts) {
+					if(_installedFonts.Contains(name)) {
+						return name;
+					}
+				}
+			}
+
 			foreach(string name in _installedFonts) {
 				if(preferMonoFont && name.Contains("Mono", StringComparison.InvariantCultureIgnoreCase)) {
 					return name;
@@ -206,7 +218,7 @@ namespace Mesen.Config
 			if(OperatingSystem.IsWindows()) {
 				return new FontConfig() { FontFamily = "Microsoft Sans Serif", FontSize = 11 };
 			} else if(OperatingSystem.IsMacOS()) {
-				return new FontConfig() { FontFamily = FindMatchingFont("Microsoft Sans Serif"), FontSize = 11 };
+				return new FontConfig() { FontFamily = FindMatchingFont("Helvetica Neue", "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Helvetica", "Arial"), FontSize = 11 };
 			} else {
 				return new FontConfig() { FontFamily = FindMatchingFont("FreeSans", "DejaVu Sans", "Noto Sans"), FontSize = 11 };
 			}
@@ -217,7 +229,7 @@ namespace Mesen.Config
 			if(OperatingSystem.IsWindows()) {
 				return new FontConfig() { FontFamily = "Segoe UI", FontSize = 12 };
 			} else if(OperatingSystem.IsMacOS()) {
-				return new FontConfig() { FontFamily = FindMatchingFont("Microsoft Sans Serif"), FontSize = 12 };
+				return new FontConfig() { FontFamily = FindMatchingFont("Helvetica Neue", "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Helvetica", "Arial"), FontSize = 12 };
 			} else {
 				return new FontConfig() { FontFamily = FindMatchingFont("FreeSans", "DejaVu Sans", "Noto Sans"), FontSize = 12 };
 			}
@@ -228,7 +240,7 @@ namespace Mesen.Config
 			if(OperatingSystem.IsWindows()) {
 				return new FontConfig() { FontFamily = "Consolas", FontSize = useSmallFont ? 12 : 14 };
 			} else if(OperatingSystem.IsMacOS()) {
-				return new FontConfig() { FontFamily = FindMatchingFont("PT Mono"), FontSize = useSmallFont ? 11 : 12 };
+				return new FontConfig() { FontFamily = FindMatchingFont("Menlo", "SF Mono", "Menlo", "Monaco", "Andale Mono"), FontSize = useSmallFont ? 11 : 12 };
 			} else {
 				return new FontConfig() { FontFamily = FindMatchingFont("FreeMono", "DejaVu Sans Mono", "Noto Sans Mono"), FontSize = 12 };
 			}
