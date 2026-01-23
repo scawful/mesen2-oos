@@ -42,6 +42,7 @@ namespace Mesen.Windows
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
 		private bool _shutdownStarted = false;
+		private readonly CancellationTokenSource _shutdownCts = new();
 		
 		private bool _preventFullscreenToggle = false;
 
@@ -155,8 +156,11 @@ namespace Mesen.Windows
 				}
 
 				_shutdownStarted = true;
+				_shutdownCts.Cancel();
 				_timerBackgroundFlag.Stop();
 				NotificationListener.SuppressCallbacks = true;
+				WatchHudService.Shutdown();
+				DebugApi.ReleaseDebugger();
 				SingleInstance.Instance.ArgumentsReceived -= Instance_ArgumentsReceived;
 				_listener?.Dispose();
 				EmuApi.Stop();
@@ -248,7 +252,7 @@ namespace Mesen.Windows
 
 				Dispatcher.UIThread.Post(() => {
 					cmdLine.LoadFiles();
-					cmdLine.OnAfterInit(this);
+					cmdLine.OnAfterInit(this, _shutdownCts.Token);
 
 					if(ConfigManager.Config.Preferences.AutomaticallyCheckForUpdates) {
 						_model.MainMenu.CheckForUpdate(this, true);

@@ -15,6 +15,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using Avalonia.Threading;
@@ -37,6 +38,7 @@ public class CommandLineHelper
 	public bool EnableWatchHudRequested { get; private set; }
 
 	private List<string> _errorMessages = new();
+	private bool _debugToolsOpened = false;
 
 	public CommandLineHelper(string[] args, bool forStartup)
 	{
@@ -115,7 +117,7 @@ public class CommandLineHelper
 		}
 	}
 
-	public void OnAfterInit(MainWindow wnd)
+	public void OnAfterInit(MainWindow wnd, CancellationToken shutdownToken)
 	{
 		if(Fullscreen && FilesToLoad.Count == 0) {
 			wnd.ToggleFullscreen();
@@ -123,35 +125,31 @@ public class CommandLineHelper
 		}
 
 		if(OpenDebuggerRequested || OpenStateInspectorRequested || EnableWatchHudRequested) {
+			if(shutdownToken.IsCancellationRequested) {
+				return;
+			}
+
 			Task.Run(async () => {
 				const int timeoutMs = 10000;
 				const int pollMs = 100;
 				int waitedMs = 0;
 				RomInfo romInfo = EmuApi.GetRomInfo();
-				while(romInfo.Format == RomFormat.Unknown && waitedMs < timeoutMs) {
+				while(!shutdownToken.IsCancellationRequested && romInfo.Format == RomFormat.Unknown && waitedMs < timeoutMs) {
 					await Task.Delay(pollMs).ConfigureAwait(false);
 					waitedMs += pollMs;
 					romInfo = EmuApi.GetRomInfo();
 				}
 
-				Dispatcher.UIThread.Post(() => {
-					RomInfo activeRom = EmuApi.GetRomInfo();
-					if(EnableWatchHudRequested) {
-						ConfigManager.Config.Debug.Debugger.ShowWatchHud = true;
-						ConfigManager.Config.Debug.ApplyConfig();
-					}
+				if(shutdownToken.IsCancellationRequested) {
+					return;
+				}
 
-					if(activeRom.Format == RomFormat.Unknown) {
+				Dispatcher.UIThread.Post(() => {
+					if(shutdownToken.IsCancellationRequested) {
 						return;
 					}
 
-					CpuType cpuType = activeRom.ConsoleType.GetMainCpuType();
-					if(OpenDebuggerRequested) {
-						DebuggerWindow.GetOrOpenWindow(cpuType);
-					}
-					if(OpenStateInspectorRequested) {
-						DebugWindowManager.GetOrOpenDebugWindow(() => new StateInspectorWindow(new StateInspectorWindowViewModel()));
-					}
+					ProcessDebugAutomation(wnd);
 				});
 			});
 		}
@@ -199,6 +197,38 @@ public class CommandLineHelper
 			Task.Run(() => {
 				EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = Config.Shortcuts.EmulatorShortcut.LoadLastSession });
 			});
+		}
+
+		ProcessDebugAutomation(wnd);
+	}
+
+	private void ProcessDebugAutomation(MainWindow wnd)
+	{
+		if(!(OpenDebuggerRequested || OpenStateInspectorRequested || EnableWatchHudRequested)) {
+			return;
+		}
+
+		if(EnableWatchHudRequested) {
+			ConfigManager.Config.Debug.Debugger.ShowWatchHud = true;
+			ConfigManager.Config.Debug.ApplyConfig();
+		}
+
+		RomInfo activeRom = EmuApi.GetRomInfo();
+		if(activeRom.Format == RomFormat.Unknown) {
+			return;
+		}
+
+		if(_debugToolsOpened) {
+			return;
+		}
+		_debugToolsOpened = true;
+
+		CpuType cpuType = activeRom.ConsoleType.GetMainCpuType();
+		if(OpenDebuggerRequested) {
+			DebuggerWindow.GetOrOpenWindow(cpuType);
+		}
+		if(OpenStateInspectorRequested) {
+			DebugWindowManager.GetOrOpenDebugWindow(() => new StateInspectorWindow(new StateInspectorWindowViewModel()));
 		}
 	}
 
