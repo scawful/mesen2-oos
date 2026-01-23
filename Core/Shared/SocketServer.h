@@ -72,7 +72,7 @@ private:
 
 	void ServerLoop();
 	void HandleClient(int clientFd);
-	SocketCommand ParseCommand(const string& json);
+	bool ParseCommand(const string& json, SocketCommand& cmd, string& error);
 	void RegisterHandlers();
 
 	// Built-in command handlers
