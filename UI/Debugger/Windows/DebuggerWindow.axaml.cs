@@ -130,6 +130,9 @@ namespace Mesen.Debugger.Windows
 
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.CodeBreak:
+					if(e.Parameter == IntPtr.Zero) {
+						break;
+					}
 					BreakEvent evt = Marshal.PtrToStructure<BreakEvent>(e.Parameter);
 					Dispatcher.UIThread.Post(() => {
 						BreakpointManager.ClearTemporaryBreakpoints();
@@ -191,7 +194,10 @@ namespace Mesen.Debugger.Windows
 						_model.ControllerList.SetInputOverrides();
 					}
 
-					GameLoadedEventParams evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					GameLoadedEventParams evtParams = new();
+					if(e.Parameter != IntPtr.Zero) {
+						evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					}
 					if(!evtParams.IsPaused) {
 						//If not already paused, pause on load to ensure UI can load labels, breakpoints, etc.
 						EmuApi.Pause();

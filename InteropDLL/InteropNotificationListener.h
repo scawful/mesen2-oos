@@ -21,6 +21,8 @@ public:
 
 	void ProcessNotification(ConsoleNotificationType type, void* parameter)
 	{
-		_callback((int)type, parameter);
+		if(_callback) {
+			_callback((int)type, parameter);
+		}
 	}
 };

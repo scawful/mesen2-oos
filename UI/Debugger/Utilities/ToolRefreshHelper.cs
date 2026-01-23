@@ -114,7 +114,10 @@ namespace Mesen.Debugger.Utilities
 					break;
 
 				case ConsoleNotificationType.GameLoaded:
-					GameLoadedEventParams evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					GameLoadedEventParams evtParams = new();
+					if(e.Parameter != IntPtr.Zero) {
+						evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					}
 
 					if(!evtParams.IsPowerCycle) {
 						//When loading a game from disk, tools need to be updated (cpu type, etc.)

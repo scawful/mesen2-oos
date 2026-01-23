@@ -55,25 +55,37 @@ namespace Mesen.Interop
 
 		public void ProcessNotification(int type, IntPtr parameter)
 		{
-			if(_suppressCallbacks) {
-				return;
-			}
+			try {
+				if(_suppressCallbacks) {
+					return;
+				}
 
-			if(OnNotification == null) {
-				return;
-			}
+				if(OnNotification == null) {
+					return;
+				}
 
-			var args = new NotificationEventArgs() {
-				NotificationType = (ConsoleNotificationType)type,
-				Parameter = parameter
-			};
+				var args = new NotificationEventArgs() {
+					NotificationType = (ConsoleNotificationType)type,
+					Parameter = parameter
+				};
 
-			foreach(NotificationEventHandler handler in OnNotification.GetInvocationList()) {
+				foreach(NotificationEventHandler handler in OnNotification.GetInvocationList()) {
+					try {
+						handler(args);
+					} catch(Exception ex) {
+						string handlerName = handler.Method.DeclaringType?.FullName + "." + handler.Method.Name;
+						try {
+							EmuApi.WriteLogEntry("[UI] Notification handler error (" + handlerName + "): " + ex);
+						} catch {
+							//Ignore logging failures during shutdown or core teardown
+						}
+					}
+				}
+			} catch(Exception ex) {
 				try {
-					handler(args);
-				} catch(Exception ex) {
-					string handlerName = handler.Method.DeclaringType?.FullName + "." + handler.Method.Name;
-					EmuApi.WriteLogEntry("[UI] Notification handler error (" + handlerName + "): " + ex);
+					EmuApi.WriteLogEntry("[UI] Notification callback error: " + ex);
+				} catch {
+					//Ignore logging failures during shutdown or core teardown
 				}
 			}
 		}

@@ -68,17 +68,23 @@ extern "C" {
 		return true;
 	}
 
-	DllExport uint32_t __stdcall GetMesenVersion() { return _emu->GetSettings()->GetVersion(); }
+	DllExport uint32_t __stdcall GetMesenVersion() { return _emu ? _emu->GetSettings()->GetVersion() : 0; }
 	DllExport char* __stdcall GetMesenBuildDate() { return _buildDateTime; }
 
 	DllExport void __stdcall InitDll()
 	{
+		if(!_emu) {
+			return;
+		}
 		_emu->Initialize();
 		KeyManager::SetSettings(_emu->GetSettings());
 	}
 
 	DllExport void __stdcall InitializeEmu(const char* homeFolder, void *windowHandle, void *viewerHandle, bool softwareRenderer, bool noAudio, bool noVideo, bool noInput)
 	{
+		if(!_emu) {
+			return;
+		}
 		FolderUtilities::SetHomeFolder(homeFolder);
 
 		if(windowHandle != nullptr && viewerHandle != nullptr) {
@@ -134,6 +140,9 @@ extern "C" {
 
 	DllExport bool __stdcall LoadRom(char* filename, char* patchFile)
 	{
+		if(!_emu) {
+			return false;
+		}
 		_emu->GetGameClient()->Disconnect();
 		return _emu->LoadRom((VirtualFile)filename, patchFile ? (VirtualFile)patchFile : VirtualFile());
 	}
@@ -142,6 +151,11 @@ extern "C" {
 
 	DllExport void __stdcall GetRomInfo(InteropRomInfo &info)
 	{
+		memset(&info, 0, sizeof(info));
+		if(!_emu) {
+			return;
+		}
+
 		RomInfo romInfo = _emu->GetRomInfo();
 
 		string romPath = romInfo.RomFile;
@@ -165,12 +179,26 @@ extern "C" {
 
 	DllExport TimingInfo __stdcall GetTimingInfo(CpuType cpuType)
 	{
+		if(!_emu) {
+			TimingInfo info = {};
+			return info;
+		}
 		return _emu->GetTimingInfo(cpuType);
 	}
 
-	DllExport void __stdcall TakeScreenshot() { _emu->GetVideoDecoder()->TakeScreenshot(); }
+	DllExport void __stdcall TakeScreenshot()
+	{
+		if(_emu && _emu->GetVideoDecoder()) {
+			_emu->GetVideoDecoder()->TakeScreenshot();
+		}
+	}
 
-	DllExport void __stdcall ProcessAudioPlayerAction(AudioPlayerActionParams p) { _emu->ProcessAudioPlayerAction(p); }
+	DllExport void __stdcall ProcessAudioPlayerAction(AudioPlayerActionParams p)
+	{
+		if(_emu) {
+			_emu->ProcessAudioPlayerAction(p);
+		}
+	}
 
 	DllExport void __stdcall GetArchiveRomList(char* filename, char* outBuffer, uint32_t maxLength) { 
 		std::ostringstream out;
@@ -186,22 +214,34 @@ extern "C" {
 
 	DllExport bool __stdcall IsRunning()
 	{
+		if(!_emu) {
+			return false;
+		}
 		return _emu->IsRunning();
 	}
 
 	DllExport int32_t __stdcall GetStopCode()
 	{
+		if(!_emu) {
+			return 0;
+		}
 		return _emu->GetStopCode();
 	}
 
 	DllExport void __stdcall Stop()
 	{
+		if(!_emu) {
+			return;
+		}
 		_emu->GetGameClient()->Disconnect();
 		_emu->Stop(true);
 	}
 
 	DllExport void __stdcall Pause()
 	{
+		if(!_emu) {
+			return;
+		}
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Pause();
 		}
@@ -209,6 +249,9 @@ extern "C" {
 
 	DllExport void __stdcall Resume()
 	{
+		if(!_emu) {
+			return;
+		}
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Resume();
 		}
@@ -216,6 +259,9 @@ extern "C" {
 
 	DllExport bool __stdcall IsPaused()
 	{
+		if(!_emu) {
+			return false;
+		}
 		return _emu->IsPaused();
 	}
 
@@ -234,6 +280,9 @@ extern "C" {
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)
 	{
+		if(!_emu) {
+			return nullptr;
+		}
 		return _listeners.RegisterNotificationCallback(callback, _emu.get());
 	}
 
@@ -251,56 +300,69 @@ extern "C" {
 
 	DllExport void __stdcall SetRendererSize(uint32_t width, uint32_t height)
 	{
-		if(_emu->GetVideoRenderer()) {
+		if(_emu && _emu->GetVideoRenderer()) {
 			_emu->GetVideoRenderer()->SetRendererSize(width, height);
 		}
 	}
 
 	DllExport void __stdcall SetWatchHudText(char* text)
 	{
-		if(_emu->GetVideoRenderer()) {
+		if(_emu && _emu->GetVideoRenderer()) {
 			_emu->GetVideoRenderer()->SetWatchHudText(text ? text : "");
 		}
 	}
 
 	DllExport double __stdcall GetAspectRatio()
 	{
+		if(!_emu || !_emu->GetSettings() || !_emu->GetVideoDecoder()) {
+			return 1.0;
+		}
 		return _emu->GetSettings()->GetAspectRatio(_emu->GetRegion(), _emu->GetVideoDecoder()->GetBaseFrameInfo(true));
 	}
 
 	DllExport FrameInfo __stdcall GetBaseScreenSize()
 	{
-		if(_emu->GetVideoDecoder()) {
+		if(_emu && _emu->GetVideoDecoder()) {
 			return _emu->GetVideoDecoder()->GetBaseFrameInfo(true);
 		}
 		return { 256, 240 };
 	}
 	
-	DllExport uint32_t __stdcall GetGameMemorySize(MemoryType type) { return _emu->GetMemory(type).Size; }
+	DllExport uint32_t __stdcall GetGameMemorySize(MemoryType type)
+	{
+		if(!_emu) {
+			return 0;
+		}
+		return _emu->GetMemory(type).Size;
+	}
 
-	DllExport void __stdcall ClearCheats() { _emu->GetCheatManager()->ClearCheats(); }
-	DllExport void __stdcall SetCheats(CheatCode codes[], uint32_t length) { _emu->GetCheatManager()->SetCheats(codes, length); }
-	DllExport bool __stdcall GetConvertedCheat(CheatCode input, InternalCheatCode& output) { return _emu->GetCheatManager()->GetConvertedCheat(input, output); }
+	DllExport void __stdcall ClearCheats() { if(_emu) { _emu->GetCheatManager()->ClearCheats(); } }
+	DllExport void __stdcall SetCheats(CheatCode codes[], uint32_t length) { if(_emu) { _emu->GetCheatManager()->SetCheats(codes, length); } }
+	DllExport bool __stdcall GetConvertedCheat(CheatCode input, InternalCheatCode& output) { return _emu ? _emu->GetCheatManager()->GetConvertedCheat(input, output) : false; }
 
 	DllExport void __stdcall GetRomHash(HashType hashType, char* outBuffer, uint32_t maxLength)
 	{
+		if(!_emu) {
+			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
+			return;
+		}
 		StringUtilities::CopyToBuffer(_emu->GetHash(hashType), outBuffer, maxLength);
 	}
 
-	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { _emu->InputBarcode(barcode, digitCount); }
-	DllExport void __stdcall ProcessTapeRecorderAction(TapeRecorderAction action, char* filename) { _emu->ProcessTapeRecorderAction(action, filename); }
+	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { if(_emu) { _emu->InputBarcode(barcode, digitCount); } }
+	DllExport void __stdcall ProcessTapeRecorderAction(TapeRecorderAction action, char* filename) { if(_emu) { _emu->ProcessTapeRecorderAction(action, filename); } }
 
-	DllExport void __stdcall ExecuteShortcut(ExecuteShortcutParams params) { _emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::ExecuteShortcut, &params); }
-	DllExport bool __stdcall IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam) { return _emu->GetShortcutKeyHandler()->IsShortcutAllowed(shortcut, shortcutParam); }
+	DllExport void __stdcall ExecuteShortcut(ExecuteShortcutParams params) { if(_emu) { _emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::ExecuteShortcut, &params); } }
+	DllExport bool __stdcall IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam) { return _emu ? _emu->GetShortcutKeyHandler()->IsShortcutAllowed(shortcut, shortcutParam) : false; }
 
 	DllExport void __stdcall WriteLogEntry(char* message) { MessageManager::Log(message); }
 
-	DllExport void __stdcall SaveState(uint32_t stateIndex) { _emu->GetSaveStateManager()->SaveState(stateIndex); }
-	DllExport void __stdcall LoadState(uint32_t stateIndex) { _emu->GetSaveStateManager()->LoadState(stateIndex); }
-	DllExport void __stdcall SaveStateFile(char* filepath) { _emu->GetSaveStateManager()->SaveState(filepath); }
-	DllExport void __stdcall LoadStateFile(char* filepath) { _emu->GetSaveStateManager()->LoadState(filepath); }
-	DllExport void __stdcall LoadRecentGame(char* filepath, bool resetGame) { _emu->GetSaveStateManager()->LoadRecentGame(filepath, resetGame); }
-	DllExport int32_t __stdcall GetSaveStatePreview(char* saveStatePath, uint8_t* pngData) { return _emu->GetSaveStateManager()->GetSaveStatePreview(saveStatePath, pngData); }
+	DllExport void __stdcall SaveState(uint32_t stateIndex) { if(_emu) { _emu->GetSaveStateManager()->SaveState(stateIndex); } }
+	DllExport void __stdcall LoadState(uint32_t stateIndex) { if(_emu) { _emu->GetSaveStateManager()->LoadState(stateIndex); } }
+	DllExport void __stdcall SaveStateFile(char* filepath) { if(_emu) { _emu->GetSaveStateManager()->SaveState(filepath); } }
+	DllExport void __stdcall LoadStateFile(char* filepath) { if(_emu) { _emu->GetSaveStateManager()->LoadState(filepath); } }
+	DllExport void __stdcall LoadRecentGame(char* filepath, bool resetGame) { if(_emu) { _emu->GetSaveStateManager()->LoadRecentGame(filepath, resetGame); } }
+	DllExport int32_t __stdcall GetSaveStatePreview(char* saveStatePath, uint8_t* pngData) { return _emu ? _emu->GetSaveStateManager()->GetSaveStatePreview(saveStatePath, pngData) : 0; }
 
 	class PgoKeyManager : public IKeyManager
 	{

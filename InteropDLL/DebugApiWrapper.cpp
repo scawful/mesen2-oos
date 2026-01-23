@@ -29,6 +29,9 @@ extern unique_ptr<Emulator> _emu;
 template<typename T>
 T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
 {
+	if(!_emu) {
+		return {};
+	}
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 	if(dbgRequest.GetDebugger()) {
 		return func(dbgRequest.GetDebugger());
@@ -40,6 +43,9 @@ T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
 template<>
 void WrapDebuggerCall(std::function<void(Debugger* debugger)> func)
 {
+	if(!_emu) {
+		return;
+	}
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
 	if(dbgRequest.GetDebugger()) {
 		func(dbgRequest.GetDebugger());
@@ -55,17 +61,23 @@ extern "C"
 	//Debugger wrapper
 	DllExport void __stdcall InitializeDebugger()
 	{
+		if(!_emu) {
+			return;
+		}
 		_emu->InitDebugger();
 	}
 
 	DllExport void __stdcall ReleaseDebugger()
 	{
+		if(!_emu) {
+			return;
+		}
 		_emu->StopDebugger();
 	}
 
 	DllExport bool __stdcall IsDebuggerRunning()
 	{
-		return _emu->GetDebugger().GetDebugger() != nullptr;
+		return _emu && _emu->GetDebugger().GetDebugger() != nullptr;
 	}
 
 	DllExport bool __stdcall IsExecutionStopped() { return WithDebugger(bool, IsExecutionStopped()); }

@@ -220,6 +220,9 @@ namespace Mesen.Windows
 		{
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.RefreshSoftwareRenderer:
+					if(e.Parameter == IntPtr.Zero) {
+						break;
+					}
 					SoftwareRendererFrame frame = Marshal.PtrToStructure<SoftwareRendererFrame>(e.Parameter);
 					_softwareRenderer.UpdateSoftwareRenderer(frame);
 					break;

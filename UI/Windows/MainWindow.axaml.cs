@@ -297,7 +297,10 @@ namespace Mesen.Windows
 
 					GameConfig.LoadGameConfig(romInfo).ApplyConfig();
 
-					GameLoadedEventParams evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					GameLoadedEventParams evtParams = new();
+					if(e.Parameter != IntPtr.Zero) {
+						evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					}
 					if(!evtParams.IsPowerCycle) {
 						Dispatcher.UIThread.Post(() => {
 							_model.RecentGames.Visible = false;
@@ -350,6 +353,9 @@ namespace Mesen.Windows
 					break;
 
 				case ConsoleNotificationType.ExecuteShortcut:
+					if(e.Parameter == IntPtr.Zero) {
+						break;
+					}
 					ExecuteShortcutParams p = Marshal.PtrToStructure<ExecuteShortcutParams>(e.Parameter);
 					Dispatcher.UIThread.Post(() => {
 						_shortcutHandler.ExecuteShortcut(p.Shortcut);
@@ -357,6 +363,9 @@ namespace Mesen.Windows
 					break;
 
 				case ConsoleNotificationType.MissingFirmware:
+					if(e.Parameter == IntPtr.Zero) {
+						break;
+					}
 					MissingFirmwareMessage msg = Marshal.PtrToStructure<MissingFirmwareMessage>(e.Parameter);
 					TaskCompletionSource tcs = new TaskCompletionSource();
 					Dispatcher.UIThread.Post(async () => {
@@ -373,6 +382,9 @@ namespace Mesen.Windows
 					break;
 
 				case ConsoleNotificationType.RefreshSoftwareRenderer:
+					if(e.Parameter == IntPtr.Zero) {
+						break;
+					}
 					SoftwareRendererFrame frame = Marshal.PtrToStructure<SoftwareRendererFrame>(e.Parameter);
 					_softwareRenderer.UpdateSoftwareRenderer(frame);
 					break;
