@@ -7,16 +7,25 @@ Usage: install_mesen2_oos.sh [options]
 
 Options:
   --source PATH      Source .app bundle (defaults to publish output)
-  --dest DIR         Destination directory (default: /Applications)
+  --dest PATH        Destination directory or .app path (default: /Applications)
   --name NAME        Destination app name (default: Mesen2 OOS.app)
   --user             Install to ~/Applications
   --prune            Move other Mesen app bundles in DEST to backup
   --no-backup        Replace without backing up existing bundle(s)
+  --force            Alias for --no-backup
+  --dry-run          Print actions without copying
+  --symlink          Create/refresh Mesen.app -> installed app in DEST
+  --symlink-force    Replace existing Mesen.app if needed
   -h, --help         Show this help
 
 Notes:
   - This only moves/copies app bundles; it does not touch ROMs, saves, or config.
   - Config stays in ~/Library/Application Support/Mesen2.
+
+Env:
+  MESEN_APP_SRC      Override source app bundle
+  MESEN_APP_DEST     Override destination directory or .app path
+  MESEN_APP_NAME     Override destination app name
 EOF
 }
 
@@ -28,6 +37,9 @@ DEST_NAME="Mesen2 OOS.app"
 SRC_APP=""
 DO_BACKUP=1
 DO_PRUNE=0
+DRY_RUN=0
+DO_SYMLINK=0
+SYMLINK_FORCE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,8 +63,25 @@ while [[ $# -gt 0 ]]; do
       DO_BACKUP=0
       shift
       ;;
+    --force)
+      DO_BACKUP=0
+      shift
+      ;;
     --prune)
       DO_PRUNE=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --symlink)
+      DO_SYMLINK=1
+      shift
+      ;;
+    --symlink-force)
+      DO_SYMLINK=1
+      SYMLINK_FORCE=1
       shift
       ;;
     -h|--help)
@@ -66,6 +95,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$SRC_APP" && -n "${MESEN_APP_SRC:-}" ]]; then
+  SRC_APP="${MESEN_APP_SRC}"
+fi
+
+if [[ -n "${MESEN_APP_DEST:-}" ]]; then
+  DEST_DIR="${MESEN_APP_DEST}"
+fi
+
+if [[ -n "${MESEN_APP_NAME:-}" ]]; then
+  DEST_NAME="${MESEN_APP_NAME}"
+fi
+
+if [[ "$DEST_DIR" == *.app ]]; then
+  DEST_NAME="$(basename "$DEST_DIR")"
+  DEST_DIR="$(dirname "$DEST_DIR")"
+fi
 
 if [[ -z "$SRC_APP" ]]; then
   if [[ -d "${PUBLISH_DIR}/Mesen2 OOS.app" ]]; then
@@ -111,10 +157,18 @@ backup_or_remove() {
     return 0
   fi
   if [[ "$DO_BACKUP" -eq 1 ]]; then
-    $SUDO mkdir -p "$backup_dir"
-    $SUDO mv "$path" "$backup_dir/"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "Would backup: $path -> $backup_dir/"
+    else
+      $SUDO mkdir -p "$backup_dir"
+      $SUDO mv "$path" "$backup_dir/"
+    fi
   else
-    $SUDO rm -rf "$path"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "Would remove: $path"
+    else
+      $SUDO rm -rf "$path"
+    fi
   fi
 }
 
@@ -129,6 +183,27 @@ fi
 
 backup_or_remove "$DEST_APP"
 
-$SUDO /usr/bin/ditto "$SRC_APP" "$DEST_APP"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "Would install: $SRC_APP -> $DEST_APP"
+else
+  $SUDO /usr/bin/ditto "$SRC_APP" "$DEST_APP"
+  echo "Installed: $DEST_APP"
+fi
 
-echo "Installed: $DEST_APP"
+if [[ "$DO_SYMLINK" -eq 1 ]]; then
+  link_path="${DEST_DIR}/Mesen.app"
+  if [[ -e "$link_path" && ! -L "$link_path" && "$SYMLINK_FORCE" -eq 0 ]]; then
+    echo "Symlink target exists and is not a symlink: $link_path" >&2
+    echo "Re-run with --symlink-force to replace it." >&2
+    exit 1
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "Would symlink: $link_path -> $DEST_APP"
+  else
+    if [[ -e "$link_path" && "$SYMLINK_FORCE" -eq 1 ]]; then
+      $SUDO rm -rf "$link_path"
+    fi
+    $SUDO ln -sfn "$DEST_APP" "$link_path"
+    echo "Symlinked: $link_path -> $DEST_APP"
+  fi
+fi
