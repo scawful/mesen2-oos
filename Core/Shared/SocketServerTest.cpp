@@ -45,7 +45,7 @@ enum class MemoryType {
 	SnesRegister,
 };
 
-enum class BreakpointTypeFlags : uint8_t {
+enum class BreakpointTypeFlags {
 	None = 0,
 	Execute = 1,
 	Read = 2,
@@ -165,8 +165,7 @@ CpuType ParseCpuType(const string& cpuType) {
 	return CpuType::Snes;
 }
 
-// Test BreakpointData struct layout
-#pragma pack(push, 1)
+// Test BreakpointData struct layout (default packing to mirror Breakpoint)
 struct BreakpointData {
 	uint32_t id;
 	CpuType cpuType;
@@ -179,7 +178,6 @@ struct BreakpointData {
 	bool ignoreDummyOperations;
 	char condition[1000];
 };
-#pragma pack(pop)
 
 // =============================================================================
 // Test Cases
@@ -306,12 +304,9 @@ void test_breakpoint_data_layout() {
 	assert(bp.enabled == true);
 	assert(strcmp(bp.condition, "A == 0x42") == 0);
 
-	// Verify struct size (should be deterministic with pragma pack)
-	// id(4) + cpuType(1) + memoryType(4) + type(1) + startAddr(4) + endAddr(4)
-	// + enabled(1) + markEvent(1) + ignoreDummyOps(1) + condition(1000)
-	// Total depends on enum sizes; just verify it's reasonable
-	assert(sizeof(BreakpointData) >= 1016);
-	assert(sizeof(BreakpointData) <= 1024);
+	// Verify struct size is in a tight expected range with default packing.
+	assert(sizeof(BreakpointData) >= 1024);
+	assert(sizeof(BreakpointData) <= 1032);
 
 	cout << "PASSED (size=" << sizeof(BreakpointData) << ")\n";
 }

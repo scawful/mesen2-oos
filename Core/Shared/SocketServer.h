@@ -78,6 +78,7 @@ private:
 	// Built-in command handlers
 	static SocketResponse HandlePing(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleState(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleHealth(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandlePause(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleResume(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleReset(Emulator* emu, const SocketCommand& cmd);
@@ -91,6 +92,7 @@ private:
 	static SocketResponse HandleLoadScript(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleGetCpuState(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleStateInspector(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSetInput(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleDisasm(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleStep(Emulator* emu, const SocketCommand& cmd);

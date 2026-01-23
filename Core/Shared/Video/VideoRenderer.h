@@ -78,6 +78,7 @@ public:
 	void SetScriptHudScale(uint32_t scale) { _scriptHudScale = scale; }
 	std::pair<FrameInfo, OverscanDimensions> GetScriptHudSize();
 	void SetWatchHudText(string text);
+	string GetWatchHudText();
 
 	void StartThread();
 	void StopThread();

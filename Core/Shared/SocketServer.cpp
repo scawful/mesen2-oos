@@ -11,22 +11,29 @@
 #include "Core/Debugger/Debugger.h"
 #include "Core/Debugger/ScriptManager.h"
 #include "Core/Debugger/DebugTypes.h"
+#include "Core/Debugger/Disassembler.h"
 #include "Core/Debugger/MemoryDumper.h"
 #include "Core/Debugger/LabelManager.h"
 #include "Core/Debugger/Breakpoint.h"
 #include "Core/Debugger/BreakpointManager.h"
+#include "Core/Debugger/DebugUtilities.h"
 #include "SNES/SnesCpuTypes.h"
+#include "Shared/TimingInfo.h"
 #include "Shared/Video/VideoDecoder.h"
+#include "Shared/Video/VideoRenderer.h"
 #include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
+#include "SNES/SnesPpuTypes.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <poll.h>
 #include <chrono>
+#include <cctype>
 
 using std::hex;
+using std::dec;
 using std::setw;
 using std::setfill;
 using std::fixed;
@@ -43,6 +50,13 @@ vector<SocketBreakpoint> SocketServer::_breakpoints;
 uint32_t SocketServer::_nextBreakpointId = 1;
 SimpleLock SocketServer::_breakpointLock;
 
+// Forward declarations for helper functions
+static string NormalizeKey(string value);
+static bool TryParseMemoryType(const string& memtype, MemoryType& outType);
+static string JsonEscape(const string& value);
+static string FormatHex(uint64_t value, int width);
+static string FormatSnesFlags(const SnesCpuState& cpu);
+
 string SocketResponse::ToJson() const {
 	stringstream ss;
 	ss << "{\"success\":" << (success ? "true" : "false");
@@ -50,7 +64,7 @@ string SocketResponse::ToJson() const {
 		ss << ",\"data\":" << data;
 	}
 	if (!error.empty()) {
-		ss << ",\"error\":\"" << error << "\"";
+		ss << ",\"error\":\"" << JsonEscape(error) << "\"";
 	}
 	ss << "}";
 	return ss.str();
@@ -69,6 +83,7 @@ SocketServer::~SocketServer() {
 void SocketServer::RegisterHandlers() {
 	_handlers["PING"] = HandlePing;
 	_handlers["STATE"] = HandleState;
+	_handlers["HEALTH"] = HandleHealth;
 	_handlers["PAUSE"] = HandlePause;
 	_handlers["RESUME"] = HandleResume;
 	_handlers["RESET"] = HandleReset;
@@ -82,6 +97,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["LOADSCRIPT"] = HandleLoadScript;
 	_handlers["SCREENSHOT"] = HandleScreenshot;
 	_handlers["CPU"] = HandleGetCpuState;
+	_handlers["STATEINSPECT"] = HandleStateInspector;
 	_handlers["INPUT"] = HandleSetInput;
 	_handlers["DISASM"] = HandleDisasm;
 	_handlers["STEP"] = HandleStep;
@@ -338,6 +354,65 @@ SocketResponse SocketServer::HandleState(Emulator* emu, const SocketCommand& cmd
 	return resp;
 }
 
+SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	bool running = emu->IsRunning();
+	bool paused = emu->IsPaused();
+	bool debugging = emu->IsDebugging();
+
+	string watchHudText;
+	if(running && emu->GetVideoRenderer()) {
+		watchHudText = emu->GetVideoRenderer()->GetWatchHudText();
+	}
+
+	bool disasmOk = false;
+	string disasmData = "null";
+	string pcValue = "null";
+	CpuType cpuType = CpuType::Snes;
+
+	if(running) {
+		auto dbg = emu->GetDebugger(true);
+		if(dbg.GetDebugger()) {
+			auto cpuTypes = emu->GetCpuTypes();
+			if(!cpuTypes.empty()) {
+				cpuType = cpuTypes[0];
+			}
+
+			uint32_t pc = dbg.GetDebugger()->GetProgramCounter(cpuType, true);
+			pcValue = "\"" + FormatHex(pc, DebugUtilities::GetProgramCounterSize(cpuType)) + "\"";
+
+			SocketCommand disasmCmd;
+			disasmCmd.type = "DISASM";
+			disasmCmd.params["addr"] = FormatHex(pc, DebugUtilities::GetProgramCounterSize(cpuType));
+			disasmCmd.params["count"] = "1";
+
+			SocketResponse disasmResp = HandleDisasm(emu, disasmCmd);
+			disasmOk = disasmResp.success;
+			if(disasmResp.success) {
+				disasmData = disasmResp.data;
+			}
+		}
+	}
+
+	stringstream ss;
+	ss << "{";
+	ss << "\"running\":" << (running ? "true" : "false") << ",";
+	ss << "\"paused\":" << (paused ? "true" : "false") << ",";
+	ss << "\"debugging\":" << (debugging ? "true" : "false") << ",";
+	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType()) << ",";
+	ss << "\"cpuType\":" << (running ? std::to_string(static_cast<int>(cpuType)) : "null") << ",";
+	ss << "\"pc\":" << pcValue << ",";
+	ss << "\"disasmOk\":" << (disasmOk ? "true" : "false") << ",";
+	ss << "\"disasm\":" << (disasmOk ? disasmData : "null") << ",";
+	ss << "\"watchHudText\":\"" << JsonEscape(watchHudText) << "\"";
+	ss << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
 SocketResponse SocketServer::HandlePause(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
 	emu->Pause();
@@ -380,7 +455,7 @@ SocketResponse SocketServer::HandleRead(Emulator* emu, const SocketCommand& cmd)
 		addr = std::stoul(addrStr, nullptr, 16);
 	}
 
-	// Read from SNES memory (default to work RAM mirror at 7E bank)
+	// Read from memory (default to SNES memory map)
 	auto dbg = emu->GetDebugger(true);
 	if (!dbg.GetDebugger()) {
 		resp.success = false;
@@ -388,9 +463,30 @@ SocketResponse SocketServer::HandleRead(Emulator* emu, const SocketCommand& cmd)
 		return resp;
 	}
 
-	uint8_t value = dbg.GetDebugger()->GetMemoryDumper()->GetMemoryValue(
-		MemoryType::SnesMemory, addr
-	);
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	uint8_t value = dumper->GetMemoryValue(memType, addr);
 
 	stringstream ss;
 	ss << "\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)value << "\"";
@@ -424,9 +520,31 @@ SocketResponse SocketServer::HandleRead16(Emulator* emu, const SocketCommand& cm
 		return resp;
 	}
 
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
-	uint8_t lo = dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
-	uint8_t hi = dumper->GetMemoryValue(MemoryType::SnesMemory, addr + 1);
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize || addr + 1 >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	uint8_t lo = dumper->GetMemoryValue(memType, addr);
+	uint8_t hi = dumper->GetMemoryValue(memType, addr + 1);
 	uint16_t value = lo | (hi << 8);
 
 	stringstream ss;
@@ -471,9 +589,30 @@ SocketResponse SocketServer::HandleWrite(Emulator* emu, const SocketCommand& cmd
 		return resp;
 	}
 
-	dbg.GetDebugger()->GetMemoryDumper()->SetMemoryValue(
-		MemoryType::SnesMemory, addr, value, false
-	);
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	dumper->SetMemoryValue(memType, addr, value, false);
 
 	resp.success = true;
 	resp.data = "\"OK\"";
@@ -516,8 +655,30 @@ SocketResponse SocketServer::HandleWrite16(Emulator* emu, const SocketCommand& c
 	}
 
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
-	dumper->SetMemoryValue(MemoryType::SnesMemory, addr, value & 0xFF, false);
-	dumper->SetMemoryValue(MemoryType::SnesMemory, addr + 1, (value >> 8) & 0xFF, false);
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize || addr + 1 >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	dumper->SetMemoryValue(memType, addr, value & 0xFF, false);
+	dumper->SetMemoryValue(memType, addr + 1, (value >> 8) & 0xFF, false);
 
 	resp.success = true;
 	resp.data = "\"OK\"";
@@ -554,12 +715,36 @@ SocketResponse SocketServer::HandleReadBlock(Emulator* emu, const SocketCommand&
 		return resp;
 	}
 
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+	if(addr + len > memSize) {
+		len = memSize - addr;
+	}
 
 	stringstream ss;
 	ss << "\"";
 	for (uint32_t i = 0; i < len; i++) {
-		uint8_t val = dumper->GetMemoryValue(MemoryType::SnesMemory, addr + i);
+		uint8_t val = dumper->GetMemoryValue(memType, addr + i);
 		ss << hex << uppercase << setw(2) << setfill('0') << (int)val;
 	}
 	ss << "\"";
@@ -752,9 +937,6 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 
 	// Get more detailed state for SNES
 	if (emu->GetConsoleType() == ConsoleType::Snes) {
-		// Read key registers from memory
-		auto dumper = debugger->GetMemoryDumper();
-
 		SnesCpuState& state = static_cast<SnesCpuState&>(debugger->GetCpuStateRef(cpuType));
 		uint64_t cycleCount = state.CycleCount;
 		uint16_t a = state.A;
@@ -762,7 +944,6 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 		uint16_t y = state.Y;
 		uint16_t sp = state.SP;
 		uint16_t d = state.D;
-		uint16_t regPc = state.PC;
 		uint8_t k = state.K;
 		uint8_t dbr = state.DBR;
 		uint8_t ps = state.PS;
@@ -779,6 +960,89 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 	}
 
 	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
+	ss << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleStateInspector(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	bool running = emu->IsRunning();
+
+	stringstream ss;
+	ss << "{";
+	ss << "\"running\":" << (running ? "true" : "false") << ",";
+	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
+
+	if(!running) {
+		ss << "}";
+		resp.success = true;
+		resp.data = ss.str();
+		return resp;
+	}
+
+	auto cpuTypes = emu->GetCpuTypes();
+	CpuType cpuType = cpuTypes.empty() ? CpuType::Snes : cpuTypes[0];
+
+	TimingInfo timing = emu->GetTimingInfo(cpuType);
+	RomInfo& romInfo = emu->GetRomInfo();
+	string romName = romInfo.RomFile.GetFileName();
+
+	ss << ",\"romName\":\"" << JsonEscape(romName) << "\"";
+	ss << ",\"system\":{";
+	ss << "\"frameCount\":" << timing.FrameCount << ",";
+	ss << "\"masterClock\":" << timing.MasterClock << ",";
+	ss << "\"masterClockRate\":" << timing.MasterClockRate << ",";
+	ss << "\"cycleCount\":" << timing.CycleCount;
+	ss << "}";
+
+	auto dbg = emu->GetDebugger(true);
+	if(dbg.GetDebugger()) {
+		ss << ",\"debugger\":true";
+
+		if(emu->GetConsoleType() == ConsoleType::Snes) {
+			Debugger* debugger = dbg.GetDebugger();
+			SnesCpuState& cpu = static_cast<SnesCpuState&>(debugger->GetCpuStateRef(cpuType));
+
+			ss << ",\"cpu\":{";
+			ss << "\"type\":" << static_cast<int>(cpuType) << ",";
+			ss << "\"a\":\"" << FormatHex(cpu.A, 4) << "\",";
+			ss << "\"x\":\"" << FormatHex(cpu.X, 4) << "\",";
+			ss << "\"y\":\"" << FormatHex(cpu.Y, 4) << "\",";
+			ss << "\"sp\":\"" << FormatHex(cpu.SP, 4) << "\",";
+			ss << "\"d\":\"" << FormatHex(cpu.D, 4) << "\",";
+			ss << "\"pc\":\"" << FormatHex(((uint32_t)cpu.K << 16) | cpu.PC, 6) << "\",";
+			ss << "\"k\":\"" << FormatHex(cpu.K, 2) << "\",";
+			ss << "\"dbr\":\"" << FormatHex(cpu.DBR, 2) << "\",";
+			ss << "\"p\":\"" << FormatHex(cpu.PS, 2) << "\",";
+			ss << "\"flags\":\"" << FormatSnesFlags(cpu) << "\",";
+			ss << "\"emulation\":" << (cpu.EmulationMode ? "true" : "false");
+			ss << "}";
+
+			SnesPpuState ppu;
+			debugger->GetPpuState(ppu, CpuType::Snes);
+
+			ss << ",\"ppu\":{";
+			ss << "\"scanline\":" << ppu.Scanline << ",";
+			ss << "\"cycle\":" << ppu.Cycle << ",";
+			ss << "\"frame\":" << ppu.FrameCount << ",";
+			ss << "\"forcedBlank\":" << (ppu.ForcedBlank ? "true" : "false") << ",";
+			ss << "\"brightness\":" << static_cast<int>(ppu.ScreenBrightness);
+			ss << "}";
+		}
+	} else {
+		ss << ",\"debugger\":false";
+	}
+
+	string watchHudText;
+	if(emu->GetVideoRenderer()) {
+		watchHudText = emu->GetVideoRenderer()->GetWatchHudText();
+	}
+	ss << ",\"watchHudText\":\"" << JsonEscape(watchHudText) << "\"";
+
 	ss << "}";
 
 	resp.success = true;
@@ -904,30 +1168,69 @@ SocketResponse SocketServer::HandleDisasm(Emulator* emu, const SocketCommand& cm
 	}
 
 	CpuType cpuType = emu->GetCpuTypes()[0];
-	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	MemoryType cpuMemType = DebugUtilities::GetCpuMemoryType(cpuType);
 
-	stringstream ss;
-	ss << "[";
-
-	bool first = true;
-	uint32_t currentAddr = addr;
-	for (uint32_t i = 0; i < count; i++) {
-		// Read opcode bytes (up to 4 for SNES)
-		uint8_t opcode = dumper->GetMemoryValue(MemoryType::SnesMemory, currentAddr);
-
-		if (!first) ss << ",";
-		first = false;
-
-		ss << "{";
-		ss << "\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << currentAddr << "\",";
-		ss << "\"opcode\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)opcode << "\"";
-		ss << "}";
-
-		// Move to next instruction (simplified - just increment by 1 for now)
-		// A proper implementation would use the instruction length
-		currentAddr++;
+	MemoryType memType = cpuMemType;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+		if(memType != cpuMemType) {
+			resp.success = false;
+			resp.error = "DISASM only supports CPU memory";
+			return resp;
+		}
 	}
 
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(cpuMemType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(addr >= memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	vector<CodeLineData> lines(count);
+	uint32_t lineCount = dbg.GetDebugger()->GetDisassembler()->GetDisassemblyOutput(cpuType, addr, lines.data(), count);
+	if(lineCount == 0) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	int pcSize = DebugUtilities::GetProgramCounterSize(cpuType);
+	stringstream ss;
+	ss << "[";
+	for (uint32_t i = 0; i < lineCount; i++) {
+		if (i > 0) ss << ",";
+		CodeLineData& line = lines[i];
+
+		ss << "{";
+		if(line.Address >= 0) {
+			ss << "\"addr\":\"0x" << hex << uppercase << setw(pcSize) << setfill('0') << (uint32_t)line.Address << "\"";
+		} else {
+			ss << "\"addr\":null";
+		}
+		ss << ",\"text\":\"" << JsonEscape(line.Text) << "\"";
+		if(line.Comment[0] != '\0') {
+			ss << ",\"comment\":\"" << JsonEscape(line.Comment) << "\"";
+		}
+		ss << ",\"bytes\":\"";
+		for(uint8_t b = 0; b < line.OpSize && b < sizeof(line.ByteCode); b++) {
+			ss << hex << uppercase << setw(2) << setfill('0') << (int)line.ByteCode[b];
+		}
+		ss << "\"";
+		ss << ",\"opSize\":" << dec << (int)line.OpSize;
+		ss << "}";
+	}
 	ss << "]";
 
 	resp.success = true;
@@ -1271,17 +1574,166 @@ SocketResponse SocketServer::HandleSpeed(Emulator* emu, const SocketCommand& cmd
 // Memory Analysis Handlers
 // ============================================================================
 
+static string NormalizeKey(string value)
+{
+	string out;
+	out.reserve(value.size());
+	for(unsigned char c : value) {
+		if(std::isalnum(c)) {
+			out.push_back((char)std::tolower(c));
+		}
+	}
+	return out;
+}
+
+static string FormatHex(uint64_t value, int width)
+{
+	stringstream ss;
+	ss << "0x" << hex << uppercase << setw(width) << setfill('0') << value;
+	return ss.str();
+}
+
+static string FormatSnesFlags(const SnesCpuState& cpu)
+{
+	bool flagN = (cpu.PS & ProcFlags::Negative) != 0;
+	bool flagV = (cpu.PS & ProcFlags::Overflow) != 0;
+	bool flagM = (cpu.PS & ProcFlags::MemoryMode8) != 0;
+	bool flagX = (cpu.PS & ProcFlags::IndexMode8) != 0;
+	bool flagD = (cpu.PS & ProcFlags::Decimal) != 0;
+	bool flagI = (cpu.PS & ProcFlags::IrqDisable) != 0;
+	bool flagZ = (cpu.PS & ProcFlags::Zero) != 0;
+	bool flagC = (cpu.PS & ProcFlags::Carry) != 0;
+	char flagE = cpu.EmulationMode ? 'E' : 'e';
+
+	stringstream ss;
+	ss << (flagN ? 'N' : 'n')
+	   << (flagV ? 'V' : 'v')
+	   << (flagM ? 'M' : 'm')
+	   << (flagX ? 'X' : 'x')
+	   << (flagD ? 'D' : 'd')
+	   << (flagI ? 'I' : 'i')
+	   << (flagZ ? 'Z' : 'z')
+	   << (flagC ? 'C' : 'c')
+	   << ' ' << flagE;
+	return ss.str();
+}
+
 // Helper to parse memory type from string
-static MemoryType ParseMemoryType(const string& memtype) {
-	if (memtype == "SnesMemory" || memtype.empty()) return MemoryType::SnesMemory;
-	if (memtype == "SnesWorkRam" || memtype == "WRAM") return MemoryType::SnesWorkRam;
-	if (memtype == "SnesSaveRam" || memtype == "SRAM") return MemoryType::SnesSaveRam;
-	if (memtype == "SnesPrgRom" || memtype == "ROM") return MemoryType::SnesPrgRom;
-	if (memtype == "SnesVideoRam" || memtype == "VRAM") return MemoryType::SnesVideoRam;
-	if (memtype == "SnesSpriteRam" || memtype == "OAM") return MemoryType::SnesSpriteRam;
-	if (memtype == "SnesCgRam" || memtype == "CGRAM") return MemoryType::SnesCgRam;
-	if (memtype == "SpcRam") return MemoryType::SpcRam;
-	return MemoryType::SnesMemory;
+static bool TryParseMemoryType(const string& memtype, MemoryType& outType)
+{
+	string key = NormalizeKey(memtype);
+	if (key.empty() || key == "snesmemory" || key == "snes") { outType = MemoryType::SnesMemory; return true; }
+	if (key == "snesworkram" || key == "wram") { outType = MemoryType::SnesWorkRam; return true; }
+	if (key == "snessaveram" || key == "sram") { outType = MemoryType::SnesSaveRam; return true; }
+	if (key == "snesprgrom" || key == "rom") { outType = MemoryType::SnesPrgRom; return true; }
+	if (key == "snesvideoram" || key == "vram") { outType = MemoryType::SnesVideoRam; return true; }
+	if (key == "snesspriteram" || key == "oam") { outType = MemoryType::SnesSpriteRam; return true; }
+	if (key == "snescgram" || key == "cgram") { outType = MemoryType::SnesCgRam; return true; }
+	if (key == "snesregister" || key == "register") { outType = MemoryType::SnesRegister; return true; }
+	if (key == "snesmemorymap") { outType = MemoryType::SnesMemory; return true; }
+	if (key == "bsxpsram") { outType = MemoryType::BsxPsRam; return true; }
+	if (key == "bsxmemorypack") { outType = MemoryType::BsxMemoryPack; return true; }
+
+	if (key == "spcmemory" || key == "spc") { outType = MemoryType::SpcMemory; return true; }
+	if (key == "spcram") { outType = MemoryType::SpcRam; return true; }
+	if (key == "spcrom") { outType = MemoryType::SpcRom; return true; }
+	if (key == "spcdspregisters" || key == "spcdspregs" || key == "spcdsp") { outType = MemoryType::SpcDspRegisters; return true; }
+	if (key == "dspprgrom" || key == "dspprogramrom") { outType = MemoryType::DspProgramRom; return true; }
+	if (key == "dspdatarom") { outType = MemoryType::DspDataRom; return true; }
+	if (key == "dspdataram" || key == "dspdatram") { outType = MemoryType::DspDataRam; return true; }
+	if (key == "necdsp" || key == "necdspmemory" || key == "dspmemory") { outType = MemoryType::NecDspMemory; return true; }
+
+	if (key == "sa1" || key == "sa1memory") { outType = MemoryType::Sa1Memory; return true; }
+	if (key == "sa1internalram" || key == "sa1ram") { outType = MemoryType::Sa1InternalRam; return true; }
+
+	if (key == "gsu" || key == "gsumemory") { outType = MemoryType::GsuMemory; return true; }
+	if (key == "gsuworkram" || key == "gsuram") { outType = MemoryType::GsuWorkRam; return true; }
+
+	if (key == "cx4" || key == "cx4memory") { outType = MemoryType::Cx4Memory; return true; }
+	if (key == "cx4dataram" || key == "cx4ram") { outType = MemoryType::Cx4DataRam; return true; }
+
+	if (key == "gb" || key == "gameboy" || key == "gbmemory") { outType = MemoryType::GameboyMemory; return true; }
+	if (key == "gbprgrom") { outType = MemoryType::GbPrgRom; return true; }
+	if (key == "gbworkram" || key == "gbwram") { outType = MemoryType::GbWorkRam; return true; }
+	if (key == "gbcartram" || key == "gbcart") { outType = MemoryType::GbCartRam; return true; }
+	if (key == "gbhighram" || key == "gbhram") { outType = MemoryType::GbHighRam; return true; }
+	if (key == "gbbootrom") { outType = MemoryType::GbBootRom; return true; }
+	if (key == "gbvideoram" || key == "gbvram") { outType = MemoryType::GbVideoRam; return true; }
+	if (key == "gbspriteram" || key == "gboam") { outType = MemoryType::GbSpriteRam; return true; }
+
+	if (key == "nes" || key == "nesmemory") { outType = MemoryType::NesMemory; return true; }
+	if (key == "nesppumemory") { outType = MemoryType::NesPpuMemory; return true; }
+	if (key == "nesprgrom") { outType = MemoryType::NesPrgRom; return true; }
+	if (key == "nesinternalram") { outType = MemoryType::NesInternalRam; return true; }
+	if (key == "nesworkram" || key == "neswram") { outType = MemoryType::NesWorkRam; return true; }
+	if (key == "nessaveram") { outType = MemoryType::NesSaveRam; return true; }
+	if (key == "nesnametableram" || key == "nesnametable") { outType = MemoryType::NesNametableRam; return true; }
+	if (key == "nesspriteram" || key == "nesoam") { outType = MemoryType::NesSpriteRam; return true; }
+	if (key == "nessecondaryspriteram") { outType = MemoryType::NesSecondarySpriteRam; return true; }
+	if (key == "nespaletteram" || key == "nespalette") { outType = MemoryType::NesPaletteRam; return true; }
+	if (key == "neschrram") { outType = MemoryType::NesChrRam; return true; }
+	if (key == "neschrrom") { outType = MemoryType::NesChrRom; return true; }
+
+	if (key == "pce" || key == "pcengine" || key == "pcememory") { outType = MemoryType::PceMemory; return true; }
+	if (key == "pceprgrom") { outType = MemoryType::PcePrgRom; return true; }
+	if (key == "pceworkram" || key == "pcewram") { outType = MemoryType::PceWorkRam; return true; }
+	if (key == "pcesaveram") { outType = MemoryType::PceSaveRam; return true; }
+	if (key == "pcecdromram") { outType = MemoryType::PceCdromRam; return true; }
+	if (key == "pcecardram") { outType = MemoryType::PceCardRam; return true; }
+	if (key == "pceadpcmram") { outType = MemoryType::PceAdpcmRam; return true; }
+	if (key == "pcearcadecardram") { outType = MemoryType::PceArcadeCardRam; return true; }
+	if (key == "pcevideoram") { outType = MemoryType::PceVideoRam; return true; }
+	if (key == "pcevideoramvdc2") { outType = MemoryType::PceVideoRamVdc2; return true; }
+	if (key == "pcespriteram") { outType = MemoryType::PceSpriteRam; return true; }
+	if (key == "pcespriteramvdc2") { outType = MemoryType::PceSpriteRamVdc2; return true; }
+	if (key == "pcepaletteram") { outType = MemoryType::PcePaletteRam; return true; }
+
+	if (key == "sms" || key == "smsmemory") { outType = MemoryType::SmsMemory; return true; }
+	if (key == "smsprgrom") { outType = MemoryType::SmsPrgRom; return true; }
+	if (key == "smsworkram" || key == "smswram") { outType = MemoryType::SmsWorkRam; return true; }
+	if (key == "smscartram") { outType = MemoryType::SmsCartRam; return true; }
+	if (key == "smsbootrom") { outType = MemoryType::SmsBootRom; return true; }
+	if (key == "smsvideoram" || key == "smsvram") { outType = MemoryType::SmsVideoRam; return true; }
+	if (key == "smspaletteram") { outType = MemoryType::SmsPaletteRam; return true; }
+	if (key == "smsport") { outType = MemoryType::SmsPort; return true; }
+
+	if (key == "gba" || key == "gbamemory") { outType = MemoryType::GbaMemory; return true; }
+	if (key == "gbaprgrom") { outType = MemoryType::GbaPrgRom; return true; }
+	if (key == "gbabootrom") { outType = MemoryType::GbaBootRom; return true; }
+	if (key == "gbasaveram") { outType = MemoryType::GbaSaveRam; return true; }
+	if (key == "gbainternalram" || key == "gbaintworkram" || key == "gbaintwram") { outType = MemoryType::GbaIntWorkRam; return true; }
+	if (key == "gbaexternalram" || key == "gbaextworkram" || key == "gbaextwram") { outType = MemoryType::GbaExtWorkRam; return true; }
+	if (key == "gbavideoram" || key == "gbavram") { outType = MemoryType::GbaVideoRam; return true; }
+	if (key == "gbaspriteram" || key == "gbaoam") { outType = MemoryType::GbaSpriteRam; return true; }
+	if (key == "gbapaletteram") { outType = MemoryType::GbaPaletteRam; return true; }
+	return false;
+}
+
+static string JsonEscape(const string& value)
+{
+	string escaped;
+	escaped.reserve(value.size());
+	for(unsigned char c : value) {
+		switch(c) {
+			case '\\': escaped += "\\\\"; break;
+			case '"': escaped += "\\\""; break;
+			case '\b': escaped += "\\b"; break;
+			case '\f': escaped += "\\f"; break;
+			case '\n': escaped += "\\n"; break;
+			case '\r': escaped += "\\r"; break;
+			case '\t': escaped += "\\t"; break;
+			default:
+				if(c < 0x20) {
+					char buf[7];
+					snprintf(buf, sizeof(buf), "\\u%04X", c);
+					escaped += buf;
+				} else {
+					escaped += static_cast<char>(c);
+				}
+				break;
+		}
+	}
+	return escaped;
 }
 
 SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cmd) {
@@ -1350,7 +1802,11 @@ SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cm
 	MemoryType memType = MemoryType::SnesWorkRam;
 	auto memtypeIt = cmd.params.find("memtype");
 	if (memtypeIt != cmd.params.end()) {
-		memType = ParseMemoryType(memtypeIt->second);
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
 	}
 
 	// Get search range
@@ -1362,6 +1818,11 @@ SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cm
 
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
 	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
 
 	if (startIt != cmd.params.end()) {
 		string s = startIt->second;
@@ -1383,11 +1844,28 @@ SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cm
 		endAddr = memSize > 0 ? memSize - 1 : 0x1FFFF;
 	}
 
+	if(startAddr >= memSize) {
+		resp.success = true;
+		resp.data = "{\"matches\":[],\"count\":0}";
+		return resp;
+	}
+	if(endAddr >= memSize) {
+		endAddr = memSize - 1;
+	}
+
+	uint32_t patternSize = static_cast<uint32_t>(pattern.size());
+	if(patternSize == 0 || endAddr < startAddr || endAddr + 1 < patternSize) {
+		resp.success = true;
+		resp.data = "{\"matches\":[],\"count\":0}";
+		return resp;
+	}
+
 	// Search for pattern
 	vector<uint32_t> matches;
 	uint32_t maxMatches = 100; // Limit results
 
-	for (uint32_t addr = startAddr; addr <= endAddr - pattern.size() + 1 && matches.size() < maxMatches; addr++) {
+	uint32_t lastStart = endAddr - patternSize + 1;
+	for (uint32_t addr = startAddr; addr <= lastStart && matches.size() < maxMatches; addr++) {
 		bool found = true;
 		for (size_t i = 0; i < pattern.size() && found; i++) {
 			uint8_t memValue = dumper->GetMemoryValue(memType, addr + i);
@@ -1441,7 +1919,11 @@ SocketResponse SocketServer::HandleSnapshot(Emulator* emu, const SocketCommand& 
 	MemoryType memType = MemoryType::SnesWorkRam;
 	auto memtypeIt = cmd.params.find("memtype");
 	if (memtypeIt != cmd.params.end()) {
-		memType = ParseMemoryType(memtypeIt->second);
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
 	}
 
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
@@ -1516,6 +1998,17 @@ SocketResponse SocketServer::HandleDiff(Emulator* emu, const SocketCommand& cmd)
 
 	MemoryType memType = static_cast<MemoryType>(snapshot.memoryType);
 	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+	if(memSize != snapshot.data.size()) {
+		resp.success = false;
+		resp.error = "Snapshot size mismatch";
+		return resp;
+	}
 
 	// Compare current memory to snapshot
 	vector<uint8_t> current(snapshot.data.size());
@@ -1601,7 +2094,11 @@ SocketResponse SocketServer::HandleLabels(Emulator* emu, const SocketCommand& cm
 		MemoryType memType = MemoryType::SnesWorkRam;
 		auto memtypeIt = cmd.params.find("memtype");
 		if (memtypeIt != cmd.params.end()) {
-			memType = ParseMemoryType(memtypeIt->second);
+			if(!TryParseMemoryType(memtypeIt->second, memType)) {
+				resp.success = false;
+				resp.error = "Unknown memtype: " + memtypeIt->second;
+				return resp;
+			}
 		}
 
 		// Get comment (optional)
@@ -1636,7 +2133,11 @@ SocketResponse SocketServer::HandleLabels(Emulator* emu, const SocketCommand& cm
 		MemoryType memType = MemoryType::SnesWorkRam;
 		auto memtypeIt = cmd.params.find("memtype");
 		if (memtypeIt != cmd.params.end()) {
-			memType = ParseMemoryType(memtypeIt->second);
+			if(!TryParseMemoryType(memtypeIt->second, memType)) {
+				resp.success = false;
+				resp.error = "Unknown memtype: " + memtypeIt->second;
+				return resp;
+			}
 		}
 
 		AddressInfo addrInfo;
@@ -1700,8 +2201,6 @@ SocketResponse SocketServer::HandleLabels(Emulator* emu, const SocketCommand& cm
 // ============================================================================
 
 // This struct matches the Breakpoint class memory layout for API calls
-// The layout must match InteropBreakpoint from the C# interop layer
-#pragma pack(push, 1)
 struct BreakpointData {
 	uint32_t id;
 	CpuType cpuType;
@@ -1714,20 +2213,21 @@ struct BreakpointData {
 	bool ignoreDummyOperations;
 	char condition[1000];
 };
-#pragma pack(pop)
+static_assert(sizeof(BreakpointData) == sizeof(Breakpoint), "BreakpointData layout mismatch");
 
 static CpuType ParseCpuType(const string& cpuType) {
-	if (cpuType == "Snes" || cpuType.empty()) return CpuType::Snes;
-	if (cpuType == "Spc") return CpuType::Spc;
-	if (cpuType == "NecDsp") return CpuType::NecDsp;
-	if (cpuType == "Sa1") return CpuType::Sa1;
-	if (cpuType == "Gsu") return CpuType::Gsu;
-	if (cpuType == "Cx4") return CpuType::Cx4;
-	if (cpuType == "Gameboy") return CpuType::Gameboy;
-	if (cpuType == "Nes") return CpuType::Nes;
-	if (cpuType == "Pce") return CpuType::Pce;
-	if (cpuType == "Sms") return CpuType::Sms;
-	if (cpuType == "Gba") return CpuType::Gba;
+	string key = NormalizeKey(cpuType);
+	if (key.empty() || key == "snes") return CpuType::Snes;
+	if (key == "spc") return CpuType::Spc;
+	if (key == "necdsp") return CpuType::NecDsp;
+	if (key == "sa1") return CpuType::Sa1;
+	if (key == "gsu") return CpuType::Gsu;
+	if (key == "cx4") return CpuType::Cx4;
+	if (key == "gameboy" || key == "gb") return CpuType::Gameboy;
+	if (key == "nes") return CpuType::Nes;
+	if (key == "pce" || key == "pcengine") return CpuType::Pce;
+	if (key == "sms") return CpuType::Sms;
+	if (key == "gba") return CpuType::Gba;
 	return CpuType::Snes;
 }
 
@@ -1857,7 +2357,11 @@ SocketResponse SocketServer::HandleBreakpoint(Emulator* emu, const SocketCommand
 		MemoryType memType = MemoryType::SnesMemory;
 		auto memtypeIt = cmd.params.find("memtype");
 		if (memtypeIt != cmd.params.end()) {
-			memType = ParseMemoryType(memtypeIt->second);
+			if(!TryParseMemoryType(memtypeIt->second, memType)) {
+				resp.success = false;
+				resp.error = "Unknown memtype: " + memtypeIt->second;
+				return resp;
+			}
 		}
 
 		// Get CPU type

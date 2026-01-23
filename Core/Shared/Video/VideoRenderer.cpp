@@ -171,6 +171,14 @@ void VideoRenderer::SetWatchHudText(string text)
 	}
 }
 
+string VideoRenderer::GetWatchHudText()
+{
+	if(_watchHud) {
+		return _watchHud->GetText();
+	}
+	return "";
+}
+
 void VideoRenderer::UpdateFrame(RenderedFrame& frame)
 {
 	{

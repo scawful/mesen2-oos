@@ -15,5 +15,6 @@ private:
 public:
 	void SetText(string text);
 	void Clear();
+	string GetText();
 	void Draw(DebugHud* hud, uint32_t screenWidth, uint32_t screenHeight);
 };

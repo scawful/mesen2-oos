@@ -14,6 +14,12 @@ void WatchHud::Clear()
 	_text.clear();
 }
 
+string WatchHud::GetText()
+{
+	auto lock = _lock.AcquireSafe();
+	return _text;
+}
+
 void WatchHud::DrawOutlinedString(DebugHud* hud, int x, int y, const string& text, int maxWidth) const
 {
 	for(int offsetX = -1; offsetX <= 1; offsetX++) {
