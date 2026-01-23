@@ -47,6 +47,8 @@ namespace Mesen.Config
 			public bool IsFresh;
 			public int RecentCount;
 			public int BoundShortcutCount;
+			public int SaveStateCount;
+			public int SaveFileCount;
 		}
 
 		private static List<string> GetLegacyConfigFolders(string defaultFolder, string portableFolder)
@@ -89,7 +91,7 @@ namespace Mesen.Config
 			recentCount = 0;
 			boundShortcutCount = 0;
 			try {
-				string fileData = File.ReadAllText(configPath);
+				string fileData = File.ReadAllText(configPath).TrimStart('\uFEFF');
 				Configuration? config = (Configuration?)JsonSerializer.Deserialize(fileData, typeof(Configuration), MesenSerializerContext.Default);
 				if(config == null) {
 					return false;
@@ -113,6 +115,18 @@ namespace Mesen.Config
 			}
 		}
 
+		private static int CountFiles(string folder)
+		{
+			try {
+				if(!Directory.Exists(folder)) {
+					return 0;
+				}
+				return Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Count();
+			} catch {
+				return 0;
+			}
+		}
+
 		private static string? SelectBestConfigFolder(List<string> folders)
 		{
 			List<ConfigCandidate> candidates = new();
@@ -124,13 +138,17 @@ namespace Mesen.Config
 
 				bool isValid = TryLoadConfigMetadata(configPath, out bool isFresh, out int recentCount, out int boundShortcutCount);
 				DateTime lastWrite = File.GetLastWriteTimeUtc(configPath);
+				int saveStateCount = CountFiles(Path.Combine(folder, "SaveStates"));
+				int saveFileCount = CountFiles(Path.Combine(folder, "Saves"));
 				candidates.Add(new ConfigCandidate() {
 					Folder = folder,
 					LastWriteUtc = lastWrite,
 					IsValid = isValid,
 					IsFresh = isFresh,
 					RecentCount = recentCount,
-					BoundShortcutCount = boundShortcutCount
+					BoundShortcutCount = boundShortcutCount,
+					SaveStateCount = saveStateCount,
+					SaveFileCount = saveFileCount
 				});
 			}
 
@@ -144,22 +162,18 @@ namespace Mesen.Config
 				selection = validCandidates;
 			}
 
-			List<ConfigCandidate> nonFresh = selection.Where(c => !c.IsFresh).ToList();
-			if(nonFresh.Count > 0) {
-				selection = nonFresh;
-			}
-			
-			List<ConfigCandidate> withRecent = selection.Where(c => c.RecentCount > 0).ToList();
-			if(withRecent.Count > 0) {
-				selection = withRecent;
-			} else {
-				List<ConfigCandidate> withShortcuts = selection.Where(c => c.BoundShortcutCount > 0).ToList();
-				if(withShortcuts.Count > 0) {
-					selection = withShortcuts;
-				}
-			}
-
-			return selection.OrderByDescending(c => c.LastWriteUtc).First().Folder;
+			return selection
+				.OrderByDescending(c => c.SaveStateCount > 0)
+				.ThenByDescending(c => c.SaveStateCount)
+				.ThenByDescending(c => c.SaveFileCount > 0)
+				.ThenByDescending(c => c.SaveFileCount)
+				.ThenByDescending(c => c.RecentCount > 0)
+				.ThenByDescending(c => c.RecentCount)
+				.ThenByDescending(c => c.BoundShortcutCount > 0)
+				.ThenByDescending(c => c.BoundShortcutCount)
+				.ThenByDescending(c => !c.IsFresh)
+				.ThenByDescending(c => c.LastWriteUtc)
+				.First().Folder;
 		}
 
 		public static string GetConfigFile()

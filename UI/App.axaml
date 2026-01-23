@@ -8,10 +8,10 @@
 	Name="Mesen"
 >
 	<Application.Resources>
-		<FontFamily x:Key="MesenFont">Microsoft Sans Serif</FontFamily>
+		<FontFamily x:Key="MesenFont">Helvetica Neue, Segoe UI, Arial</FontFamily>
 		<x:Double x:Key="MesenFontSize">11</x:Double>
 		
-		<FontFamily x:Key="MesenMenuFont">Segoe UI</FontFamily>
+		<FontFamily x:Key="MesenMenuFont">Helvetica Neue, Segoe UI, Arial</FontFamily>
 		<x:Double x:Key="MesenMenuFontSize">12</x:Double>
 
 		<FontFamily x:Key="MesenDisassemblyFont">Consolas</FontFamily>
@@ -26,7 +26,7 @@
 		<FontFamily x:Key="MesenScriptWindowFont">Consolas</FontFamily>
 		<x:Double x:Key="MesenScriptWindowFontSize">12</x:Double>
 
-		<FontFamily x:Key="MesenMonospaceFont">Consolas</FontFamily>
+		<FontFamily x:Key="MesenMonospaceFont">Menlo, Consolas, Courier New</FontFamily>
 		<x:Double x:Key="MesenMonospaceFontSize">12</x:Double>
 
 		<l:EnumConverter x:Key="Enum" />
