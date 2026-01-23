@@ -704,16 +704,11 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 
 	// Get the CPU debugger for the main CPU type
 	CpuType cpuType = emu->GetCpuTypes()[0];
-	IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
-	if (!cpuDebugger) {
-		resp.success = false;
-		resp.error = "CPU debugger not available";
-		return resp;
-	}
+	Debugger* debugger = dbg.GetDebugger();
 
-	// Get program counter and flags
-	uint32_t pc = cpuDebugger->GetProgramCounter(true);
-	uint8_t flags = cpuDebugger->GetCpuFlags();
+	// Get program counter and flags using Debugger's direct methods
+	uint32_t pc = debugger->GetProgramCounter(cpuType, true);
+	uint8_t flags = debugger->GetCpuFlags(cpuType);
 
 	stringstream ss;
 	ss << "{";
@@ -723,9 +718,9 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 	// Get more detailed state for SNES
 	if (emu->GetConsoleType() == ConsoleType::Snes) {
 		// Read key registers from memory
-		auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+		auto dumper = debugger->GetMemoryDumper();
 
-		SnesCpuState& state = static_cast<SnesCpuState&>(cpuDebugger->GetState());
+		SnesCpuState& state = static_cast<SnesCpuState&>(debugger->GetCpuStateRef(cpuType));
 		uint64_t cycleCount = state.CycleCount;
 		uint16_t a = state.A;
 		uint16_t x = state.X;
@@ -745,7 +740,7 @@ SocketResponse SocketServer::HandleGetCpuState(Emulator* emu, const SocketComman
 		ss << "\"k\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)k << "\",";
 		ss << "\"dbr\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)dbr << "\",";
 		ss << "\"p\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)ps << "\",";
-		ss << "\"cycles\":" << dec << cycleCount << ",";
+		ss << "\"cycles\":" << std::dec << cycleCount << ",";
 	}
 
 	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
@@ -936,12 +931,7 @@ SocketResponse SocketServer::HandleStep(Emulator* emu, const SocketCommand& cmd)
 	}
 
 	CpuType cpuType = emu->GetCpuTypes()[0];
-	IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
-	if (!cpuDebugger) {
-		resp.success = false;
-		resp.error = "CPU debugger not available";
-		return resp;
-	}
+	Debugger* debugger = dbg.GetDebugger();
 
 	StepType stepType = StepType::Step;
 	if (mode == "over") {
@@ -950,7 +940,7 @@ SocketResponse SocketServer::HandleStep(Emulator* emu, const SocketCommand& cmd)
 		stepType = StepType::StepOut;
 	}
 
-	cpuDebugger->Step(stepCount, stepType);
+	debugger->Step(cpuType, stepCount, stepType);
 
 	resp.success = true;
 	resp.data = "\"OK\"";
@@ -975,13 +965,11 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 	}
 
 	auto dbg = emu->GetDebugger(true);
-	if (dbg.GetDebugger()) {
+	Debugger* debugger = dbg.GetDebugger();
+	if (debugger) {
 		CpuType cpuType = emu->GetCpuTypes()[0];
-		IDebugger* cpuDebugger = dbg.GetDebugger()->GetCpuDebugger(cpuType);
-		if (cpuDebugger) {
-			// Step by frames
-			cpuDebugger->Step(frameCount, StepType::PpuStep);
-		}
+		// Step by frames
+		debugger->Step(cpuType, frameCount, StepType::PpuStep);
 	} else {
 		// Just run for a bit if no debugger
 		emu->Resume();
