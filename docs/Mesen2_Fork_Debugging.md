@@ -75,6 +75,7 @@ Files & tooling:
 - `CHEAT` - add/list/clear cheats.
 - `INPUT` - set input overrides.
 - `STATEINSPECT` - compact system/CPU/PPU summary + watch HUD text.
+- `STATEINSPECT` also includes `cpus` (per-CPU state) and `watchEntries` (structured watch data by CPU).
 
 ### Roadmap (planned additions)
 - Structured watch data in socket responses (per-entry address/value/type).
