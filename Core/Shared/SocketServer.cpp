@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
+#include <limits>
 
 using std::hex;
 using std::dec;
@@ -1219,11 +1220,32 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 		else if (token == "START") state.Start = true;
 	}
 
+	auto parseUInt32 = [](const string& value, uint32_t& out) -> bool {
+		try {
+			size_t idx = 0;
+			unsigned long parsed = std::stoul(value, &idx, 10);
+			if(idx != value.size()) {
+				return false;
+			}
+			if(parsed > std::numeric_limits<uint32_t>::max()) {
+				return false;
+			}
+			out = static_cast<uint32_t>(parsed);
+			return true;
+		} catch(...) {
+			return false;
+		}
+	};
+
 	// Get player index (default to player 1 / index 0)
 	uint32_t playerIndex = 0;
 	auto indexIt = cmd.params.find("player");
 	if (indexIt != cmd.params.end()) {
-		playerIndex = std::stoul(indexIt->second);
+		if(!parseUInt32(indexIt->second, playerIndex)) {
+			resp.success = false;
+			resp.error = "Invalid player parameter";
+			return resp;
+		}
 		if (playerIndex > 7) playerIndex = 0;
 	}
 
@@ -1231,7 +1253,11 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 	uint32_t frameCount = 0;
 	auto framesIt = cmd.params.find("frames");
 	if (framesIt != cmd.params.end()) {
-		frameCount = std::stoul(framesIt->second);
+		if(!parseUInt32(framesIt->second, frameCount)) {
+			resp.success = false;
+			resp.error = "Invalid frames parameter";
+			return resp;
+		}
 	}
 
 	// Set the input override via debugger
