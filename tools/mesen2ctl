@@ -9,6 +9,8 @@ Examples:
     mesen2ctl state                    # Get emulator state
     mesen2ctl read 0x7E0010           # Read byte from address
     mesen2ctl write 0x7E0010 0x09     # Write byte to address
+    mesen2ctl disasm 0x808000 --count 5 # Disassemble
+    mesen2ctl breakpoint --action add --addr 0x808000 --bptype x
     mesen2ctl pause                    # Pause emulation
     mesen2ctl resume                   # Resume emulation
     mesen2ctl savestate --slot 1      # Save state to slot 1
@@ -18,6 +20,7 @@ Examples:
 """
 
 import argparse
+import base64
 import json
 import os
 import socket
@@ -61,6 +64,36 @@ def send_command(socket_path: str, command: dict, timeout: float = 5.0) -> dict:
         sock.close()
 
 
+def send(socket_path: str, command: dict, args, timeout: Optional[float] = None) -> dict:
+    """Send a command using CLI timeout settings."""
+    effective_timeout = timeout if timeout is not None else args.timeout
+    return send_command(socket_path, command, timeout=effective_timeout)
+
+
+def print_data(data, raw: bool = False) -> None:
+    if raw:
+        print(json.dumps(data, indent=2))
+        return
+
+    if isinstance(data, (dict, list)):
+        print(json.dumps(data, indent=2))
+    elif data is None:
+        print("")
+    else:
+        print(data)
+
+
+def handle_success(resp, raw: bool = False) -> int:
+    data = resp.get("data")
+    print_data(data if data is not None else resp, raw=raw)
+    return 0
+
+
+def handle_error(resp) -> int:
+    print(f"Error: {resp.get('error')}", file=sys.stderr)
+    return 1
+
+
 def cmd_list(args):
     """List running Mesen2 instances."""
     sockets = find_mesen_sockets()
@@ -82,123 +115,106 @@ def cmd_list(args):
 
 def cmd_ping(args, socket_path: str):
     """Ping the emulator."""
-    resp = send_command(socket_path, {"type": "PING"})
-    print(resp.get("data", resp))
-    return 0 if resp.get("success") else 1
+    resp = send(socket_path, {"type": "PING"}, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
 
 
 def cmd_state(args, socket_path: str):
     """Get emulator state."""
-    resp = send_command(socket_path, {"type": "STATE"})
+    resp = send(socket_path, {"type": "STATE"}, args)
     if resp.get("success"):
-        data = resp.get("data")
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except:
-                pass
-        print(json.dumps(data, indent=2))
-        return 0
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
+        return handle_success(resp)
+    return handle_error(resp)
 
 
 def cmd_pause(args, socket_path: str):
     """Pause emulation."""
-    resp = send_command(socket_path, {"type": "PAUSE"})
-    print("Paused" if resp.get("success") else f"Error: {resp.get('error')}")
-    return 0 if resp.get("success") else 1
+    resp = send(socket_path, {"type": "PAUSE"}, args)
+    return 0 if resp.get("success") else handle_error(resp)
 
 
 def cmd_resume(args, socket_path: str):
     """Resume emulation."""
-    resp = send_command(socket_path, {"type": "RESUME"})
-    print("Resumed" if resp.get("success") else f"Error: {resp.get('error')}")
-    return 0 if resp.get("success") else 1
+    resp = send(socket_path, {"type": "RESUME"}, args)
+    return 0 if resp.get("success") else handle_error(resp)
 
 
 def cmd_reset(args, socket_path: str):
     """Reset emulation."""
-    resp = send_command(socket_path, {"type": "RESET"})
-    print("Reset" if resp.get("success") else f"Error: {resp.get('error')}")
-    return 0 if resp.get("success") else 1
+    resp = send(socket_path, {"type": "RESET"}, args)
+    return 0 if resp.get("success") else handle_error(resp)
 
 
 def cmd_read(args, socket_path: str):
     """Read memory."""
-    resp = send_command(socket_path, {"type": "READ", "addr": args.addr})
+    cmd = {"type": "READ", "addr": args.addr}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print(resp.get("data", "").strip('"'))
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return handle_success(resp)
+    return handle_error(resp)
 
 
 def cmd_read16(args, socket_path: str):
     """Read 16-bit value from memory."""
-    resp = send_command(socket_path, {"type": "READ16", "addr": args.addr})
+    cmd = {"type": "READ16", "addr": args.addr}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print(resp.get("data", "").strip('"'))
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return handle_success(resp)
+    return handle_error(resp)
 
 
 def cmd_write(args, socket_path: str):
     """Write memory."""
-    resp = send_command(socket_path, {
-        "type": "WRITE",
-        "addr": args.addr,
-        "value": args.value
-    })
+    cmd = {"type": "WRITE", "addr": args.addr, "value": args.value}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print("OK")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return 0
+    return handle_error(resp)
 
 
 def cmd_write16(args, socket_path: str):
     """Write 16-bit value to memory."""
-    resp = send_command(socket_path, {
-        "type": "WRITE16",
-        "addr": args.addr,
-        "value": args.value
-    })
+    cmd = {"type": "WRITE16", "addr": args.addr, "value": args.value}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print("OK")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return 0
+    return handle_error(resp)
 
 
 def cmd_readblock(args, socket_path: str):
     """Read a block of memory."""
-    resp = send_command(socket_path, {
-        "type": "READBLOCK",
-        "addr": args.addr,
-        "len": str(args.length)
-    })
-    if resp.get("success"):
-        hex_data = resp.get("data", "").strip('"')
-        if args.raw:
-            print(hex_data)
-        else:
-            # Format as hex dump
-            addr = int(args.addr, 16) if args.addr.startswith("0x") else int(args.addr)
-            for i in range(0, len(hex_data), 32):
-                chunk = hex_data[i:i+32]
-                addr_str = f"{addr + i//2:06X}"
-                hex_bytes = " ".join(chunk[j:j+2] for j in range(0, len(chunk), 2))
-                print(f"{addr_str}: {hex_bytes}")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
+    cmd = {"type": "READBLOCK", "addr": args.addr, "len": str(args.length)}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
+    if not resp.get("success"):
+        return handle_error(resp)
+
+    hex_data = resp.get("data", "")
+    if not isinstance(hex_data, str):
+        print_data(hex_data)
+        return 0
+    if args.raw:
+        print(hex_data.strip('"'))
+        return 0
+
+    addr = int(args.addr, 16) if args.addr.startswith("0x") else int(args.addr)
+    hex_data = hex_data.strip('"')
+    for i in range(0, len(hex_data), 32):
+        chunk = hex_data[i:i+32]
+        addr_str = f"{addr + i//2:06X}"
+        hex_bytes = " ".join(chunk[j:j+2] for j in range(0, len(chunk), 2))
+        print(f"{addr_str}: {hex_bytes}")
     return 0
 
 
@@ -213,13 +229,10 @@ def cmd_savestate(args, socket_path: str):
         print("Error: Must specify --slot or --path", file=sys.stderr)
         return 1
 
-    resp = send_command(socket_path, cmd)
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print("State saved")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return 0
+    return handle_error(resp)
 
 
 def cmd_loadstate(args, socket_path: str):
@@ -233,13 +246,10 @@ def cmd_loadstate(args, socket_path: str):
         print("Error: Must specify --slot or --path", file=sys.stderr)
         return 1
 
-    resp = send_command(socket_path, cmd)
+    resp = send(socket_path, cmd, args)
     if resp.get("success"):
-        print("State loaded")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return 0
+    return handle_error(resp)
 
 
 def cmd_loadscript(args, socket_path: str):
@@ -260,14 +270,255 @@ def cmd_loadscript(args, socket_path: str):
         "content": content
     }
 
-    resp = send_command(socket_path, cmd)
+    resp = send(socket_path, cmd, args, timeout=args.timeout)
     if resp.get("success"):
-        print(f"Script loaded (ID: {resp.get('data')})")
-    else:
-        print(f"Error: {resp.get('error')}", file=sys.stderr)
-        return 1
-    return 0
+        return handle_success(resp)
+    return handle_error(resp)
 
+
+def cmd_health(args, socket_path: str):
+    """Get emulator health summary."""
+    resp = send(socket_path, {"type": "HEALTH"}, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_rominfo(args, socket_path: str):
+    """Get ROM info."""
+    resp = send(socket_path, {"type": "ROMINFO"}, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_cpu(args, socket_path: str):
+    """Get CPU state summary."""
+    resp = send(socket_path, {"type": "CPU"}, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_stateinspect(args, socket_path: str):
+    """Get state inspector payload."""
+    resp = send(socket_path, {"type": "STATEINSPECT"}, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_speed(args, socket_path: str):
+    """Get or set emulation speed."""
+    cmd = {"type": "SPEED"}
+    if args.multiplier is not None:
+        cmd["multiplier"] = str(args.multiplier)
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_rewind(args, socket_path: str):
+    """Rewind emulation."""
+    cmd = {"type": "REWIND", "seconds": str(args.seconds)}
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return 0
+    return handle_error(resp)
+
+
+def cmd_disasm(args, socket_path: str):
+    """Disassemble CPU memory."""
+    cmd = {"type": "DISASM", "addr": args.addr, "count": str(args.count)}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_step(args, socket_path: str):
+    """Step CPU execution."""
+    cmd = {"type": "STEP", "count": str(args.count), "mode": args.mode}
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return 0
+    return handle_error(resp)
+
+
+def cmd_frame(args, socket_path: str):
+    """Run for N frames."""
+    cmd = {"type": "FRAME", "count": str(args.count)}
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return 0
+    return handle_error(resp)
+
+
+def cmd_input(args, socket_path: str):
+    """Set input overrides."""
+    cmd = {"type": "INPUT", "buttons": args.buttons}
+    if args.player is not None:
+        cmd["player"] = str(args.player)
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return 0
+    return handle_error(resp)
+
+
+def cmd_writeblock(args, socket_path: str):
+    """Write a block of memory (hex string)."""
+    cmd = {"type": "WRITEBLOCK", "addr": args.addr, "hex": args.hex_data}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_search(args, socket_path: str):
+    """Search memory for a byte pattern."""
+    cmd = {"type": "SEARCH", "pattern": args.pattern}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    if args.start is not None:
+        cmd["start"] = args.start
+    if args.end is not None:
+        cmd["end"] = args.end
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_snapshot(args, socket_path: str):
+    """Create a memory snapshot."""
+    cmd = {"type": "SNAPSHOT", "name": args.name}
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_diff(args, socket_path: str):
+    """Diff against a snapshot."""
+    cmd = {"type": "DIFF", "snapshot": args.snapshot}
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_labels(args, socket_path: str):
+    """Manage labels."""
+    cmd = {"type": "LABELS", "action": args.action}
+    if args.action in ("get", "set"):
+        if not args.addr:
+            print("Error: --addr is required for get/set", file=sys.stderr)
+            return 1
+        cmd["addr"] = args.addr
+    if args.action == "set":
+        if not args.label:
+            print("Error: --label is required for set", file=sys.stderr)
+            return 1
+        cmd["label"] = args.label
+        if args.comment is not None:
+            cmd["comment"] = args.comment
+    if args.action == "lookup":
+        if not args.label:
+            print("Error: --label is required for lookup", file=sys.stderr)
+            return 1
+        cmd["label"] = args.label
+    if args.memtype:
+        cmd["memtype"] = args.memtype
+
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_breakpoint(args, socket_path: str):
+    """Manage breakpoints."""
+    cmd = {"type": "BREAKPOINT", "action": args.action}
+    if args.action == "add":
+        if not args.addr:
+            print("Error: --addr is required for add", file=sys.stderr)
+            return 1
+        cmd["addr"] = args.addr
+        if args.endaddr:
+            cmd["endaddr"] = args.endaddr
+        if args.bptype:
+            cmd["bptype"] = args.bptype
+        if args.memtype:
+            cmd["memtype"] = args.memtype
+        if args.cputype:
+            cmd["cputype"] = args.cputype
+        if args.condition:
+            cmd["condition"] = args.condition
+    elif args.action in ("remove", "enable", "disable"):
+        if args.id is None:
+            print("Error: --id is required for this action", file=sys.stderr)
+            return 1
+        cmd["id"] = str(args.id)
+    elif args.action == "clear":
+        pass
+    elif args.action == "list":
+        pass
+    else:
+        print(f"Unknown breakpoint action: {args.action}", file=sys.stderr)
+        return 1
+
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_cheat(args, socket_path: str):
+    """Manage cheats."""
+    cmd = {"type": "CHEAT", "action": args.action}
+    if args.action == "add":
+        if not args.code:
+            print("Error: --code is required for add", file=sys.stderr)
+            return 1
+        cmd["code"] = args.code
+        if args.format:
+            cmd["format"] = args.format
+    resp = send(socket_path, cmd, args)
+    if resp.get("success"):
+        return handle_success(resp)
+    return handle_error(resp)
+
+
+def cmd_screenshot(args, socket_path: str):
+    """Capture screenshot (base64)."""
+    resp = send(socket_path, {"type": "SCREENSHOT"}, args, timeout=args.timeout)
+    if not resp.get("success"):
+        return handle_error(resp)
+
+    data = resp.get("data")
+    if not isinstance(data, str):
+        print_data(data)
+        return 0
+
+    if args.out:
+        try:
+            raw = base64.b64decode(data)
+            with open(args.out, "wb") as f:
+                f.write(raw)
+            print(args.out)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(data)
+    return 0
 
 def cmd_raw(args, socket_path: str):
     """Send raw JSON command."""
@@ -277,7 +528,7 @@ def cmd_raw(args, socket_path: str):
         print(f"Invalid JSON: {e}", file=sys.stderr)
         return 1
 
-    resp = send_command(socket_path, cmd)
+    resp = send(socket_path, cmd, args)
     print(json.dumps(resp, indent=2))
     return 0 if resp.get("success") else 1
 
@@ -333,8 +584,12 @@ def main():
     # list
     subparsers.add_parser("list", help="List running instances")
 
-    # ping
+    # ping/health/info
     subparsers.add_parser("ping", help="Ping emulator")
+    subparsers.add_parser("health", help="Get health summary")
+    subparsers.add_parser("rominfo", help="Get ROM info")
+    subparsers.add_parser("cpu", help="Get CPU summary")
+    subparsers.add_parser("stateinspect", help="Get state inspector payload")
 
     # state
     subparsers.add_parser("state", help="Get emulator state")
@@ -347,26 +602,67 @@ def main():
     # read
     p_read = subparsers.add_parser("read", help="Read byte from memory")
     p_read.add_argument("addr", help="Address to read (hex)")
+    p_read.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
 
     # read16
     p_read16 = subparsers.add_parser("read16", help="Read 16-bit value from memory")
     p_read16.add_argument("addr", help="Address to read (hex)")
+    p_read16.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
 
     # write
     p_write = subparsers.add_parser("write", help="Write byte to memory")
     p_write.add_argument("addr", help="Address to write (hex)")
     p_write.add_argument("value", help="Value to write (hex)")
+    p_write.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
 
     # write16
     p_write16 = subparsers.add_parser("write16", help="Write 16-bit value to memory")
     p_write16.add_argument("addr", help="Address to write (hex)")
     p_write16.add_argument("value", help="Value to write (hex)")
+    p_write16.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
 
     # readblock
     p_readblock = subparsers.add_parser("readblock", help="Read block of memory")
     p_readblock.add_argument("addr", help="Start address (hex)")
     p_readblock.add_argument("length", type=int, help="Number of bytes")
+    p_readblock.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
     p_readblock.add_argument("--raw", action="store_true", help="Output raw hex")
+
+    # writeblock
+    p_writeblock = subparsers.add_parser("writeblock", help="Write block of memory (hex string)")
+    p_writeblock.add_argument("addr", help="Start address (hex)")
+    p_writeblock.add_argument("hex_data", help="Hex data (e.g., A9008D)")
+    p_writeblock.add_argument("--memtype", help="Memory type (e.g., wram, rom)")
+
+    # disasm
+    p_disasm = subparsers.add_parser("disasm", help="Disassemble CPU memory")
+    p_disasm.add_argument("addr", help="Start address (hex)")
+    p_disasm.add_argument("--count", type=int, default=10, help="Number of lines")
+    p_disasm.add_argument("--memtype", help="Memory type (CPU only)")
+
+    # step/frame
+    p_step = subparsers.add_parser("step", help="Step CPU execution")
+    p_step.add_argument("--count", type=int, default=1, help="Instruction count")
+    p_step.add_argument("--mode", default="into", choices=["into", "over", "out"], help="Step mode")
+
+    p_frame = subparsers.add_parser("frame", help="Run for N frames")
+    p_frame.add_argument("--count", type=int, default=1, help="Frame count")
+
+    # input
+    p_input = subparsers.add_parser("input", help="Set input overrides")
+    p_input.add_argument("buttons", help="Buttons (comma-separated, e.g., A,B,UP)")
+    p_input.add_argument("--player", type=int, help="Player index (0-7)")
+
+    # speed/rewind
+    p_speed = subparsers.add_parser("speed", help="Get/set emulation speed")
+    p_speed.add_argument("multiplier", nargs="?", type=float, help="Speed multiplier (0 = max)")
+
+    p_rewind = subparsers.add_parser("rewind", help="Rewind emulation")
+    p_rewind.add_argument("--seconds", type=int, default=1, help="Seconds to rewind")
+
+    # screenshot
+    p_screenshot = subparsers.add_parser("screenshot", help="Capture screenshot (base64)")
+    p_screenshot.add_argument("--out", help="Write PNG to file")
 
     # savestate
     p_save = subparsers.add_parser("savestate", help="Save state")
@@ -381,6 +677,45 @@ def main():
     # loadscript
     p_script = subparsers.add_parser("loadscript", help="Load Lua script")
     p_script.add_argument("script", help="Path to Lua script")
+
+    # search/snapshot/diff
+    p_search = subparsers.add_parser("search", help="Search memory for byte pattern")
+    p_search.add_argument("pattern", help="Pattern (e.g., \"A9 00 8D\")")
+    p_search.add_argument("--memtype", help="Memory type (e.g., wram)")
+    p_search.add_argument("--start", help="Start address (hex)")
+    p_search.add_argument("--end", help="End address (hex)")
+
+    p_snapshot = subparsers.add_parser("snapshot", help="Create memory snapshot")
+    p_snapshot.add_argument("name", help="Snapshot name")
+    p_snapshot.add_argument("--memtype", help="Memory type (e.g., wram)")
+
+    p_diff = subparsers.add_parser("diff", help="Diff against snapshot")
+    p_diff.add_argument("snapshot", help="Snapshot name")
+
+    # labels
+    p_labels = subparsers.add_parser("labels", help="Manage labels")
+    p_labels.add_argument("--action", choices=["get", "set", "lookup", "clear"], default="get")
+    p_labels.add_argument("--addr", help="Address (hex)")
+    p_labels.add_argument("--label", help="Label name")
+    p_labels.add_argument("--comment", help="Comment")
+    p_labels.add_argument("--memtype", help="Memory type (e.g., wram)")
+
+    # breakpoint
+    p_breakpoint = subparsers.add_parser("breakpoint", help="Manage breakpoints")
+    p_breakpoint.add_argument("--action", choices=["add", "remove", "list", "enable", "disable", "clear"], default="list")
+    p_breakpoint.add_argument("--id", type=int, help="Breakpoint ID")
+    p_breakpoint.add_argument("--addr", help="Address (hex)")
+    p_breakpoint.add_argument("--endaddr", help="End address (hex)")
+    p_breakpoint.add_argument("--bptype", help="Type (exec/read/write/xrw)")
+    p_breakpoint.add_argument("--memtype", help="Memory type (e.g., wram)")
+    p_breakpoint.add_argument("--cputype", help="CPU type (snes/spc/sa1/gsu/etc)")
+    p_breakpoint.add_argument("--condition", help="Condition expression")
+
+    # cheat
+    p_cheat = subparsers.add_parser("cheat", help="Manage cheats")
+    p_cheat.add_argument("--action", choices=["list", "add", "clear"], default="list")
+    p_cheat.add_argument("--code", help="Cheat code")
+    p_cheat.add_argument("--format", help="Cheat format (gamegenie/par/gameshark)")
 
     # raw
     p_raw = subparsers.add_parser("raw", help="Send raw JSON command")
@@ -404,6 +739,10 @@ def main():
     # Dispatch command
     commands = {
         "ping": cmd_ping,
+        "health": cmd_health,
+        "rominfo": cmd_rominfo,
+        "cpu": cmd_cpu,
+        "stateinspect": cmd_stateinspect,
         "state": cmd_state,
         "pause": cmd_pause,
         "resume": cmd_resume,
@@ -413,9 +752,23 @@ def main():
         "write": cmd_write,
         "write16": cmd_write16,
         "readblock": cmd_readblock,
+        "writeblock": cmd_writeblock,
+        "disasm": cmd_disasm,
+        "step": cmd_step,
+        "frame": cmd_frame,
+        "input": cmd_input,
+        "speed": cmd_speed,
+        "rewind": cmd_rewind,
+        "screenshot": cmd_screenshot,
         "savestate": cmd_savestate,
         "loadstate": cmd_loadstate,
         "loadscript": cmd_loadscript,
+        "search": cmd_search,
+        "snapshot": cmd_snapshot,
+        "diff": cmd_diff,
+        "labels": cmd_labels,
+        "breakpoint": cmd_breakpoint,
+        "cheat": cmd_cheat,
         "raw": cmd_raw,
     }
 
