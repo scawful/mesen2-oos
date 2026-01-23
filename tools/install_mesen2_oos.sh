@@ -11,6 +11,7 @@ Options:
   --name NAME        Destination app name (default: Mesen2 OOS.app)
   --user             Install to ~/Applications
   --prune            Move other Mesen app bundles in DEST to backup
+  --prune-all        Move other Mesen app bundles in /Applications and ~/Applications
   --no-backup        Replace without backing up existing bundle(s)
   --force            Alias for --no-backup
   --dry-run          Print actions without copying
@@ -37,6 +38,7 @@ DEST_NAME="Mesen2 OOS.app"
 SRC_APP=""
 DO_BACKUP=1
 DO_PRUNE=0
+PRUNE_ALL=0
 DRY_RUN=0
 DO_SYMLINK=0
 SYMLINK_FORCE=0
@@ -69,6 +71,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prune)
       DO_PRUNE=1
+      shift
+      ;;
+    --prune-all)
+      DO_PRUNE=1
+      PRUNE_ALL=1
       shift
       ;;
     --dry-run)
@@ -153,15 +160,16 @@ backup_dir="${DEST_DIR}/Mesen2-Backups/${timestamp}"
 
 backup_or_remove() {
   local path="$1"
+  local backup_root="$2"
   if [[ ! -d "$path" ]]; then
     return 0
   fi
   if [[ "$DO_BACKUP" -eq 1 ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      echo "Would backup: $path -> $backup_dir/"
+      echo "Would backup: $path -> $backup_root/"
     else
-      $SUDO mkdir -p "$backup_dir"
-      $SUDO mv "$path" "$backup_dir/"
+      $SUDO mkdir -p "$backup_root"
+      $SUDO mv "$path" "$backup_root/"
     fi
   else
     if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -172,16 +180,32 @@ backup_or_remove() {
   fi
 }
 
-if [[ "$DO_PRUNE" -eq 1 ]]; then
+prune_dir() {
+  local dir="$1"
+  local backup_root="$2"
   for name in "Mesen.app" "Mesen2.app" "Mesen2 OOS.app"; do
-    prune_path="${DEST_DIR}/${name}"
+    prune_path="${dir}/${name}"
     if [[ "$prune_path" != "$DEST_APP" ]]; then
-      backup_or_remove "$prune_path"
+      backup_or_remove "$prune_path" "$backup_root"
     fi
   done
+}
+
+if [[ "$DO_PRUNE" -eq 1 ]]; then
+  if [[ "$PRUNE_ALL" -eq 1 ]]; then
+    for dir in "/Applications" "$HOME/Applications"; do
+      if [[ -d "$dir" ]]; then
+        prune_backup="${dir}/Mesen2-Backups/${timestamp}"
+        prune_dir "$dir" "$prune_backup"
+      fi
+    done
+  else
+    prune_backup="${DEST_DIR}/Mesen2-Backups/${timestamp}"
+    prune_dir "$DEST_DIR" "$prune_backup"
+  fi
 fi
 
-backup_or_remove "$DEST_APP"
+backup_or_remove "$DEST_APP" "$backup_dir"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Would install: $SRC_APP -> $DEST_APP"
