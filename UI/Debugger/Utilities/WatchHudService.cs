@@ -19,17 +19,20 @@ namespace Mesen.Debugger.Utilities
 
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
-			EnsureWatchHooks();
 			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
 				Clear();
 				return;
 			}
+			EnsureWatchHooks();
 
 			switch(e.NotificationType) {
+				case ConsoleNotificationType.BeforeGameLoad:
+				case ConsoleNotificationType.BeforeGameUnload:
 				case ConsoleNotificationType.GameLoaded:
 					_previousValues = new();
 					UpdateHud(force: true);
 					break;
+				case ConsoleNotificationType.GameLoadFailed:
 				case ConsoleNotificationType.StateLoaded:
 				case ConsoleNotificationType.GamePaused:
 				case ConsoleNotificationType.CodeBreak:
@@ -49,6 +52,28 @@ namespace Mesen.Debugger.Utilities
 		{
 			lock(_updateLock) {
 				ClearInternal();
+			}
+		}
+
+		public static void Shutdown()
+		{
+			lock(_updateLock) {
+				ClearInternal();
+				_previousValues = new();
+				_lastUpdate = DateTime.MinValue;
+				_lastText = "";
+			}
+
+			lock(_watchHookLock) {
+				if(!_watchHooksInstalled) {
+					return;
+				}
+
+				foreach(CpuType cpuType in Enum.GetValues<CpuType>()) {
+					WatchManager.GetWatchManager(cpuType).WatchChanged -= WatchManager_WatchChanged;
+				}
+
+				_watchHooksInstalled = false;
 			}
 		}
 
@@ -73,6 +98,8 @@ namespace Mesen.Debugger.Utilities
 				if(_watchHooksInstalled) {
 					return;
 				}
+
+				DebugApi.InitializeDebugger();
 
 				foreach(CpuType cpuType in Enum.GetValues<CpuType>()) {
 					WatchManager.GetWatchManager(cpuType).WatchChanged += WatchManager_WatchChanged;
@@ -107,7 +134,17 @@ namespace Mesen.Debugger.Utilities
 					return;
 				}
 
+				if(!EmuApi.IsRunning()) {
+					ClearInternal();
+					return;
+				}
+
 				RomInfo romInfo = EmuApi.GetRomInfo();
+				if(romInfo.Format == RomFormat.Unknown) {
+					ClearInternal();
+					return;
+				}
+
 				CpuType cpuType = romInfo.ConsoleType.GetMainCpuType();
 				WatchManager manager = WatchManager.GetWatchManager(cpuType);
 

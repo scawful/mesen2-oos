@@ -79,8 +79,13 @@ namespace Mesen.Debugger.ViewModels
 			ConfigManager.Config.Debug.ApplyConfig();
 			ConfigManager.Config.Debug.Fonts.ApplyConfig();
 
-			if(sender == Debugger && e.PropertyName == nameof(Debugger.ShowWatchHud) && !Debugger.ShowWatchHud) {
-				WatchHudService.Clear();
+			if(sender == Debugger && e.PropertyName == nameof(Debugger.ShowWatchHud)) {
+				if(Debugger.ShowWatchHud) {
+					DebugApi.InitializeDebugger();
+				} else {
+					WatchHudService.Shutdown();
+					DebugWindowManager.ReleaseDebuggerIfIdle();
+				}
 			}
 		}
 

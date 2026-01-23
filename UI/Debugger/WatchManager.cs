@@ -22,6 +22,7 @@ namespace Mesen.Debugger
 
 		public event WatchChangedEventHandler? WatchChanged;
 		
+		private readonly object _lock = new();
 		private List<string> _watchEntries = new List<string>();
 		private CpuType _cpuType;
 
@@ -44,16 +45,28 @@ namespace Mesen.Debugger
 
 		public List<string> WatchEntries
 		{
-			get { return _watchEntries; }
+			get
+			{
+				lock(_lock) {
+					return new List<string>(_watchEntries);
+				}
+			}
 			set
 			{
-				_watchEntries = new List<string>(value);
+				lock(_lock) {
+					_watchEntries = new List<string>(value);
+				}
 				WatchChanged?.Invoke(true);
 			}
 		}
 
 		public List<WatchValueInfo> GetWatchContent(IList<WatchValueInfo> previousValues)
 		{
+			List<string> entries;
+			lock(_lock) {
+				entries = new List<string>(_watchEntries);
+			}
+
 			WatchFormatStyle defaultStyle = ConfigManager.Config.Debug.Debugger.WatchFormat;
 			int defaultByteLength = 1;
 			if(defaultStyle == WatchFormatStyle.Signed) {
@@ -61,8 +74,8 @@ namespace Mesen.Debugger
 			}
 
 			var list = new List<WatchValueInfo>();
-			for(int i = 0; i < _watchEntries.Count; i++) {
-				string expression = _watchEntries[i].Trim();
+			for(int i = 0; i < entries.Count; i++) {
+				string expression = entries[i].Trim();
 				string newValue = "";
 				EvalResultType resultType;
 
@@ -206,8 +219,10 @@ namespace Mesen.Debugger
 
 		public void AddWatch(params string[] expressions)
 		{
-			foreach(string expression in expressions) {
-				_watchEntries.Add(expression);
+			lock(_lock) {
+				foreach(string expression in expressions) {
+					_watchEntries.Add(expression);
+				}
 			}
 			WatchChanged?.Invoke(false);
 			DebugWorkspaceManager.AutoSave();
@@ -216,19 +231,26 @@ namespace Mesen.Debugger
 		public void UpdateWatch(int index, string expression)
 		{
 			if(string.IsNullOrWhiteSpace(expression)) {
-				if(index < _watchEntries.Count) {
+				if(index >= 0) {
 					RemoveWatch(index);
 				}
 			} else {
-				if(index >= _watchEntries.Count) {
-					_watchEntries.Add(expression);
-				} else {
-					if(_watchEntries[index] == expression) {
-						return;
+				bool changed = false;
+				lock(_lock) {
+					if(index >= _watchEntries.Count) {
+						_watchEntries.Add(expression);
+						changed = true;
+					} else {
+						if(_watchEntries[index] == expression) {
+							return;
+						}
+						_watchEntries[index] = expression;
+						changed = true;
 					}
-					_watchEntries[index] = expression;
 				}
-				WatchChanged?.Invoke(false);
+				if(changed) {
+					WatchChanged?.Invoke(false);
+				}
 			}
 			DebugWorkspaceManager.AutoSave();
 		}
@@ -236,7 +258,9 @@ namespace Mesen.Debugger
 		public void RemoveWatch(params int[] indexes)
 		{
 			HashSet<int> set = new HashSet<int>(indexes);
-			_watchEntries = _watchEntries.Where((el, index) => !set.Contains(index)).ToList();
+			lock(_lock) {
+				_watchEntries = _watchEntries.Where((el, index) => !set.Contains(index)).ToList();
+			}
 			WatchChanged?.Invoke(true);
 			DebugWorkspaceManager.AutoSave();
 		}
@@ -250,7 +274,11 @@ namespace Mesen.Debugger
 
 		public void Export(string filename)
 		{
-			File.WriteAllLines(filename, WatchEntries);
+			List<string> entries;
+			lock(_lock) {
+				entries = new List<string>(_watchEntries);
+			}
+			File.WriteAllLines(filename, entries);
 		}
 
 		private string GetFormatString(WatchFormatStyle format, int byteLength)
@@ -282,13 +310,20 @@ namespace Mesen.Debugger
 
 		private void SetSelectionFormat(string formatString, int[] indexes)
 		{
+			List<string> entries;
+			lock(_lock) {
+				entries = new List<string>(_watchEntries);
+			}
 			foreach(int i in indexes) {
-				if(i < _watchEntries.Count) {
-					Match match = WatchManager.FormatSuffixRegex.Match(_watchEntries[i]);
+				if(i < 0 || i >= entries.Count) {
+					continue;
+				}
+				{
+					Match match = WatchManager.FormatSuffixRegex.Match(entries[i]);
 					if(match.Success) {
 						UpdateWatch(i, match.Groups[1].Value + formatString);
 					} else {
-						UpdateWatch(i, _watchEntries[i] + formatString);
+						UpdateWatch(i, entries[i] + formatString);
 					}
 				}
 			}

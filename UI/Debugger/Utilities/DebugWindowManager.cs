@@ -87,8 +87,10 @@ namespace Mesen.Debugger.Utilities
 					Dispatcher.UIThread.RunJobs();
 				}
 				DebugWorkspaceManager.Save(true);
-				WatchHudService.Clear();
-				DebugApi.ReleaseDebugger();
+				if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
+					WatchHudService.Shutdown();
+					DebugApi.ReleaseDebugger();
+				}
 			}
 		}
 
@@ -102,11 +104,6 @@ namespace Mesen.Debugger.Utilities
 
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
-			if(_openedWindows.Count == 0) {
-				WatchHudService.Clear();
-				return;
-			}
-
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.BeforeGameLoad:
 					//Suspend all other events until game load is done (or cancelled)
@@ -127,12 +124,15 @@ namespace Mesen.Debugger.Utilities
 					break;
 			}
 
+			bool hasWindows = _openedWindows.Count > 0;
 			if(!_loadingGame) {
 				WatchHudService.ProcessNotification(e);
-				lock(_windowNotifLock) {
-					foreach(Window window in _openedWindows.Keys) {
-						if(window is INotificationHandler handler) {
-							handler.ProcessNotification(e);
+				if(hasWindows) {
+					lock(_windowNotifLock) {
+						foreach(Window window in _openedWindows.Keys) {
+							if(window is INotificationHandler handler) {
+								handler.ProcessNotification(e);
+							}
 						}
 					}
 				}
@@ -140,7 +140,10 @@ namespace Mesen.Debugger.Utilities
 
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.GameLoaded:
-					GameLoadedEventParams evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					GameLoadedEventParams evtParams = new();
+					if(e.Parameter != IntPtr.Zero) {
+						evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
+					}
 					if(!evtParams.IsPowerCycle) {
 						//When reloading or loading another rom, reload workspace
 						Dispatcher.UIThread.Post(() => DebugWorkspaceManager.Load());
@@ -157,6 +160,13 @@ namespace Mesen.Debugger.Utilities
 				case ConsoleNotificationType.EmulationStopped:
 					Dispatcher.UIThread.Post(() => DebugWindowManager.CloseAllWindows());
 					break;
+			}
+		}
+
+		public static void ReleaseDebuggerIfIdle()
+		{
+			if(_openedWindows.Count == 0) {
+				DebugApi.ReleaseDebugger();
 			}
 		}
 
