@@ -38,7 +38,9 @@ namespace Mesen.Debugger.ViewModels
 				return;
 			}
 
-			UpdateRomInfo();
+			DebugApi.InitializeDebugger();
+
+			TryUpdateRomInfo();
 			RefreshTiming = new RefreshTimingViewModel(Config.RefreshTiming, CpuType);
 			RefreshTiming.UpdateMinMaxValues(CpuType);
 			RefreshData();
@@ -76,15 +78,28 @@ namespace Mesen.Debugger.ViewModels
 			DebugShortcutManager.RegisterActions(wnd, ViewMenuActions);
 		}
 
-		private void UpdateRomInfo()
+		private bool TryUpdateRomInfo()
 		{
-			_romInfo = EmuApi.GetRomInfo();
+			if(!EmuApi.IsRunning()) {
+				return false;
+			}
+
+			RomInfo romInfo = EmuApi.GetRomInfo();
+			if(romInfo.Format == RomFormat.Unknown) {
+				return false;
+			}
+
+			_romInfo = romInfo;
 			CpuType = _romInfo.ConsoleType.GetMainCpuType();
+			return true;
 		}
 
 		public void RefreshData()
 		{
-			UpdateRomInfo();
+			if(!TryUpdateRomInfo()) {
+				SetNoRomEntries();
+				return;
+			}
 			TimingInfo timing = EmuApi.GetTimingInfo(CpuType);
 
 			List<RegEntry> rows = new();
@@ -184,8 +199,23 @@ namespace Mesen.Debugger.ViewModels
 		public void OnGameLoaded()
 		{
 			_previousWatchValues = new();
-			UpdateRomInfo();
 			RefreshData();
+		}
+
+		private void SetNoRomEntries()
+		{
+			List<RegEntry> rows = new() {
+				new RegEntry("", "System"),
+				new RegEntry("", "ROM", "No ROM loaded", null)
+			};
+
+			if(Dispatcher.UIThread.CheckAccess()) {
+				Entries = rows;
+			} else {
+				Dispatcher.UIThread.Post(() => {
+					Entries = rows;
+				});
+			}
 		}
 	}
 }
