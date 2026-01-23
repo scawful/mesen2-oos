@@ -5,6 +5,7 @@
 #Run "make" to build, "make run" to run
 
 MESENFLAGS=
+LLVM_PREFIX ?= /opt/homebrew/opt/llvm
 
 ifeq ($(USE_GCC),true)
 	CXX := g++
@@ -24,6 +25,7 @@ SDL2INC := $(shell sdl2-config --cflags)
 LINKCHECKUNRESOLVED := -Wl,-z,defs
 
 LINKOPTIONS :=
+LINKSHARED := -shared
 MESENOS :=
 UNAME_S := $(shell uname -s)
 
@@ -38,6 +40,7 @@ ifeq ($(UNAME_S),Darwin)
 	LTO := false
 	STATICLINK := false
 	LINKCHECKUNRESOLVED :=
+	LINKSHARED := -dynamiclib
 endif
 
 MACHINE := $(shell uname -m)
@@ -95,7 +98,15 @@ ifneq ($(STATICLINK),false)
 endif
 
 ifeq ($(MESENOS),osx)
-	LINKOPTIONS += -framework Foundation -framework Cocoa
+	LINKOPTIONS += -framework Foundation -framework Cocoa -lc++
+endif
+
+CXX_PATH := $(shell command -v $(CXX) 2>/dev/null)
+ifneq ($(findstring $(LLVM_PREFIX),$(CXX_PATH)),)
+	LLVM_LIBCXX := $(LLVM_PREFIX)/lib/c++
+	ifneq ($(wildcard $(LLVM_LIBCXX)/libc++.1.dylib),)
+		LINKOPTIONS += -L$(LLVM_LIBCXX) -Wl,-rpath,$(LLVM_LIBCXX) -lc++ -lc++abi
+	endif
 endif
 
 CXXFLAGS = -fPIC -Wall --std=c++17 $(MESENFLAGS) $(SDL2INC) -I $(realpath ./) -I $(realpath ./Core) -I $(realpath ./Utilities) -I $(realpath ./Sdl) -I $(realpath ./Linux) -I $(realpath ./MacOS)
@@ -185,8 +196,8 @@ ui: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 	rm -fr $(OUTFOLDER)/Dependencies/*
 	cp InteropDLL/$(OBJFOLDER)/$(SHAREDLIB) $(OUTFOLDER)/$(SHAREDLIB)
 	#Called twice because the first call copies native libraries to the bin folder which need to be included in Dependencies.zip
-	cd UI && dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" $(PUBLISHFLAGS)
-	cd UI && dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" $(PUBLISHFLAGS)
+	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
+	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
 
 core: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 
@@ -205,7 +216,7 @@ pgohelper: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 InteropDLL/$(OBJFOLDER)/$(SHAREDLIB): $(SEVENZIPOBJ) $(LUAOBJ) $(UTILOBJ) $(COREOBJ) $(SDLOBJ) $(LIBEVDEVOBJ) $(LINUXOBJ) $(DLLOBJ) $(MACOSOBJ)
 	mkdir -p bin
 	mkdir -p InteropDLL/$(OBJFOLDER)
-	$(CXX) $(CXXFLAGS) $(LINKOPTIONS) $(LINKCHECKUNRESOLVED) -shared -o $(SHAREDLIB) $(DLLOBJ) $(SEVENZIPOBJ) $(LUAOBJ) $(LINUXOBJ) $(MACOSOBJ) $(LIBEVDEVOBJ) $(UTILOBJ) $(SDLOBJ) $(COREOBJ) $(SDL2INC) -pthread $(FSLIB) $(SDL2LIB) $(LIBEVDEVLIB) $(X11LIB)
+	$(CXX) $(CXXFLAGS) $(LINKOPTIONS) $(LINKCHECKUNRESOLVED) $(LINKSHARED) -o $(SHAREDLIB) $(DLLOBJ) $(SEVENZIPOBJ) $(LUAOBJ) $(LINUXOBJ) $(MACOSOBJ) $(LIBEVDEVOBJ) $(UTILOBJ) $(SDLOBJ) $(COREOBJ) $(SDL2INC) -pthread $(FSLIB) $(SDL2LIB) $(LIBEVDEVLIB) $(X11LIB)
 	cp $(SHAREDLIB) bin/pgohelperlib.so
 	mv $(SHAREDLIB) InteropDLL/$(OBJFOLDER)
 
