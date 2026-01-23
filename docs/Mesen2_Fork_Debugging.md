@@ -40,8 +40,13 @@ Example:
 The fork also exposes a simple local socket API for automation. The socket path is
 `/tmp/mesen2-<pid>.sock` and is logged when the server starts.
 
-Request format (single line JSON):
+Request format (newline-delimited JSON):
 `{"type":"COMMAND","param":"value"}`
+
+Notes:
+- Requests are single-line JSON objects (newline terminated).
+- Strings may include escaped quotes/newlines.
+- Requests larger than ~1MB or stalled longer than ~5s are rejected.
 
 Response format:
 `{"success":true,"data":...,"error":"..."}`.
@@ -55,12 +60,13 @@ Core control:
 - `ROMINFO`, `SPEED`, `REWIND`.
 
 Memory & debugging:
-- `READ`, `READ16`, `READBLOCK`, `WRITE`, `WRITE16`.
+- `READ`, `READ16`, `READBLOCK`, `WRITE`, `WRITE16`, `WRITEBLOCK`.
 - `DISASM` - disassemble at address (CPU memory only).
+- `CPU` - compact CPU register snapshot.
 - `SNAPSHOT`, `DIFF` - memory diff workflow.
 - `SEARCH` - byte pattern search.
 - `LABELS` - set/get/lookup/clear labels.
-- `BREAKPOINT` - add/list/remove/toggle breakpoints.
+- `BREAKPOINT` - add/list/remove/enable/disable/clear breakpoints.
 
 Files & tooling:
 - `SCREENSHOT` - PNG as base64.
