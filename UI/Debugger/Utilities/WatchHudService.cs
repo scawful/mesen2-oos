@@ -4,6 +4,8 @@ using Mesen.Interop;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Mesen.Debugger.Utilities
 {
@@ -13,23 +15,42 @@ namespace Mesen.Debugger.Utilities
 		private static readonly object _watchHookLock = new();
 		private static bool _watchHooksInstalled = false;
 		private static DateTime _lastUpdate = DateTime.MinValue;
-		private static List<WatchValueInfo> _previousValues = new();
+		private static Dictionary<CpuType, List<WatchValueInfo>> _previousValuesByCpu = new();
 		private static string _lastText = "";
+		private static string _lastDataJson = "";
 		private static bool _cleared = true;
+		private static bool _dataCleared = true;
+
+		private sealed class WatchEntryDto
+		{
+			[JsonPropertyName("expression")] public string Expression { get; set; } = "";
+			[JsonPropertyName("value")] public string Value { get; set; } = "";
+			[JsonPropertyName("numeric")] public long NumericValue { get; set; }
+			[JsonPropertyName("changed")] public bool IsChanged { get; set; }
+		}
+
+		private static readonly JsonSerializerOptions _watchJsonOptions = new()
+		{
+			DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+		};
 
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
-			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
+			bool showHud = ConfigManager.Config.Debug.Debugger.ShowWatchHud;
+			bool hasWatchEntries = HasAnyWatchEntries();
+			if(!showHud && !hasWatchEntries) {
 				Clear();
 				return;
 			}
-			EnsureWatchHooks();
+			if(showHud || hasWatchEntries) {
+				EnsureWatchHooks();
+			}
 
 			switch(e.NotificationType) {
 				case ConsoleNotificationType.BeforeGameLoad:
 				case ConsoleNotificationType.BeforeGameUnload:
 				case ConsoleNotificationType.GameLoaded:
-					_previousValues = new();
+					_previousValuesByCpu = new();
 					UpdateHud(force: true);
 					break;
 				case ConsoleNotificationType.GameLoadFailed:
@@ -51,17 +72,20 @@ namespace Mesen.Debugger.Utilities
 		public static void Clear()
 		{
 			lock(_updateLock) {
-				ClearInternal();
+				ClearHudInternal();
+				ClearDataInternal();
 			}
 		}
 
 		public static void Shutdown()
 		{
 			lock(_updateLock) {
-				ClearInternal();
-				_previousValues = new();
+				ClearHudInternal();
+				ClearDataInternal();
+				_previousValuesByCpu = new();
 				_lastUpdate = DateTime.MinValue;
 				_lastText = "";
+				_lastDataJson = "";
 			}
 
 			lock(_watchHookLock) {
@@ -77,7 +101,7 @@ namespace Mesen.Debugger.Utilities
 			}
 		}
 
-		private static void ClearInternal()
+		private static void ClearHudInternal()
 		{
 			if(_cleared) {
 				return;
@@ -86,6 +110,17 @@ namespace Mesen.Debugger.Utilities
 			EmuApi.SetWatchHudText(string.Empty);
 			_lastText = "";
 			_cleared = true;
+		}
+
+		private static void ClearDataInternal()
+		{
+			if(_dataCleared) {
+				return;
+			}
+
+			EmuApi.SetWatchHudData(string.Empty);
+			_lastDataJson = "";
+			_dataCleared = true;
 		}
 
 		private static void EnsureWatchHooks()
@@ -111,10 +146,9 @@ namespace Mesen.Debugger.Utilities
 
 		private static void WatchManager_WatchChanged(bool resetSelection)
 		{
-			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
+			if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud && !HasAnyWatchEntries()) {
 				return;
 			}
-
 			UpdateHud(force: true);
 		}
 
@@ -128,38 +162,88 @@ namespace Mesen.Debugger.Utilities
 
 				_lastUpdate = now;
 
-				DebuggerConfig cfg = ConfigManager.Config.Debug.Debugger;
-				if(!cfg.ShowWatchHud) {
-					ClearInternal();
-					return;
-				}
-
 				if(!EmuApi.IsRunning()) {
-					ClearInternal();
+					ClearHudInternal();
+					ClearDataInternal();
 					return;
 				}
 
 				RomInfo romInfo = EmuApi.GetRomInfo();
 				if(romInfo.Format == RomFormat.Unknown) {
-					ClearInternal();
+					ClearHudInternal();
+					ClearDataInternal();
 					return;
 				}
 
-				CpuType cpuType = romInfo.ConsoleType.GetMainCpuType();
-				WatchManager manager = WatchManager.GetWatchManager(cpuType);
+				DebuggerConfig cfg = ConfigManager.Config.Debug.Debugger;
+				bool showHud = cfg.ShowWatchHud;
 
-				if(manager.WatchEntries.Count == 0) {
-					ClearInternal();
+				CpuType mainCpu = romInfo.ConsoleType.GetMainCpuType();
+				Dictionary<string, List<WatchEntryDto>> watchData = new();
+				Dictionary<CpuType, List<WatchValueInfo>> newPrevious = new();
+				List<WatchValueInfo>? mainCpuValues = null;
+
+				foreach(CpuType cpuType in Enum.GetValues<CpuType>()) {
+					WatchManager manager = WatchManager.GetWatchManager(cpuType);
+					if(manager.WatchEntries.Count == 0) {
+						continue;
+					}
+
+					if(!_previousValuesByCpu.TryGetValue(cpuType, out List<WatchValueInfo>? previousValues)) {
+						previousValues = new List<WatchValueInfo>();
+					}
+
+					List<WatchValueInfo> values = manager.GetWatchContent(previousValues);
+					newPrevious[cpuType] = values;
+					if(cpuType == mainCpu) {
+						mainCpuValues = values;
+					}
+
+					List<WatchEntryDto> entries = new();
+					foreach(WatchValueInfo entry in values) {
+						if(string.IsNullOrWhiteSpace(entry.Expression)) {
+							continue;
+						}
+						entries.Add(new WatchEntryDto() {
+							Expression = entry.Expression,
+							Value = entry.Value,
+							NumericValue = entry.NumericValue,
+							IsChanged = entry.IsChanged
+						});
+					}
+
+					if(entries.Count > 0) {
+						watchData[cpuType.ToString().ToLowerInvariant()] = entries;
+					}
+				}
+
+				_previousValuesByCpu = newPrevious;
+
+				if(watchData.Count == 0) {
+					ClearDataInternal();
+				} else {
+					string dataJson = JsonSerializer.Serialize(watchData, _watchJsonOptions);
+					if(force || dataJson != _lastDataJson) {
+						EmuApi.SetWatchHudData(dataJson);
+						_lastDataJson = dataJson;
+						_dataCleared = false;
+					}
+				}
+
+				if(!showHud) {
+					ClearHudInternal();
 					return;
 				}
 
-				List<WatchValueInfo> values = manager.GetWatchContent(_previousValues);
-				_previousValues = values;
+				if(mainCpuValues == null) {
+					ClearHudInternal();
+					return;
+				}
 
 				int maxEntries = cfg.WatchHudMaxEntries;
 				int count = 0;
 				StringBuilder sb = new StringBuilder();
-				foreach(WatchValueInfo entry in values) {
+				foreach(WatchValueInfo entry in mainCpuValues) {
 					if(string.IsNullOrWhiteSpace(entry.Expression)) {
 						continue;
 					}
@@ -185,6 +269,16 @@ namespace Mesen.Debugger.Utilities
 				_lastText = text;
 				_cleared = text.Length == 0;
 			}
+		}
+
+		private static bool HasAnyWatchEntries()
+		{
+			foreach(CpuType cpuType in Enum.GetValues<CpuType>()) {
+				if(WatchManager.GetWatchManager(cpuType).WatchEntries.Count > 0) {
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 }

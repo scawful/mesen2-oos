@@ -24,6 +24,10 @@
 #include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
 #include "SNES/SnesPpuTypes.h"
+#include "SNES/SpcTypes.h"
+#include "SNES/Coprocessors/DSP/NecDspTypes.h"
+#include "SNES/Coprocessors/GSU/GsuTypes.h"
+#include "SNES/Coprocessors/CX4/Cx4Types.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -59,6 +63,8 @@ static bool TryParseMemoryType(const string& memtype, MemoryType& outType);
 static string JsonEscape(const string& value);
 static string FormatHex(uint64_t value, int width);
 static string FormatSnesFlags(const SnesCpuState& cpu);
+static string CpuTypeName(CpuType cpuType);
+static void AppendCpuStateJson(stringstream& ss, CpuType cpuType, Debugger* debugger);
 static string Trim(string value);
 static bool ReadRequestLine(int clientFd, std::atomic<bool>& running, string& out, string& error);
 static bool ParseJsonObject(const string& json, unordered_map<string, string>& out, string& error);
@@ -1078,13 +1084,30 @@ SocketResponse SocketServer::HandleStateInspector(Emulator* emu, const SocketCom
 	ss << "\"masterClockRate\":" << timing.MasterClockRate << ",";
 	ss << "\"cycleCount\":" << timing.CycleCount;
 	ss << "}";
+	ss << ",\"mainCpuType\":" << static_cast<int>(cpuType);
+	ss << ",\"mainCpuName\":\"" << CpuTypeName(cpuType) << "\"";
 
 	auto dbg = emu->GetDebugger(true);
 	if(dbg.GetDebugger()) {
+		Debugger* debugger = dbg.GetDebugger();
 		ss << ",\"debugger\":true";
+		ss << ",\"cpus\":[";
+		for(size_t i = 0; i < cpuTypes.size(); i++) {
+			CpuType entryType = cpuTypes[i];
+			if(i > 0) {
+				ss << ",";
+			}
+			ss << "{";
+			ss << "\"type\":" << static_cast<int>(entryType) << ",";
+			ss << "\"name\":\"" << CpuTypeName(entryType) << "\",";
+			ss << "\"state\":{";
+			AppendCpuStateJson(ss, entryType, debugger);
+			ss << "}";
+			ss << "}";
+		}
+		ss << "]";
 
 		if(emu->GetConsoleType() == ConsoleType::Snes) {
-			Debugger* debugger = dbg.GetDebugger();
 			SnesCpuState& cpu = static_cast<SnesCpuState&>(debugger->GetCpuStateRef(cpuType));
 
 			ss << ",\"cpu\":{";
@@ -1115,13 +1138,17 @@ SocketResponse SocketServer::HandleStateInspector(Emulator* emu, const SocketCom
 		}
 	} else {
 		ss << ",\"debugger\":false";
+		ss << ",\"cpus\":[]";
 	}
 
 	string watchHudText;
+	string watchHudData;
 	if(emu->GetVideoRenderer()) {
 		watchHudText = emu->GetVideoRenderer()->GetWatchHudText();
+		watchHudData = emu->GetVideoRenderer()->GetWatchHudData();
 	}
 	ss << ",\"watchHudText\":\"" << JsonEscape(watchHudText) << "\"";
+	ss << ",\"watchEntries\":" << (watchHudData.empty() ? "{}" : watchHudData);
 
 	ss << "}";
 
@@ -1708,6 +1735,129 @@ static string FormatSnesFlags(const SnesCpuState& cpu)
 	   << (flagC ? 'C' : 'c')
 	   << ' ' << flagE;
 	return ss.str();
+}
+
+static string CpuTypeName(CpuType cpuType)
+{
+	switch(cpuType) {
+		case CpuType::Snes: return "snes";
+		case CpuType::Spc: return "spc";
+		case CpuType::NecDsp: return "necdsp";
+		case CpuType::Sa1: return "sa1";
+		case CpuType::Gsu: return "gsu";
+		case CpuType::Cx4: return "cx4";
+		case CpuType::Gameboy: return "gameboy";
+		case CpuType::Nes: return "nes";
+		case CpuType::Pce: return "pce";
+		case CpuType::Sms: return "sms";
+		case CpuType::Gba: return "gba";
+	}
+	return "unknown";
+}
+
+static void AppendCpuStateJson(stringstream& ss, CpuType cpuType, Debugger* debugger)
+{
+	bool first = true;
+	auto addField = [&](const string& key, const string& value, bool raw = false) {
+		if(!first) {
+			ss << ",";
+		}
+		first = false;
+		ss << "\"" << key << "\":";
+		if(raw) {
+			ss << value;
+		} else {
+			ss << "\"" << value << "\"";
+		}
+	};
+
+	switch(cpuType) {
+		case CpuType::Snes:
+		case CpuType::Sa1: {
+			SnesCpuState& cpu = static_cast<SnesCpuState&>(debugger->GetCpuStateRef(cpuType));
+			uint32_t pc = ((uint32_t)cpu.K << 16) | cpu.PC;
+			addField("a", FormatHex(cpu.A, 4));
+			addField("x", FormatHex(cpu.X, 4));
+			addField("y", FormatHex(cpu.Y, 4));
+			addField("sp", FormatHex(cpu.SP, 4));
+			addField("d", FormatHex(cpu.D, 4));
+			addField("pc", FormatHex(pc, 6));
+			addField("k", FormatHex(cpu.K, 2));
+			addField("dbr", FormatHex(cpu.DBR, 2));
+			addField("p", FormatHex(cpu.PS, 2));
+			addField("flags", FormatSnesFlags(cpu));
+			addField("emulation", cpu.EmulationMode ? "true" : "false", true);
+			addField("cycleCount", std::to_string(cpu.CycleCount), true);
+			break;
+		}
+
+		case CpuType::Spc: {
+			SpcState& spc = static_cast<SpcState&>(debugger->GetCpuStateRef(cpuType));
+			addField("pc", FormatHex(spc.PC, 4));
+			addField("a", FormatHex(spc.A, 2));
+			addField("x", FormatHex(spc.X, 2));
+			addField("y", FormatHex(spc.Y, 2));
+			addField("sp", FormatHex(spc.SP, 2));
+			addField("p", FormatHex(spc.PS, 2));
+			addField("cycleCount", std::to_string(spc.Cycle), true);
+			break;
+		}
+
+		case CpuType::NecDsp: {
+			NecDspState& dsp = static_cast<NecDspState&>(debugger->GetCpuStateRef(cpuType));
+			addField("pc", FormatHex(dsp.PC, 4));
+			addField("a", FormatHex(dsp.A, 4));
+			addField("b", FormatHex(dsp.B, 4));
+			addField("sr", FormatHex(dsp.SR, 4));
+			addField("cycleCount", std::to_string(dsp.CycleCount), true);
+			break;
+		}
+
+		case CpuType::Gsu: {
+			GsuState& gsu = static_cast<GsuState&>(debugger->GetCpuStateRef(cpuType));
+			uint32_t pc = ((uint32_t)gsu.ProgramBank << 16) | gsu.R[15];
+			addField("pc", FormatHex(pc, 6));
+			addField("sfrLow", FormatHex(gsu.SFR.GetFlagsLow(), 2));
+			addField("sfrHigh", FormatHex(gsu.SFR.GetFlagsHigh(), 2));
+			addField("cycleCount", std::to_string(gsu.CycleCount), true);
+			ss << (first ? "" : ",") << "\"r\":[";
+			for(int i = 0; i < 16; i++) {
+				if(i > 0) {
+					ss << ",";
+				}
+				ss << "\"" << FormatHex(gsu.R[i], 4) << "\"";
+			}
+			ss << "]";
+			first = false;
+			break;
+		}
+
+		case CpuType::Cx4: {
+			Cx4State& cx4 = static_cast<Cx4State&>(debugger->GetCpuStateRef(cpuType));
+			uint32_t pc = ((uint32_t)cx4.PB << 16) | cx4.PC;
+			addField("pc", FormatHex(pc, 6));
+			addField("a", FormatHex(cx4.A, 8));
+			addField("p", FormatHex(cx4.P, 4));
+			addField("sp", FormatHex(cx4.SP, 2));
+			string flags;
+			flags.push_back(cx4.Negative ? 'N' : 'n');
+			flags.push_back(cx4.Overflow ? 'V' : 'v');
+			flags.push_back(cx4.Zero ? 'Z' : 'z');
+			flags.push_back(cx4.Carry ? 'C' : 'c');
+			flags.push_back(cx4.IrqFlag ? 'I' : 'i');
+			addField("flags", flags);
+			addField("cycleCount", std::to_string(cx4.CycleCount), true);
+			break;
+		}
+
+		default: {
+			uint32_t pc = debugger->GetProgramCounter(cpuType, true);
+			uint8_t flags = debugger->GetCpuFlags(cpuType);
+			addField("pc", FormatHex(pc, DebugUtilities::GetProgramCounterSize(cpuType)));
+			addField("flags", FormatHex(flags, 2));
+			break;
+		}
+	}
 }
 
 // Helper to parse memory type from string

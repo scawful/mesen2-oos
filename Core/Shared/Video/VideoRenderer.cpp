@@ -179,6 +179,21 @@ string VideoRenderer::GetWatchHudText()
 	return "";
 }
 
+void VideoRenderer::SetWatchHudData(string dataJson)
+{
+	if(_watchHud) {
+		_watchHud->SetData(std::move(dataJson));
+	}
+}
+
+string VideoRenderer::GetWatchHudData()
+{
+	if(_watchHud) {
+		return _watchHud->GetData();
+	}
+	return "";
+}
+
 void VideoRenderer::UpdateFrame(RenderedFrame& frame)
 {
 	{

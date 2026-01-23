@@ -312,6 +312,13 @@ extern "C" {
 		}
 	}
 
+	DllExport void __stdcall SetWatchHudData(char* dataJson)
+	{
+		if(_emu && _emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->SetWatchHudData(dataJson ? dataJson : "");
+		}
+	}
+
 	DllExport double __stdcall GetAspectRatio()
 	{
 		if(!_emu || !_emu->GetSettings() || !_emu->GetVideoDecoder()) {

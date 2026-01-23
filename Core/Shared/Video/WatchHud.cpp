@@ -20,6 +20,24 @@ string WatchHud::GetText()
 	return _text;
 }
 
+void WatchHud::SetData(string data)
+{
+	auto lock = _lock.AcquireSafe();
+	_dataJson = std::move(data);
+}
+
+string WatchHud::GetData()
+{
+	auto lock = _lock.AcquireSafe();
+	return _dataJson;
+}
+
+void WatchHud::ClearData()
+{
+	auto lock = _lock.AcquireSafe();
+	_dataJson.clear();
+}
+
 void WatchHud::DrawOutlinedString(DebugHud* hud, int x, int y, const string& text, int maxWidth) const
 {
 	for(int offsetX = -1; offsetX <= 1; offsetX++) {

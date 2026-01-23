@@ -79,6 +79,8 @@ public:
 	std::pair<FrameInfo, OverscanDimensions> GetScriptHudSize();
 	void SetWatchHudText(string text);
 	string GetWatchHudText();
+	void SetWatchHudData(string dataJson);
+	string GetWatchHudData();
 
 	void StartThread();
 	void StopThread();
