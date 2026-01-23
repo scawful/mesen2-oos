@@ -524,6 +524,15 @@ void Debugger::ProcessEvent(EventType type, std::optional<CpuType> cpuTypeOpt)
 
 		case EventType::InputPolled:
 			_debuggers[(int)evtCpuType].Debugger->ProcessInputOverrides(_inputOverrides);
+			// Decrement frame counters and clear expired overrides
+			for(int i = 0; i < 8; i++) {
+				if(_inputOverrideFrames[i] > 0) {
+					_inputOverrideFrames[i]--;
+					if(_inputOverrideFrames[i] == 0) {
+						_inputOverrides[i] = {};  // Clear expired override
+					}
+				}
+			}
 			break;
 
 		case EventType::StartFrame: {
@@ -929,9 +938,10 @@ void Debugger::SetBreakpoints(Breakpoint breakpoints[], uint32_t length)
 	}
 }
 
-void Debugger::SetInputOverrides(uint32_t index, DebugControllerState state)
+void Debugger::SetInputOverrides(uint32_t index, DebugControllerState state, uint32_t frames)
 {
 	_inputOverrides[index] = state;
+	_inputOverrideFrames[index] = frames;  // 0 = indefinite (legacy behavior)
 }
 
 void Debugger::GetAvailableInputOverrides(uint8_t* availableIndexes)

@@ -83,6 +83,7 @@ private:
 	atomic<uint32_t> _suspendRequestCount;
 
 	DebugControllerState _inputOverrides[8] = {};
+	uint32_t _inputOverrideFrames[8] = {};  // Frame counter for auto-clearing overrides
 
 	bool _waitForBreakResume = false;
 	
@@ -166,7 +167,7 @@ public:
 
 	void SetBreakpoints(Breakpoint breakpoints[], uint32_t length);
 
-	void SetInputOverrides(uint32_t index, DebugControllerState state);
+	void SetInputOverrides(uint32_t index, DebugControllerState state, uint32_t frames = 0);
 	void GetAvailableInputOverrides(uint8_t* availableIndexes);
 	
 	void Log(string message);

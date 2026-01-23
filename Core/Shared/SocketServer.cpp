@@ -1227,8 +1227,15 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 		if (playerIndex > 7) playerIndex = 0;
 	}
 
+	// Get frame count (default 0 = indefinite for backward compatibility)
+	uint32_t frameCount = 0;
+	auto framesIt = cmd.params.find("frames");
+	if (framesIt != cmd.params.end()) {
+		frameCount = std::stoul(framesIt->second);
+	}
+
 	// Set the input override via debugger
-	dbg.GetDebugger()->SetInputOverrides(playerIndex, state);
+	dbg.GetDebugger()->SetInputOverrides(playerIndex, state, frameCount);
 
 	resp.success = true;
 	resp.data = "\"OK\"";
