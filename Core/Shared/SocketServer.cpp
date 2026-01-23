@@ -31,6 +31,9 @@
 #include <poll.h>
 #include <chrono>
 #include <cctype>
+#include <algorithm>
+#include <cerrno>
+#include <fcntl.h>
 
 using std::hex;
 using std::dec;
@@ -56,6 +59,11 @@ static bool TryParseMemoryType(const string& memtype, MemoryType& outType);
 static string JsonEscape(const string& value);
 static string FormatHex(uint64_t value, int width);
 static string FormatSnesFlags(const SnesCpuState& cpu);
+static string Trim(string value);
+static bool ReadRequestLine(int clientFd, std::atomic<bool>& running, string& out, string& error);
+static bool ParseJsonObject(const string& json, unordered_map<string, string>& out, string& error);
+static bool ParseJsonString(const string& json, size_t& index, string& out, string& error);
+static void AppendUtf8(string& out, uint32_t codepoint);
 
 string SocketResponse::ToJson() const {
 	stringstream ss;
@@ -92,6 +100,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["WRITE"] = HandleWrite;
 	_handlers["WRITE16"] = HandleWrite16;
 	_handlers["READBLOCK"] = HandleReadBlock;
+	_handlers["WRITEBLOCK"] = HandleWriteBlock;
 	_handlers["SAVESTATE"] = HandleSaveState;
 	_handlers["LOADSTATE"] = HandleLoadState;
 	_handlers["LOADSCRIPT"] = HandleLoadScript;
@@ -206,27 +215,43 @@ void SocketServer::ServerLoop() {
 }
 
 void SocketServer::HandleClient(int clientFd) {
-	// Read command (simple line-based protocol)
-	char buffer[8192];
-	ssize_t n = read(clientFd, buffer, sizeof(buffer) - 1);
-	if (n <= 0) return;
-
-	buffer[n] = '\0';
-	string request(buffer);
-
-	// Trim whitespace
-	while (!request.empty() && (request.back() == '\n' || request.back() == '\r')) {
-		request.pop_back();
+	string request;
+	string readError;
+	if(!ReadRequestLine(clientFd, _running, request, readError)) {
+		if(!readError.empty()) {
+			SocketResponse response;
+			response.success = false;
+			response.error = readError;
+			string responseJson = response.ToJson() + "\n";
+			write(clientFd, responseJson.c_str(), responseJson.size());
+		}
+		return;
 	}
 
-	SocketCommand cmd = ParseCommand(request);
-	SocketResponse response;
+	SocketCommand cmd;
+	string parseError;
+	if(!ParseCommand(request, cmd, parseError)) {
+		SocketResponse response;
+		response.success = false;
+		response.error = parseError.empty() ? "Invalid request" : parseError;
+		string responseJson = response.ToJson() + "\n";
+		write(clientFd, responseJson.c_str(), responseJson.size());
+		return;
+	}
 
-	auto lock = _lock.AcquireSafe();
-	auto it = _handlers.find(cmd.type);
-	if (it != _handlers.end()) {
+	CommandHandler handler;
+	{
+		auto lock = _lock.AcquireSafe();
+		auto it = _handlers.find(cmd.type);
+		if(it != _handlers.end()) {
+			handler = it->second;
+		}
+	}
+
+	SocketResponse response;
+	if(handler) {
 		try {
-			response = it->second(_emu, cmd);
+			response = handler(_emu, cmd);
 		} catch (const std::exception& e) {
 			response.success = false;
 			response.error = e.what();
@@ -240,74 +265,34 @@ void SocketServer::HandleClient(int clientFd) {
 	write(clientFd, responseJson.c_str(), responseJson.size());
 }
 
-SocketCommand SocketServer::ParseCommand(const string& json) {
-	SocketCommand cmd;
+bool SocketServer::ParseCommand(const string& json, SocketCommand& cmd, string& error) {
+	cmd.type.clear();
+	cmd.params.clear();
 
-	// Very simple JSON parsing - just extract type and params
-	// Format: {"type":"CMD","param1":"val1","param2":"val2"}
-
-	size_t typeStart = json.find("\"type\"");
-	if (typeStart != string::npos) {
-		size_t colonPos = json.find(':', typeStart);
-		size_t quoteStart = json.find('"', colonPos + 1);
-		size_t quoteEnd = json.find('"', quoteStart + 1);
-		if (quoteStart != string::npos && quoteEnd != string::npos) {
-			cmd.type = json.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
-		}
+	unordered_map<string, string> params;
+	if(!ParseJsonObject(json, params, error)) {
+		return false;
 	}
 
-	// Extract other params
-	auto extractParam = [&](const string& key) -> string {
-		size_t keyStart = json.find("\"" + key + "\"");
-		if (keyStart != string::npos) {
-			size_t colonPos = json.find(':', keyStart);
-			if (colonPos != string::npos) {
-				// Skip whitespace
-				size_t valueStart = colonPos + 1;
-				while (valueStart < json.size() && (json[valueStart] == ' ' || json[valueStart] == '\t')) {
-					valueStart++;
-				}
-
-				if (valueStart < json.size()) {
-					if (json[valueStart] == '"') {
-						// String value
-						size_t quoteEnd = json.find('"', valueStart + 1);
-						if (quoteEnd != string::npos) {
-							return json.substr(valueStart + 1, quoteEnd - valueStart - 1);
-						}
-					} else {
-						// Number or other value
-						size_t valueEnd = valueStart;
-						while (valueEnd < json.size() && json[valueEnd] != ',' && json[valueEnd] != '}') {
-							valueEnd++;
-						}
-						return json.substr(valueStart, valueEnd - valueStart);
-					}
-				}
-			}
-		}
-		return "";
-	};
-
-	// Common params
-	vector<string> commonParams = {
-		"addr", "value", "len", "slot", "path", "name", "content",
-		"buttons", "frames", "hex", "player", "count", "mode",
-		// Emulation control params
-		"seconds", "action", "code", "format", "multiplier",
-		// Memory analysis params
-		"pattern", "memtype", "start", "end", "snapshot", "label", "comment",
-		// Breakpoint params
-		"id", "bptype", "startaddr", "endaddr", "enabled", "condition", "cputype"
-	};
-	for (const auto& param : commonParams) {
-		string val = extractParam(param);
-		if (!val.empty()) {
-			cmd.params[param] = val;
-		}
+	auto typeIt = params.find("type");
+	if(typeIt == params.end()) {
+		error = "Missing type field";
+		return false;
 	}
 
-	return cmd;
+	cmd.type = Trim(typeIt->second);
+	if(cmd.type.empty()) {
+		error = "Missing command type";
+		return false;
+	}
+
+	std::transform(cmd.type.begin(), cmd.type.end(), cmd.type.begin(), [](unsigned char c) {
+		return static_cast<char>(std::toupper(c));
+	});
+
+	params.erase(typeIt);
+	cmd.params = std::move(params);
+	return true;
 }
 
 // ============================================================================
@@ -559,6 +544,9 @@ SocketResponse SocketServer::HandleWrite(Emulator* emu, const SocketCommand& cmd
 
 	auto addrIt = cmd.params.find("addr");
 	auto valIt = cmd.params.find("value");
+	if (valIt == cmd.params.end()) {
+		valIt = cmd.params.find("val");
+	}
 
 	if (addrIt == cmd.params.end() || valIt == cmd.params.end()) {
 		resp.success = false;
@@ -624,6 +612,9 @@ SocketResponse SocketServer::HandleWrite16(Emulator* emu, const SocketCommand& c
 
 	auto addrIt = cmd.params.find("addr");
 	auto valIt = cmd.params.find("value");
+	if (valIt == cmd.params.end()) {
+		valIt = cmd.params.find("val");
+	}
 
 	if (addrIt == cmd.params.end() || valIt == cmd.params.end()) {
 		resp.success = false;
@@ -690,6 +681,9 @@ SocketResponse SocketServer::HandleReadBlock(Emulator* emu, const SocketCommand&
 
 	auto addrIt = cmd.params.find("addr");
 	auto lenIt = cmd.params.find("len");
+	if (lenIt == cmd.params.end()) {
+		lenIt = cmd.params.find("length");
+	}
 
 	if (addrIt == cmd.params.end() || lenIt == cmd.params.end()) {
 		resp.success = false;
@@ -749,6 +743,92 @@ SocketResponse SocketServer::HandleReadBlock(Emulator* emu, const SocketCommand&
 	}
 	ss << "\"";
 
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleWriteBlock(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	auto addrIt = cmd.params.find("addr");
+	auto hexIt = cmd.params.find("hex");
+
+	if (addrIt == cmd.params.end() || hexIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing addr or hex parameter";
+		return resp;
+	}
+
+	uint32_t addr = 0;
+	string addrStr = addrIt->second;
+	if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+		addr = std::stoul(addrStr.substr(2), nullptr, 16);
+	} else {
+		addr = std::stoul(addrStr, nullptr, 16);
+	}
+
+	string hexStr = hexIt->second;
+	string cleaned;
+	cleaned.reserve(hexStr.size());
+	for (char c : hexStr) {
+		if (std::isspace(static_cast<unsigned char>(c)) || c == ',') {
+			continue;
+		}
+		cleaned.push_back(c);
+	}
+
+	if (cleaned.empty()) {
+		resp.success = false;
+		resp.error = "Empty hex payload";
+		return resp;
+	}
+	if (cleaned.size() % 2 != 0) {
+		resp.success = false;
+		resp.error = "Hex payload must have an even length";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	MemoryType memType = MemoryType::SnesMemory;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		if(!TryParseMemoryType(memtypeIt->second, memType)) {
+			resp.success = false;
+			resp.error = "Unknown memtype: " + memtypeIt->second;
+			return resp;
+		}
+	}
+
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+	if(memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+
+	uint32_t byteCount = static_cast<uint32_t>(cleaned.size() / 2);
+	if(addr >= memSize || addr + byteCount > memSize) {
+		resp.success = false;
+		resp.error = "Address out of range";
+		return resp;
+	}
+
+	for(uint32_t i = 0; i < byteCount; i++) {
+		string byteStr = cleaned.substr(i * 2, 2);
+		uint8_t value = static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16));
+		dumper->SetMemoryValue(memType, addr + i, value, false);
+	}
+
+	stringstream ss;
+	ss << "{\"written\":" << byteCount << "}";
 	resp.success = true;
 	resp.data = ss.str();
 	return resp;
@@ -1309,8 +1389,15 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 		// Step by frames
 		debugger->Step(cpuType, frameCount, StepType::PpuStep);
 	} else {
-		// Just run for a bit if no debugger
-		emu->Resume();
+		if(frameCount != 1) {
+			resp.success = false;
+			resp.error = "Debugger required for multi-frame stepping";
+			return resp;
+		}
+		emu->PauseOnNextFrame();
+		if(emu->IsPaused()) {
+			emu->Resume();
+		}
 	}
 
 	resp.success = true;
@@ -1338,7 +1425,7 @@ SocketResponse SocketServer::HandleRomInfo(Emulator* emu, const SocketCommand& c
 
 	// Get filename from VirtualFile
 	string filename = romInfo.RomFile.GetFileName();
-	ss << "\"filename\":\"" << filename << "\",";
+	ss << "\"filename\":\"" << JsonEscape(filename) << "\",";
 
 	// ROM format
 	string formatName;
@@ -1453,7 +1540,7 @@ SocketResponse SocketServer::HandleCheat(Emulator* emu, const SocketCommand& cmd
 			if (!first) ss << ",";
 			first = false;
 
-			ss << "{\"code\":\"" << cheat.Code << "\",";
+			ss << "{\"code\":\"" << JsonEscape(cheat.Code) << "\",";
 			ss << "\"type\":" << static_cast<int>(cheat.Type) << "}";
 		}
 
@@ -1544,6 +1631,11 @@ SocketResponse SocketServer::HandleSpeed(Emulator* emu, const SocketCommand& cmd
 
 	// Parse multiplier (0 = max speed, 1 = normal, 2 = 2x, etc.)
 	double multiplier = std::stod(multiplierIt->second);
+	if (multiplier < 0) {
+		resp.success = false;
+		resp.error = "Multiplier must be >= 0";
+		return resp;
+	}
 
 	EmuSettings* settings = emu->GetSettings();
 	if (!settings) {
@@ -1734,6 +1826,298 @@ static string JsonEscape(const string& value)
 		}
 	}
 	return escaped;
+}
+
+static string Trim(string value)
+{
+	auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
+	while(!value.empty() && isSpace(value.front())) {
+		value.erase(value.begin());
+	}
+	while(!value.empty() && isSpace(value.back())) {
+		value.pop_back();
+	}
+	return value;
+}
+
+static void AppendUtf8(string& out, uint32_t codepoint)
+{
+	if(codepoint <= 0x7F) {
+		out.push_back(static_cast<char>(codepoint));
+	} else if(codepoint <= 0x7FF) {
+		out.push_back(static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F)));
+		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+	} else if(codepoint <= 0xFFFF) {
+		out.push_back(static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F)));
+		out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+	} else {
+		out.push_back(static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07)));
+		out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+		out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+	}
+}
+
+static bool ParseJsonString(const string& json, size_t& index, string& out, string& error)
+{
+	if(index >= json.size() || json[index] != '"') {
+		error = "Expected '\"' to start string";
+		return false;
+	}
+
+	index++; // skip opening quote
+	out.clear();
+	while(index < json.size()) {
+		char c = json[index++];
+		if(c == '"') {
+			return true;
+		}
+		if(c == '\\') {
+			if(index >= json.size()) {
+				error = "Unexpected end of escape sequence";
+				return false;
+			}
+			char esc = json[index++];
+			switch(esc) {
+				case '"': out.push_back('"'); break;
+				case '\\': out.push_back('\\'); break;
+				case '/': out.push_back('/'); break;
+				case 'b': out.push_back('\b'); break;
+				case 'f': out.push_back('\f'); break;
+				case 'n': out.push_back('\n'); break;
+				case 'r': out.push_back('\r'); break;
+				case 't': out.push_back('\t'); break;
+				case 'u': {
+					if(index + 3 >= json.size()) {
+						error = "Invalid unicode escape";
+						return false;
+					}
+					uint32_t codepoint = 0;
+					for(int i = 0; i < 4; i++) {
+						char h = json[index++];
+						codepoint <<= 4;
+						if(h >= '0' && h <= '9') codepoint |= (h - '0');
+						else if(h >= 'a' && h <= 'f') codepoint |= (h - 'a' + 10);
+						else if(h >= 'A' && h <= 'F') codepoint |= (h - 'A' + 10);
+						else {
+							error = "Invalid hex digit in unicode escape";
+							return false;
+						}
+					}
+					AppendUtf8(out, codepoint);
+					break;
+				}
+				default:
+					error = "Unsupported escape sequence";
+					return false;
+			}
+		} else {
+			out.push_back(c);
+		}
+	}
+
+	error = "Unterminated string";
+	return false;
+}
+
+static bool ParseJsonObject(const string& json, unordered_map<string, string>& out, string& error)
+{
+	out.clear();
+	size_t index = 0;
+	auto skipWhitespace = [&](void) {
+		while(index < json.size() && std::isspace(static_cast<unsigned char>(json[index]))) {
+			index++;
+		}
+	};
+
+	skipWhitespace();
+	if(index >= json.size() || json[index] != '{') {
+		error = "Expected '{' at start of JSON object";
+		return false;
+	}
+	index++;
+
+	while(true) {
+		skipWhitespace();
+		if(index >= json.size()) {
+			error = "Unexpected end of JSON object";
+			return false;
+		}
+		if(json[index] == '}') {
+			index++;
+			break;
+		}
+
+		string key;
+		if(!ParseJsonString(json, index, key, error)) {
+			return false;
+		}
+
+		skipWhitespace();
+		if(index >= json.size() || json[index] != ':') {
+			error = "Expected ':' after key";
+			return false;
+		}
+		index++;
+
+		skipWhitespace();
+		if(index >= json.size()) {
+			error = "Unexpected end of JSON object";
+			return false;
+		}
+
+		string value;
+		char c = json[index];
+		if(c == '"') {
+			if(!ParseJsonString(json, index, value, error)) {
+				return false;
+			}
+		} else if(c == '{' || c == '[') {
+			error = "Nested JSON values are not supported";
+			return false;
+		} else {
+			size_t start = index;
+			while(index < json.size()) {
+				char v = json[index];
+				if(v == ',' || v == '}' || std::isspace(static_cast<unsigned char>(v))) {
+					break;
+				}
+				index++;
+			}
+			value = Trim(json.substr(start, index - start));
+		}
+
+		out[key] = value;
+
+		skipWhitespace();
+		if(index >= json.size()) {
+			error = "Unexpected end of JSON object";
+			return false;
+		}
+		if(json[index] == ',') {
+			index++;
+			continue;
+		}
+		if(json[index] == '}') {
+			index++;
+			break;
+		}
+
+		error = "Expected ',' or '}' after value";
+		return false;
+	}
+
+	skipWhitespace();
+	if(index < json.size()) {
+		string trailing = Trim(json.substr(index));
+		if(!trailing.empty()) {
+			error = "Unexpected trailing characters";
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool ReadRequestLine(int clientFd, std::atomic<bool>& running, string& out, string& error)
+{
+	constexpr size_t kMaxRequestBytes = 1024 * 1024; // 1MB
+	constexpr int kTotalTimeoutMs = 5000;
+	constexpr int kPollSliceMs = 50;
+
+	out.clear();
+	error.clear();
+
+	auto finalizeIfHasData = [&]() -> bool {
+		while(!out.empty() && (out.back() == '\r' || out.back() == '\n')) {
+			out.pop_back();
+		}
+		return !out.empty();
+	};
+
+	int flags = fcntl(clientFd, F_GETFL, 0);
+	if(flags != -1) {
+		fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+	}
+
+	auto start = std::chrono::steady_clock::now();
+	while(running.load()) {
+		auto now = std::chrono::steady_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+		if(elapsed >= kTotalTimeoutMs) {
+			if(finalizeIfHasData()) {
+				return true;
+			}
+			error = "Timeout waiting for request";
+			return false;
+		}
+
+		int timeout = std::min<int>(kPollSliceMs, kTotalTimeoutMs - static_cast<int>(elapsed));
+		struct pollfd pfd;
+		pfd.fd = clientFd;
+		pfd.events = POLLIN;
+		pfd.revents = 0;
+
+		int ret = poll(&pfd, 1, timeout);
+		if(ret < 0) {
+			if(errno == EINTR) {
+				continue;
+			}
+			error = "Poll failed";
+			return false;
+		}
+		if(ret == 0) {
+			continue;
+		}
+		if(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			if(finalizeIfHasData()) {
+				return true;
+			}
+			error = "Client disconnected";
+			return false;
+		}
+		if(!(pfd.revents & POLLIN)) {
+			continue;
+		}
+
+		char buffer[4096];
+		ssize_t n = read(clientFd, buffer, sizeof(buffer));
+		if(n < 0) {
+			if(errno == EAGAIN || errno == EWOULDBLOCK) {
+				continue;
+			}
+			error = "Failed to read request";
+			return false;
+		}
+		if(n == 0) {
+			if(finalizeIfHasData()) {
+				return true;
+			}
+			error = "Client closed connection";
+			return false;
+		}
+
+		out.append(buffer, buffer + n);
+		if(out.size() > kMaxRequestBytes) {
+			error = "Request too large";
+			return false;
+		}
+
+		size_t newlinePos = out.find('\n');
+		if(newlinePos != string::npos) {
+			out.resize(newlinePos);
+			finalizeIfHasData();
+			return true;
+		}
+	}
+
+	if(finalizeIfHasData()) {
+		return true;
+	}
+
+	error = "Server shutting down";
+	return false;
 }
 
 SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cmd) {
@@ -2150,8 +2534,8 @@ SocketResponse SocketServer::HandleLabels(Emulator* emu, const SocketCommand& cm
 		stringstream ss;
 		ss << "{";
 		if (hasLabel) {
-			ss << "\"label\":\"" << labelInfo.Label << "\",";
-			ss << "\"comment\":\"" << labelInfo.Comment << "\"";
+			ss << "\"label\":\"" << JsonEscape(labelInfo.Label) << "\",";
+			ss << "\"comment\":\"" << JsonEscape(labelInfo.Comment) << "\"";
 		} else {
 			ss << "\"label\":null";
 		}
@@ -2449,7 +2833,7 @@ SocketResponse SocketServer::HandleBreakpoint(Emulator* emu, const SocketCommand
 			ss << ",\"type\":" << static_cast<int>(bp.type);
 			ss << ",\"enabled\":" << (bp.enabled ? "true" : "false");
 			if (!bp.condition.empty()) {
-				ss << ",\"condition\":\"" << bp.condition << "\"";
+				ss << ",\"condition\":\"" << JsonEscape(bp.condition) << "\"";
 			}
 			ss << "}";
 		}
