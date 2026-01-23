@@ -39,8 +39,8 @@
 		<DefineConstants></DefineConstants>
 	</PropertyGroup>
 	<PropertyGroup>
-		<CFBundleName>Mesen</CFBundleName> <!-- Also defines .app file name -->
-		<CFBundleDisplayName>Mesen</CFBundleDisplayName>
+		<CFBundleName>Mesen2 OOS</CFBundleName> <!-- Also defines .app file name -->
+		<CFBundleDisplayName>Mesen2 OOS</CFBundleDisplayName>
 		<CFBundleIdentifier>ca.mesen</CFBundleIdentifier>
 		<CFBundleVersion>1.0.0</CFBundleVersion>
 		<CFBundleShortVersionString>1.0</CFBundleShortVersionString>
