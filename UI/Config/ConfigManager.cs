@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Reflection;
 using Mesen.Interop;
 using System.Diagnostics;
@@ -38,9 +39,19 @@ namespace Mesen.Config
 
 		public static bool DisableSaveSettings { get; internal set; }
 
-		private static string? GetLegacyConfigFolder(string defaultFolder, string portableFolder)
+		private struct ConfigCandidate
 		{
-			var candidates = new List<string>();
+			public string Folder;
+			public DateTime LastWriteUtc;
+			public bool IsValid;
+			public bool IsFresh;
+			public int RecentCount;
+			public int BoundShortcutCount;
+		}
+
+		private static List<string> GetLegacyConfigFolders(string defaultFolder, string portableFolder)
+		{
+			List<string> candidates = new();
 			try {
 				string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments, Environment.SpecialFolderOption.Create);
 				if(!string.IsNullOrWhiteSpace(documentsPath)) {
@@ -57,8 +68,7 @@ namespace Mesen.Config
 			} catch {
 			}
 
-			string? bestFolder = null;
-			DateTime bestTimestamp = DateTime.MinValue;
+			List<string> legacyFolders = new();
 			foreach(string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase)) {
 				if(string.Equals(candidate, defaultFolder, StringComparison.OrdinalIgnoreCase) || string.Equals(candidate, portableFolder, StringComparison.OrdinalIgnoreCase)) {
 					continue;
@@ -66,15 +76,90 @@ namespace Mesen.Config
 
 				string settingsPath = Path.Combine(candidate, "settings.json");
 				if(File.Exists(settingsPath)) {
-					DateTime timestamp = File.GetLastWriteTimeUtc(settingsPath);
-					if(timestamp > bestTimestamp) {
-						bestTimestamp = timestamp;
-						bestFolder = candidate;
-					}
+					legacyFolders.Add(candidate);
 				}
 			}
 
-			return bestFolder;
+			return legacyFolders;
+		}
+
+		private static bool TryLoadConfigMetadata(string configPath, out bool isFresh, out int recentCount, out int boundShortcutCount)
+		{
+			isFresh = false;
+			recentCount = 0;
+			boundShortcutCount = 0;
+			try {
+				string fileData = File.ReadAllText(configPath);
+				Configuration? config = (Configuration?)JsonSerializer.Deserialize(fileData, typeof(Configuration), MesenSerializerContext.Default);
+				if(config == null) {
+					return false;
+				}
+
+				bool isFirstRun = config.ConfigUpgrade == (int)ConfigUpgradeHint.FirstRun;
+				bool isUninitialized = config.ConfigUpgrade == (int)ConfigUpgradeHint.Uninitialized;
+				if(config.Preferences?.ShortcutKeys != null) {
+					boundShortcutCount = config.Preferences.ShortcutKeys.Count(info =>
+						(info.KeyCombination != null && !info.KeyCombination.IsEmpty) ||
+						(info.KeyCombination2 != null && !info.KeyCombination2.IsEmpty)
+					);
+				}
+				if(config.RecentFiles?.Items != null) {
+					recentCount = config.RecentFiles.Items.Count;
+				}
+				isFresh = isFirstRun || (isUninitialized && boundShortcutCount == 0 && recentCount == 0);
+				return true;
+			} catch {
+				return false;
+			}
+		}
+
+		private static string? SelectBestConfigFolder(List<string> folders)
+		{
+			List<ConfigCandidate> candidates = new();
+			foreach(string folder in folders.Distinct(StringComparer.OrdinalIgnoreCase)) {
+				string configPath = Path.Combine(folder, "settings.json");
+				if(!File.Exists(configPath)) {
+					continue;
+				}
+
+				bool isValid = TryLoadConfigMetadata(configPath, out bool isFresh, out int recentCount, out int boundShortcutCount);
+				DateTime lastWrite = File.GetLastWriteTimeUtc(configPath);
+				candidates.Add(new ConfigCandidate() {
+					Folder = folder,
+					LastWriteUtc = lastWrite,
+					IsValid = isValid,
+					IsFresh = isFresh,
+					RecentCount = recentCount,
+					BoundShortcutCount = boundShortcutCount
+				});
+			}
+
+			if(candidates.Count == 0) {
+				return null;
+			}
+
+			IEnumerable<ConfigCandidate> selection = candidates;
+			List<ConfigCandidate> validCandidates = candidates.Where(c => c.IsValid).ToList();
+			if(validCandidates.Count > 0) {
+				selection = validCandidates;
+			}
+
+			List<ConfigCandidate> nonFresh = selection.Where(c => !c.IsFresh).ToList();
+			if(nonFresh.Count > 0) {
+				selection = nonFresh;
+			}
+			
+			List<ConfigCandidate> withRecent = selection.Where(c => c.RecentCount > 0).ToList();
+			if(withRecent.Count > 0) {
+				selection = withRecent;
+			} else {
+				List<ConfigCandidate> withShortcuts = selection.Where(c => c.BoundShortcutCount > 0).ToList();
+				if(withShortcuts.Count > 0) {
+					selection = withShortcuts;
+				}
+			}
+
+			return selection.OrderByDescending(c => c.LastWriteUtc).First().Folder;
 		}
 
 		public static string GetConfigFile()
@@ -213,35 +298,48 @@ namespace Mesen.Config
 			_homeFolder = null;
 		}
 
-			public static string HomeFolder {
-				get
-				{
-					if(_homeFolder == null) {
-						string? overrideFolder = Environment.GetEnvironmentVariable("MESEN2_HOME");
-						if(!string.IsNullOrWhiteSpace(overrideFolder)) {
-							_homeFolder = overrideFolder;
-							Directory.CreateDirectory(_homeFolder);
-							EmuApi.WriteLogEntry("[UI] Using MESEN2_HOME override: " + _homeFolder);
-							return _homeFolder;
-						}
+		public static string HomeFolder
+		{
+			get
+			{
+				if(_homeFolder == null) {
+					string? overrideFolder = Environment.GetEnvironmentVariable("MESEN2_HOME");
+					if(!string.IsNullOrWhiteSpace(overrideFolder)) {
+						_homeFolder = overrideFolder;
+						Directory.CreateDirectory(_homeFolder);
+						EmuApi.WriteLogEntry("[UI] Using MESEN2_HOME override: " + _homeFolder);
+						return _homeFolder;
+					}
 
-						string portableFolder = DefaultPortableFolder;
-						string documentsFolder = DefaultDocumentsFolder;
+					string portableFolder = DefaultPortableFolder;
+					string documentsFolder = DefaultDocumentsFolder;
 
+					List<string> candidates = new();
 					string portableConfig = Path.Combine(portableFolder, "settings.json");
 					string defaultConfig = Path.Combine(documentsFolder, "settings.json");
 					if(File.Exists(portableConfig)) {
+						candidates.Add(portableFolder);
+					}
+					if(File.Exists(defaultConfig)) {
+						candidates.Add(documentsFolder);
+					}
+
+					candidates.AddRange(GetLegacyConfigFolders(documentsFolder, portableFolder));
+
+					string? selectedFolder = SelectBestConfigFolder(candidates);
+					if(!string.IsNullOrWhiteSpace(selectedFolder)) {
+						_homeFolder = selectedFolder;
+						if(!string.Equals(selectedFolder, documentsFolder, StringComparison.OrdinalIgnoreCase) && !string.Equals(selectedFolder, portableFolder, StringComparison.OrdinalIgnoreCase)) {
+							EmuApi.WriteLogEntry("[UI] Using legacy config folder: " + _homeFolder);
+						} else {
+							EmuApi.WriteLogEntry("[UI] Using config folder: " + _homeFolder);
+						}
+					} else if(File.Exists(portableConfig)) {
 						_homeFolder = portableFolder;
 					} else if(File.Exists(defaultConfig)) {
 						_homeFolder = documentsFolder;
 					} else {
-						string? legacyFolder = GetLegacyConfigFolder(documentsFolder, portableFolder);
-						if(!string.IsNullOrWhiteSpace(legacyFolder)) {
-							_homeFolder = legacyFolder;
-							EmuApi.WriteLogEntry("[UI] Using legacy config folder: " + _homeFolder);
-						} else {
-							_homeFolder = documentsFolder;
-						}
+						_homeFolder = documentsFolder;
 					}
 
 					Directory.CreateDirectory(_homeFolder);
