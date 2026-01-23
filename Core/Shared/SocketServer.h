@@ -87,6 +87,7 @@ private:
 	static SocketResponse HandleWrite(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleWrite16(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleReadBlock(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleWriteBlock(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSaveState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadScript(Emulator* emu, const SocketCommand& cmd);
