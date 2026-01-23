@@ -5,18 +5,26 @@
 #include "SaveStateManager.h"
 #include "EmuSettings.h"
 #include "MessageManager.h"
+#include "RewindManager.h"
+#include "CheatManager.h"
+#include "RomInfo.h"
 #include "Core/Debugger/Debugger.h"
 #include "Core/Debugger/ScriptManager.h"
 #include "Core/Debugger/DebugTypes.h"
 #include "Core/Debugger/MemoryDumper.h"
+#include "Core/Debugger/LabelManager.h"
+#include "Core/Debugger/Breakpoint.h"
+#include "Core/Debugger/BreakpointManager.h"
 #include "SNES/SnesCpuTypes.h"
 #include "Shared/Video/VideoDecoder.h"
 #include "Utilities/HexUtilities.h"
+#include "Utilities/VirtualFile.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <poll.h>
+#include <chrono>
 
 using std::hex;
 using std::setw;
@@ -25,6 +33,15 @@ using std::fixed;
 using std::uppercase;
 using std::setprecision;
 using std::make_unique;
+
+// Static member definitions for memory snapshots
+unordered_map<string, MemorySnapshot> SocketServer::_snapshots;
+SimpleLock SocketServer::_snapshotLock;
+
+// Static member definitions for breakpoints
+vector<SocketBreakpoint> SocketServer::_breakpoints;
+uint32_t SocketServer::_nextBreakpointId = 1;
+SimpleLock SocketServer::_breakpointLock;
 
 string SocketResponse::ToJson() const {
 	stringstream ss;
@@ -69,6 +86,15 @@ void SocketServer::RegisterHandlers() {
 	_handlers["DISASM"] = HandleDisasm;
 	_handlers["STEP"] = HandleStep;
 	_handlers["FRAME"] = HandleRunFrame;
+	_handlers["ROMINFO"] = HandleRomInfo;
+	_handlers["REWIND"] = HandleRewind;
+	_handlers["CHEAT"] = HandleCheat;
+	_handlers["SPEED"] = HandleSpeed;
+	_handlers["SEARCH"] = HandleSearch;
+	_handlers["SNAPSHOT"] = HandleSnapshot;
+	_handlers["DIFF"] = HandleDiff;
+	_handlers["LABELS"] = HandleLabels;
+	_handlers["BREAKPOINT"] = HandleBreakpoint;
 }
 
 void SocketServer::RegisterHandler(const string& command, CommandHandler handler) {
@@ -248,7 +274,16 @@ SocketCommand SocketServer::ParseCommand(const string& json) {
 	};
 
 	// Common params
-	vector<string> commonParams = {"addr", "value", "len", "slot", "path", "name", "content", "buttons", "frames", "hex", "player", "count", "mode"};
+	vector<string> commonParams = {
+		"addr", "value", "len", "slot", "path", "name", "content",
+		"buttons", "frames", "hex", "player", "count", "mode",
+		// Emulation control params
+		"seconds", "action", "code", "format", "multiplier",
+		// Memory analysis params
+		"pattern", "memtype", "start", "end", "snapshot", "label", "comment",
+		// Breakpoint params
+		"id", "bptype", "startaddr", "endaddr", "enabled", "condition", "cputype"
+	};
 	for (const auto& param : commonParams) {
 		string val = extractParam(param);
 		if (!val.empty()) {
@@ -977,5 +1012,989 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 
 	resp.success = true;
 	resp.data = "\"OK\"";
+	return resp;
+}
+
+// ============================================================================
+// Emulation Control Handlers
+// ============================================================================
+
+SocketResponse SocketServer::HandleRomInfo(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	RomInfo& romInfo = emu->GetRomInfo();
+
+	stringstream ss;
+	ss << "{";
+
+	// Get filename from VirtualFile
+	string filename = romInfo.RomFile.GetFileName();
+	ss << "\"filename\":\"" << filename << "\",";
+
+	// ROM format
+	string formatName;
+	switch (romInfo.Format) {
+		case RomFormat::Sfc: formatName = "Sfc"; break;
+		case RomFormat::Spc: formatName = "Spc"; break;
+		case RomFormat::Gb: formatName = "Gb"; break;
+		case RomFormat::Gbs: formatName = "Gbs"; break;
+		case RomFormat::iNes: formatName = "iNes"; break;
+		case RomFormat::Unif: formatName = "Unif"; break;
+		case RomFormat::Fds: formatName = "Fds"; break;
+		case RomFormat::Nsf: formatName = "Nsf"; break;
+		case RomFormat::Pce: formatName = "Pce"; break;
+		case RomFormat::PceCdRom: formatName = "PceCdRom"; break;
+		case RomFormat::PceHes: formatName = "PceHes"; break;
+		case RomFormat::Sms: formatName = "Sms"; break;
+		case RomFormat::GameGear: formatName = "GameGear"; break;
+		case RomFormat::Sg: formatName = "Sg"; break;
+		case RomFormat::Gba: formatName = "Gba"; break;
+		default: formatName = "Unknown"; break;
+	}
+	ss << "\"format\":\"" << formatName << "\",";
+
+	// Console type
+	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType()) << ",";
+
+	// CRC32
+	ss << "\"crc32\":\"" << hex << uppercase << setw(8) << setfill('0') << emu->GetCrc32() << "\",";
+
+	// SHA1
+	ss << "\"sha1\":\"" << emu->GetHash(HashType::Sha1) << "\",";
+
+	// Frame count
+	ss << "\"frameCount\":" << std::dec << emu->GetFrameCount();
+
+	ss << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleRewind(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	RewindManager* rewindMgr = emu->GetRewindManager();
+	if (!rewindMgr) {
+		resp.success = false;
+		resp.error = "Rewind manager not available";
+		return resp;
+	}
+
+	if (!rewindMgr->HasHistory()) {
+		resp.success = false;
+		resp.error = "No rewind history available";
+		return resp;
+	}
+
+	// Get seconds to rewind (default 1)
+	uint32_t seconds = 1;
+	auto secondsIt = cmd.params.find("seconds");
+	if (secondsIt != cmd.params.end()) {
+		seconds = std::stoul(secondsIt->second);
+		if (seconds > 300) seconds = 300; // Max 5 minutes
+	}
+
+	rewindMgr->RewindSeconds(seconds);
+
+	resp.success = true;
+	resp.data = "\"OK\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleCheat(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	CheatManager* cheatMgr = emu->GetCheatManager();
+	if (!cheatMgr) {
+		resp.success = false;
+		resp.error = "Cheat manager not available";
+		return resp;
+	}
+
+	// Get action (add, list, clear)
+	string action = "list";
+	auto actionIt = cmd.params.find("action");
+	if (actionIt != cmd.params.end()) {
+		action = actionIt->second;
+	}
+
+	if (action == "list") {
+		// List current cheats
+		vector<CheatCode> cheats = cheatMgr->GetCheats();
+
+		stringstream ss;
+		ss << "{\"cheats\":[";
+
+		bool first = true;
+		for (const auto& cheat : cheats) {
+			if (!first) ss << ",";
+			first = false;
+
+			ss << "{\"code\":\"" << cheat.Code << "\",";
+			ss << "\"type\":" << static_cast<int>(cheat.Type) << "}";
+		}
+
+		ss << "],\"count\":" << cheats.size() << "}";
+
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "add") {
+		// Add a cheat code
+		auto codeIt = cmd.params.find("code");
+		if (codeIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing code parameter";
+			return resp;
+		}
+
+		// Determine cheat type based on format param or console type
+		CheatType type = CheatType::SnesProActionReplay; // Default for SNES
+
+		auto formatIt = cmd.params.find("format");
+		if (formatIt != cmd.params.end()) {
+			string fmt = formatIt->second;
+			if (fmt == "GameGenie" || fmt == "gamegenie") {
+				if (emu->GetConsoleType() == ConsoleType::Snes) {
+					type = CheatType::SnesGameGenie;
+				} else if (emu->GetConsoleType() == ConsoleType::Nes) {
+					type = CheatType::NesGameGenie;
+				} else if (emu->GetConsoleType() == ConsoleType::Gameboy) {
+					type = CheatType::GbGameGenie;
+				}
+			} else if (fmt == "ProActionReplay" || fmt == "par") {
+				if (emu->GetConsoleType() == ConsoleType::Snes) {
+					type = CheatType::SnesProActionReplay;
+				} else if (emu->GetConsoleType() == ConsoleType::Nes) {
+					type = CheatType::NesProActionRocky;
+				}
+			} else if (fmt == "GameShark" || fmt == "gameshark") {
+				type = CheatType::GbGameShark;
+			}
+		}
+
+		CheatCode cheat;
+		cheat.Type = type;
+		strncpy(cheat.Code, codeIt->second.c_str(), sizeof(cheat.Code) - 1);
+		cheat.Code[sizeof(cheat.Code) - 1] = '\0';
+
+		bool success = cheatMgr->AddCheat(cheat);
+
+		resp.success = success;
+		if (success) {
+			resp.data = "\"OK\"";
+		} else {
+			resp.error = "Failed to add cheat code";
+		}
+	}
+	else if (action == "clear") {
+		cheatMgr->ClearCheats();
+		resp.success = true;
+		resp.data = "\"OK\"";
+	}
+	else {
+		resp.success = false;
+		resp.error = "Unknown action: " + action;
+	}
+
+	return resp;
+}
+
+SocketResponse SocketServer::HandleSpeed(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto multiplierIt = cmd.params.find("multiplier");
+	if (multiplierIt == cmd.params.end()) {
+		// No multiplier provided - return current speed info
+		stringstream ss;
+		ss << "{\"fps\":" << fixed << setprecision(2) << emu->GetFps() << "}";
+		resp.success = true;
+		resp.data = ss.str();
+		return resp;
+	}
+
+	// Parse multiplier (0 = max speed, 1 = normal, 2 = 2x, etc.)
+	double multiplier = std::stod(multiplierIt->second);
+
+	EmuSettings* settings = emu->GetSettings();
+	if (!settings) {
+		resp.success = false;
+		resp.error = "Settings not available";
+		return resp;
+	}
+
+	// Get current emulation config and modify speed
+	EmulationConfig config = settings->GetEmulationConfig();
+
+	if (multiplier == 0) {
+		// Max speed - set a very high value
+		config.EmulationSpeed = 0; // 0 typically means unlimited in Mesen
+	} else {
+		// Normal speed multiplier (100 = 1x, 200 = 2x, etc.)
+		config.EmulationSpeed = static_cast<uint32_t>(multiplier * 100);
+	}
+
+	settings->SetEmulationConfig(config);
+
+	resp.success = true;
+	resp.data = "\"OK\"";
+	return resp;
+}
+
+// ============================================================================
+// Memory Analysis Handlers
+// ============================================================================
+
+// Helper to parse memory type from string
+static MemoryType ParseMemoryType(const string& memtype) {
+	if (memtype == "SnesMemory" || memtype.empty()) return MemoryType::SnesMemory;
+	if (memtype == "SnesWorkRam" || memtype == "WRAM") return MemoryType::SnesWorkRam;
+	if (memtype == "SnesSaveRam" || memtype == "SRAM") return MemoryType::SnesSaveRam;
+	if (memtype == "SnesPrgRom" || memtype == "ROM") return MemoryType::SnesPrgRom;
+	if (memtype == "SnesVideoRam" || memtype == "VRAM") return MemoryType::SnesVideoRam;
+	if (memtype == "SnesSpriteRam" || memtype == "OAM") return MemoryType::SnesSpriteRam;
+	if (memtype == "SnesCgRam" || memtype == "CGRAM") return MemoryType::SnesCgRam;
+	if (memtype == "SpcRam") return MemoryType::SpcRam;
+	return MemoryType::SnesMemory;
+}
+
+SocketResponse SocketServer::HandleSearch(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto patternIt = cmd.params.find("pattern");
+	if (patternIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing pattern parameter";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Parse pattern - space-separated hex bytes (e.g., "A9 00 8D")
+	string patternStr = patternIt->second;
+	vector<uint8_t> pattern;
+
+	size_t pos = 0;
+	while (pos < patternStr.size()) {
+		// Skip whitespace
+		while (pos < patternStr.size() && (patternStr[pos] == ' ' || patternStr[pos] == ',')) {
+			pos++;
+		}
+		if (pos >= patternStr.size()) break;
+
+		// Parse hex byte
+		size_t endPos = pos;
+		while (endPos < patternStr.size() && patternStr[endPos] != ' ' && patternStr[endPos] != ',') {
+			endPos++;
+		}
+
+		string byteStr = patternStr.substr(pos, endPos - pos);
+		if (byteStr.size() > 0) {
+			// Remove 0x prefix if present
+			if (byteStr.substr(0, 2) == "0x" || byteStr.substr(0, 2) == "0X") {
+				byteStr = byteStr.substr(2);
+			}
+			try {
+				pattern.push_back(static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16)));
+			} catch (...) {
+				// Skip invalid bytes
+			}
+		}
+		pos = endPos;
+	}
+
+	if (pattern.empty()) {
+		resp.success = false;
+		resp.error = "Invalid pattern";
+		return resp;
+	}
+
+	// Get memory type
+	MemoryType memType = MemoryType::SnesWorkRam;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		memType = ParseMemoryType(memtypeIt->second);
+	}
+
+	// Get search range
+	uint32_t startAddr = 0;
+	uint32_t endAddr = 0;
+
+	auto startIt = cmd.params.find("start");
+	auto endIt = cmd.params.find("end");
+
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+
+	if (startIt != cmd.params.end()) {
+		string s = startIt->second;
+		if (s.substr(0, 2) == "0x" || s.substr(0, 2) == "0X") {
+			startAddr = std::stoul(s.substr(2), nullptr, 16);
+		} else {
+			startAddr = std::stoul(s);
+		}
+	}
+
+	if (endIt != cmd.params.end()) {
+		string s = endIt->second;
+		if (s.substr(0, 2) == "0x" || s.substr(0, 2) == "0X") {
+			endAddr = std::stoul(s.substr(2), nullptr, 16);
+		} else {
+			endAddr = std::stoul(s);
+		}
+	} else {
+		endAddr = memSize > 0 ? memSize - 1 : 0x1FFFF;
+	}
+
+	// Search for pattern
+	vector<uint32_t> matches;
+	uint32_t maxMatches = 100; // Limit results
+
+	for (uint32_t addr = startAddr; addr <= endAddr - pattern.size() + 1 && matches.size() < maxMatches; addr++) {
+		bool found = true;
+		for (size_t i = 0; i < pattern.size() && found; i++) {
+			uint8_t memValue = dumper->GetMemoryValue(memType, addr + i);
+			if (memValue != pattern[i]) {
+				found = false;
+			}
+		}
+		if (found) {
+			matches.push_back(addr);
+		}
+	}
+
+	// Build response
+	stringstream ss;
+	ss << "{\"matches\":[";
+	for (size_t i = 0; i < matches.size(); i++) {
+		if (i > 0) ss << ",";
+		ss << "\"0x" << hex << uppercase << setw(6) << setfill('0') << matches[i] << "\"";
+	}
+	ss << "],\"count\":" << std::dec << matches.size() << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleSnapshot(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto nameIt = cmd.params.find("name");
+	if (nameIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing name parameter";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Get memory type
+	MemoryType memType = MemoryType::SnesWorkRam;
+	auto memtypeIt = cmd.params.find("memtype");
+	if (memtypeIt != cmd.params.end()) {
+		memType = ParseMemoryType(memtypeIt->second);
+	}
+
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+	uint32_t memSize = dumper->GetMemorySize(memType);
+
+	if (memSize == 0) {
+		resp.success = false;
+		resp.error = "Memory type not available or empty";
+		return resp;
+	}
+
+	// Create snapshot
+	MemorySnapshot snapshot;
+	snapshot.name = nameIt->second;
+	snapshot.memoryType = static_cast<uint32_t>(memType);
+	snapshot.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()
+	).count();
+
+	snapshot.data.resize(memSize);
+	dumper->GetMemoryState(memType, snapshot.data.data());
+
+	// Store snapshot
+	{
+		auto lock = _snapshotLock.AcquireSafe();
+		_snapshots[snapshot.name] = std::move(snapshot);
+	}
+
+	stringstream ss;
+	ss << "{\"name\":\"" << nameIt->second << "\",\"size\":" << memSize << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleDiff(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto snapshotIt = cmd.params.find("snapshot");
+	if (snapshotIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing snapshot parameter";
+		return resp;
+	}
+
+	// Find snapshot
+	MemorySnapshot snapshot;
+	{
+		auto lock = _snapshotLock.AcquireSafe();
+		auto it = _snapshots.find(snapshotIt->second);
+		if (it == _snapshots.end()) {
+			resp.success = false;
+			resp.error = "Snapshot not found: " + snapshotIt->second;
+			return resp;
+		}
+		snapshot = it->second;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	MemoryType memType = static_cast<MemoryType>(snapshot.memoryType);
+	auto dumper = dbg.GetDebugger()->GetMemoryDumper();
+
+	// Compare current memory to snapshot
+	vector<uint8_t> current(snapshot.data.size());
+	dumper->GetMemoryState(memType, current.data());
+
+	// Find differences
+	vector<std::tuple<uint32_t, uint8_t, uint8_t>> changes;
+	uint32_t maxChanges = 1000; // Limit results
+
+	for (size_t i = 0; i < snapshot.data.size() && changes.size() < maxChanges; i++) {
+		if (snapshot.data[i] != current[i]) {
+			changes.emplace_back(i, snapshot.data[i], current[i]);
+		}
+	}
+
+	// Build response
+	stringstream ss;
+	ss << "{\"changes\":[";
+	for (size_t i = 0; i < changes.size(); i++) {
+		if (i > 0) ss << ",";
+		auto& [addr, oldVal, newVal] = changes[i];
+		ss << "{\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << addr << "\",";
+		ss << "\"old\":\"0x" << setw(2) << (int)oldVal << "\",";
+		ss << "\"new\":\"0x" << setw(2) << (int)newVal << "\"}";
+	}
+	ss << "],\"count\":" << std::dec << changes.size() << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleLabels(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	LabelManager* labelMgr = dbg.GetDebugger()->GetLabelManager();
+	if (!labelMgr) {
+		resp.success = false;
+		resp.error = "Label manager not available";
+		return resp;
+	}
+
+	// Get action (set, get, lookup, clear)
+	string action = "get";
+	auto actionIt = cmd.params.find("action");
+	if (actionIt != cmd.params.end()) {
+		action = actionIt->second;
+	}
+
+	if (action == "set") {
+		// Set a label
+		auto addrIt = cmd.params.find("addr");
+		auto labelIt = cmd.params.find("label");
+
+		if (addrIt == cmd.params.end() || labelIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing addr or label parameter";
+			return resp;
+		}
+
+		uint32_t addr = 0;
+		string addrStr = addrIt->second;
+		if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+			addr = std::stoul(addrStr.substr(2), nullptr, 16);
+		} else {
+			addr = std::stoul(addrStr, nullptr, 16);
+		}
+
+		// Get memory type
+		MemoryType memType = MemoryType::SnesWorkRam;
+		auto memtypeIt = cmd.params.find("memtype");
+		if (memtypeIt != cmd.params.end()) {
+			memType = ParseMemoryType(memtypeIt->second);
+		}
+
+		// Get comment (optional)
+		string comment = "";
+		auto commentIt = cmd.params.find("comment");
+		if (commentIt != cmd.params.end()) {
+			comment = commentIt->second;
+		}
+
+		labelMgr->SetLabel(addr, memType, labelIt->second, comment);
+
+		resp.success = true;
+		resp.data = "\"OK\"";
+	}
+	else if (action == "get") {
+		// Get label at address
+		auto addrIt = cmd.params.find("addr");
+		if (addrIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing addr parameter";
+			return resp;
+		}
+
+		uint32_t addr = 0;
+		string addrStr = addrIt->second;
+		if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+			addr = std::stoul(addrStr.substr(2), nullptr, 16);
+		} else {
+			addr = std::stoul(addrStr, nullptr, 16);
+		}
+
+		MemoryType memType = MemoryType::SnesWorkRam;
+		auto memtypeIt = cmd.params.find("memtype");
+		if (memtypeIt != cmd.params.end()) {
+			memType = ParseMemoryType(memtypeIt->second);
+		}
+
+		AddressInfo addrInfo;
+		addrInfo.Address = addr;
+		addrInfo.Type = memType;
+
+		LabelInfo labelInfo;
+		bool hasLabel = labelMgr->GetLabelAndComment(addrInfo, labelInfo);
+
+		stringstream ss;
+		ss << "{";
+		if (hasLabel) {
+			ss << "\"label\":\"" << labelInfo.Label << "\",";
+			ss << "\"comment\":\"" << labelInfo.Comment << "\"";
+		} else {
+			ss << "\"label\":null";
+		}
+		ss << "}";
+
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "lookup") {
+		// Lookup address by label name
+		auto labelIt = cmd.params.find("label");
+		if (labelIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing label parameter";
+			return resp;
+		}
+
+		string labelName = labelIt->second;
+		AddressInfo addrInfo = labelMgr->GetLabelAbsoluteAddress(labelName);
+
+		if (addrInfo.Address >= 0) {
+			stringstream ss;
+			ss << "{\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << addrInfo.Address << "\",";
+			ss << "\"memtype\":" << std::dec << static_cast<int>(addrInfo.Type) << "}";
+			resp.success = true;
+			resp.data = ss.str();
+		} else {
+			resp.success = false;
+			resp.error = "Label not found: " + labelName;
+		}
+	}
+	else if (action == "clear") {
+		labelMgr->ClearLabels();
+		resp.success = true;
+		resp.data = "\"OK\"";
+	}
+	else {
+		resp.success = false;
+		resp.error = "Unknown action: " + action;
+	}
+
+	return resp;
+}
+
+// ============================================================================
+// Breakpoint Handlers
+// ============================================================================
+
+// This struct matches the Breakpoint class memory layout for API calls
+// The layout must match InteropBreakpoint from the C# interop layer
+#pragma pack(push, 1)
+struct BreakpointData {
+	uint32_t id;
+	CpuType cpuType;
+	MemoryType memoryType;
+	BreakpointTypeFlags type;
+	int32_t startAddr;
+	int32_t endAddr;
+	bool enabled;
+	bool markEvent;
+	bool ignoreDummyOperations;
+	char condition[1000];
+};
+#pragma pack(pop)
+
+static CpuType ParseCpuType(const string& cpuType) {
+	if (cpuType == "Snes" || cpuType.empty()) return CpuType::Snes;
+	if (cpuType == "Spc") return CpuType::Spc;
+	if (cpuType == "NecDsp") return CpuType::NecDsp;
+	if (cpuType == "Sa1") return CpuType::Sa1;
+	if (cpuType == "Gsu") return CpuType::Gsu;
+	if (cpuType == "Cx4") return CpuType::Cx4;
+	if (cpuType == "Gameboy") return CpuType::Gameboy;
+	if (cpuType == "Nes") return CpuType::Nes;
+	if (cpuType == "Pce") return CpuType::Pce;
+	if (cpuType == "Sms") return CpuType::Sms;
+	if (cpuType == "Gba") return CpuType::Gba;
+	return CpuType::Snes;
+}
+
+void SocketServer::SyncBreakpoints(Emulator* emu) {
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		return;
+	}
+
+	auto lock = _breakpointLock.AcquireSafe();
+
+	// Build array of BreakpointData matching Breakpoint class layout
+	vector<BreakpointData> bpData;
+	bpData.reserve(_breakpoints.size());
+
+	for (const auto& sbp : _breakpoints) {
+		if (!sbp.enabled) continue;
+
+		BreakpointData bp = {};
+		bp.id = sbp.id;
+		bp.cpuType = sbp.cpuType;
+		bp.memoryType = sbp.memoryType;
+		bp.type = static_cast<BreakpointTypeFlags>(sbp.type);
+		bp.startAddr = sbp.startAddr;
+		bp.endAddr = sbp.endAddr;
+		bp.enabled = sbp.enabled;
+		bp.markEvent = false;
+		bp.ignoreDummyOperations = false;
+
+		// Copy condition string
+		if (!sbp.condition.empty()) {
+			strncpy(bp.condition, sbp.condition.c_str(), sizeof(bp.condition) - 1);
+			bp.condition[sizeof(bp.condition) - 1] = '\0';
+		} else {
+			bp.condition[0] = '\0';
+		}
+
+		bpData.push_back(bp);
+	}
+
+	// Cast and call SetBreakpoints
+	// Note: BreakpointData layout matches Breakpoint class private members
+	dbg.GetDebugger()->SetBreakpoints(
+		reinterpret_cast<Breakpoint*>(bpData.data()),
+		static_cast<uint32_t>(bpData.size())
+	);
+}
+
+SocketResponse SocketServer::HandleBreakpoint(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	// Get action (add, remove, list, enable, disable, clear)
+	string action = "list";
+	auto actionIt = cmd.params.find("action");
+	if (actionIt != cmd.params.end()) {
+		action = actionIt->second;
+	}
+
+	if (action == "add") {
+		// Add a new breakpoint
+		auto addrIt = cmd.params.find("addr");
+		if (addrIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing addr parameter";
+			return resp;
+		}
+
+		uint32_t addr = 0;
+		string addrStr = addrIt->second;
+		if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+			addr = std::stoul(addrStr.substr(2), nullptr, 16);
+		} else {
+			addr = std::stoul(addrStr, nullptr, 16);
+		}
+
+		// Get breakpoint type (execute, read, write, or combination)
+		// Supports: "exec", "read", "write", or shorthand like "x", "r", "w", "rw", "xrw"
+		uint8_t bpType = static_cast<uint8_t>(BreakpointTypeFlags::Execute); // Default
+		auto bptypeIt = cmd.params.find("bptype");
+		if (bptypeIt != cmd.params.end()) {
+			string typeStr = bptypeIt->second;
+			bpType = 0;
+
+			// Check for full words first (to avoid false matches from substrings)
+			bool hasExec = typeStr.find("exec") != string::npos;
+			bool hasRead = typeStr.find("read") != string::npos;
+			bool hasWrite = typeStr.find("write") != string::npos;
+
+			// If no full words found, check for shorthand characters
+			// Only use single-char matching for short strings (e.g., "x", "rw", "xrw")
+			if (!hasExec && !hasRead && !hasWrite && typeStr.length() <= 4) {
+				for (char c : typeStr) {
+					if (c == 'x') hasExec = true;
+					if (c == 'r') hasRead = true;
+					if (c == 'w') hasWrite = true;
+				}
+			}
+
+			if (hasExec) bpType |= static_cast<uint8_t>(BreakpointTypeFlags::Execute);
+			if (hasRead) bpType |= static_cast<uint8_t>(BreakpointTypeFlags::Read);
+			if (hasWrite) bpType |= static_cast<uint8_t>(BreakpointTypeFlags::Write);
+
+			if (bpType == 0) {
+				bpType = static_cast<uint8_t>(BreakpointTypeFlags::Execute);
+			}
+		}
+
+		// Get end address (optional, for address range)
+		uint32_t endAddr = addr;
+		auto endaddrIt = cmd.params.find("endaddr");
+		if (endaddrIt != cmd.params.end()) {
+			string endAddrStr = endaddrIt->second;
+			if (endAddrStr.substr(0, 2) == "0x" || endAddrStr.substr(0, 2) == "0X") {
+				endAddr = std::stoul(endAddrStr.substr(2), nullptr, 16);
+			} else {
+				endAddr = std::stoul(endAddrStr, nullptr, 16);
+			}
+		}
+
+		// Get memory type
+		MemoryType memType = MemoryType::SnesMemory;
+		auto memtypeIt = cmd.params.find("memtype");
+		if (memtypeIt != cmd.params.end()) {
+			memType = ParseMemoryType(memtypeIt->second);
+		}
+
+		// Get CPU type
+		CpuType cpuType = CpuType::Snes;
+		auto cputypeIt = cmd.params.find("cputype");
+		if (cputypeIt != cmd.params.end()) {
+			cpuType = ParseCpuType(cputypeIt->second);
+		}
+
+		// Get condition (optional)
+		string condition = "";
+		auto condIt = cmd.params.find("condition");
+		if (condIt != cmd.params.end()) {
+			condition = condIt->second;
+		}
+
+		// Create the breakpoint
+		auto lock = _breakpointLock.AcquireSafe();
+		uint32_t newId = _nextBreakpointId++;
+
+		SocketBreakpoint sbp;
+		sbp.id = newId;
+		sbp.cpuType = cpuType;
+		sbp.memoryType = memType;
+		sbp.type = bpType;
+		sbp.startAddr = static_cast<int32_t>(addr);
+		sbp.endAddr = static_cast<int32_t>(endAddr);
+		sbp.enabled = true;
+		sbp.condition = condition;
+
+		_breakpoints.push_back(sbp);
+		lock.Release();
+
+		// Sync with emulator
+		SyncBreakpoints(emu);
+
+		stringstream ss;
+		ss << "{\"id\":" << newId << "}";
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "remove") {
+		// Remove a breakpoint by ID
+		auto idIt = cmd.params.find("id");
+		if (idIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing id parameter";
+			return resp;
+		}
+
+		uint32_t bpId = std::stoul(idIt->second);
+
+		auto lock = _breakpointLock.AcquireSafe();
+		auto it = std::find_if(_breakpoints.begin(), _breakpoints.end(),
+			[bpId](const SocketBreakpoint& bp) { return bp.id == bpId; });
+
+		if (it != _breakpoints.end()) {
+			_breakpoints.erase(it);
+			lock.Release();
+			SyncBreakpoints(emu);
+			resp.success = true;
+			resp.data = "\"OK\"";
+		} else {
+			resp.success = false;
+			resp.error = "Breakpoint not found: " + std::to_string(bpId);
+		}
+	}
+	else if (action == "list") {
+		// List all breakpoints
+		auto lock = _breakpointLock.AcquireSafe();
+
+		stringstream ss;
+		ss << "{\"breakpoints\":[";
+		bool first = true;
+		for (const auto& bp : _breakpoints) {
+			if (!first) ss << ",";
+			first = false;
+
+			ss << "{\"id\":" << bp.id;
+			ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << bp.startAddr << "\"";
+			if (bp.endAddr != bp.startAddr) {
+				ss << ",\"endaddr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << bp.endAddr << "\"";
+			}
+			ss << std::dec;
+			ss << ",\"type\":" << static_cast<int>(bp.type);
+			ss << ",\"enabled\":" << (bp.enabled ? "true" : "false");
+			if (!bp.condition.empty()) {
+				ss << ",\"condition\":\"" << bp.condition << "\"";
+			}
+			ss << "}";
+		}
+		ss << "]}";
+
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "enable" || action == "disable") {
+		// Enable or disable a breakpoint
+		auto idIt = cmd.params.find("id");
+		if (idIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing id parameter";
+			return resp;
+		}
+
+		uint32_t bpId = std::stoul(idIt->second);
+		bool enable = (action == "enable");
+
+		auto lock = _breakpointLock.AcquireSafe();
+		auto it = std::find_if(_breakpoints.begin(), _breakpoints.end(),
+			[bpId](const SocketBreakpoint& bp) { return bp.id == bpId; });
+
+		if (it != _breakpoints.end()) {
+			it->enabled = enable;
+			lock.Release();
+			SyncBreakpoints(emu);
+			resp.success = true;
+			resp.data = "\"OK\"";
+		} else {
+			resp.success = false;
+			resp.error = "Breakpoint not found: " + std::to_string(bpId);
+		}
+	}
+	else if (action == "clear") {
+		// Remove all breakpoints
+		auto lock = _breakpointLock.AcquireSafe();
+		_breakpoints.clear();
+		lock.Release();
+		SyncBreakpoints(emu);
+
+		resp.success = true;
+		resp.data = "\"OK\"";
+	}
+	else {
+		resp.success = false;
+		resp.error = "Unknown action: " + action;
+	}
+
 	return resp;
 }
