@@ -58,14 +58,37 @@ MacOSKeyManager::~MacOSKeyManager()
 
 void MacOSKeyManager::HandleModifiers(uint32_t flags)
 {
-	_keyState[116] = (flags & NX_DEVICELSHIFTKEYMASK) != 0; //Left shift
-	_keyState[117] = (flags & NX_DEVICERSHIFTKEYMASK) != 0; //Right shift
-	_keyState[118] = (flags & NX_DEVICELCTLKEYMASK) != 0; //Left ctrl
-	_keyState[119] = (flags & NX_DEVICERCTLKEYMASK) != 0; //Right ctrl
-	_keyState[120] = (flags & NX_DEVICELALTKEYMASK) != 0; //Left alt/option
-	_keyState[121] = (flags & NX_DEVICERALTKEYMASK) != 0; //Right alt/option
-	_keyState[70] = (flags & NX_DEVICELCMDKEYMASK) != 0; //Left cmd
-	_keyState[71] = (flags & NX_DEVICERCMDKEYMASK) != 0; //Right cmd
+	bool leftShift = (flags & NX_DEVICELSHIFTKEYMASK) != 0;
+	bool rightShift = (flags & NX_DEVICERSHIFTKEYMASK) != 0;
+	bool leftCtrl = (flags & NX_DEVICELCTLKEYMASK) != 0;
+	bool rightCtrl = (flags & NX_DEVICERCTLKEYMASK) != 0;
+	bool leftAlt = (flags & NX_DEVICELALTKEYMASK) != 0;
+	bool rightAlt = (flags & NX_DEVICERALTKEYMASK) != 0;
+	bool leftCmd = (flags & NX_DEVICELCMDKEYMASK) != 0;
+	bool rightCmd = (flags & NX_DEVICERCMDKEYMASK) != 0;
+
+	//Fallback when device-specific flags are not exposed by the OS.
+	if(!(leftShift || rightShift) && (flags & NSEventModifierFlagShift) != 0) {
+		leftShift = true;
+	}
+	if(!(leftCtrl || rightCtrl) && (flags & NSEventModifierFlagControl) != 0) {
+		leftCtrl = true;
+	}
+	if(!(leftAlt || rightAlt) && (flags & NSEventModifierFlagOption) != 0) {
+		leftAlt = true;
+	}
+	if(!(leftCmd || rightCmd) && (flags & NSEventModifierFlagCommand) != 0) {
+		leftCmd = true;
+	}
+
+	_keyState[116] = leftShift; //Left shift
+	_keyState[117] = rightShift; //Right shift
+	_keyState[118] = leftCtrl; //Left ctrl
+	_keyState[119] = rightCtrl; //Right ctrl
+	_keyState[120] = leftAlt; //Left alt/option
+	_keyState[121] = rightAlt; //Right alt/option
+	_keyState[70] = leftCmd; //Left cmd
+	_keyState[71] = rightCmd; //Right cmd
 }
 
 void MacOSKeyManager::RefreshState()
