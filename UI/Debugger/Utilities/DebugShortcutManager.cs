@@ -59,7 +59,7 @@ namespace Mesen.Debugger.Utilities
 					if(weakAction.TryGetTarget(out ContextMenuAction? act)) {
 						if(act.Shortcut != null) {
 							DbgShortKeys keys = act.Shortcut();
-							if(e.Key != Key.None && e.Key == keys.ShortcutKey && e.KeyModifiers == keys.Modifiers) {
+							if(IsShortcutMatch(e, keys)) {
 								if(action.RoutingStrategy == RoutingStrategies.Bubble && e.Source is Control ctrl && ctrl.Classes.Contains("PreventShortcuts")) {
 									return;
 								}
@@ -77,6 +77,22 @@ namespace Mesen.Debugger.Utilities
 			};
 
 			focusParent.AddHandler(InputElement.KeyDownEvent, handler, action.RoutingStrategy, handledEventsToo: true);
+		}
+
+		private static bool IsShortcutMatch(KeyEventArgs e, DbgShortKeys keys)
+		{
+			if(e.Key != Key.None && e.Key == keys.ShortcutKey && e.KeyModifiers == keys.Modifiers) {
+				return true;
+			}
+
+			// macOS: Ctrl+M can arrive as Ctrl+Enter/Return in Avalonia, which breaks the default Debug shortcut.
+			if(OperatingSystem.IsMacOS() && e.KeyModifiers == KeyModifiers.Control) {
+				if(keys.Modifiers == KeyModifiers.Control && keys.ShortcutKey == Key.M && e.Key == Key.Enter) {
+					return true;
+				}
+			}
+
+			return false;
 		}
 	}
 }
