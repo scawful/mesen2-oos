@@ -85,6 +85,100 @@ namespace Mesen.Config
 			return legacyFolders;
 		}
 
+		private static List<string> GetLegacyMesenFolders(string defaultFolder, string portableFolder)
+		{
+			List<string> candidates = new();
+			try {
+				string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments, Environment.SpecialFolderOption.Create);
+				if(!string.IsNullOrWhiteSpace(documentsPath)) {
+					candidates.Add(Path.Combine(documentsPath, "Mesen"));
+				}
+			} catch {
+			}
+
+			try {
+				string appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create);
+				if(!string.IsNullOrWhiteSpace(appDataPath)) {
+					candidates.Add(Path.Combine(appDataPath, "Mesen"));
+				}
+			} catch {
+			}
+
+			try {
+				string homePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.Create);
+				if(!string.IsNullOrWhiteSpace(homePath)) {
+					candidates.Add(Path.Combine(homePath, ".config", "Mesen"));
+				}
+			} catch {
+			}
+
+			List<string> legacyFolders = new();
+			foreach(string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase)) {
+				if(string.Equals(candidate, defaultFolder, StringComparison.OrdinalIgnoreCase) || string.Equals(candidate, portableFolder, StringComparison.OrdinalIgnoreCase)) {
+					continue;
+				}
+
+				string settingsPath = Path.Combine(candidate, "settings.json");
+				if(File.Exists(settingsPath) || Directory.Exists(Path.Combine(candidate, "SaveStates")) || Directory.Exists(Path.Combine(candidate, "Saves"))) {
+					legacyFolders.Add(candidate);
+				}
+			}
+
+			return legacyFolders;
+		}
+
+		private static void CopyDirectory(string sourceDir, string destDir)
+		{
+			try {
+				foreach(string dirPath in Directory.EnumerateDirectories(sourceDir, "*", SearchOption.AllDirectories)) {
+					string relative = Path.GetRelativePath(sourceDir, dirPath);
+					string target = Path.Combine(destDir, relative);
+					Directory.CreateDirectory(target);
+				}
+
+				foreach(string filePath in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories)) {
+					string relative = Path.GetRelativePath(sourceDir, filePath);
+					string target = Path.Combine(destDir, relative);
+					if(File.Exists(target)) {
+						continue;
+					}
+					Directory.CreateDirectory(Path.GetDirectoryName(target) ?? destDir);
+					File.Copy(filePath, target, false);
+				}
+			} catch {
+			}
+		}
+
+		private static void TryMigrateLegacyMesenFolder(string destinationFolder, string portableFolder, string documentsFolder)
+		{
+			try {
+				string markerPath = Path.Combine(destinationFolder, ".migrated-from-mesen");
+				if(File.Exists(markerPath)) {
+					return;
+				}
+
+				string destConfigPath = Path.Combine(destinationFolder, "settings.json");
+				if(File.Exists(destConfigPath)) {
+					return;
+				}
+
+				List<string> legacyFolders = GetLegacyMesenFolders(documentsFolder, portableFolder);
+				if(legacyFolders.Count == 0) {
+					return;
+				}
+
+				string? legacyFolder = SelectBestConfigFolder(legacyFolders);
+				if(string.IsNullOrWhiteSpace(legacyFolder)) {
+					return;
+				}
+
+				EmuApi.WriteLogEntry("[UI] Migrating legacy Mesen data from: " + legacyFolder);
+				CopyDirectory(legacyFolder, destinationFolder);
+				File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O"));
+			} catch {
+			}
+		}
+
 		private static bool TryLoadConfigMetadata(string configPath, out bool isFresh, out int recentCount, out int boundShortcutCount)
 		{
 			isFresh = false;
@@ -357,6 +451,7 @@ namespace Mesen.Config
 					}
 
 					Directory.CreateDirectory(_homeFolder);
+					TryMigrateLegacyMesenFolder(_homeFolder, portableFolder, documentsFolder);
 				}
 
 				return _homeFolder;
