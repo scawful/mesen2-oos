@@ -9,6 +9,7 @@ using System;
 using System.Linq;
 using System.IO;
 using System.IO.Compression;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Diagnostics;
@@ -127,6 +128,42 @@ namespace Mesen
 			}
 		}
 
+		private static IEnumerable<string> GetNativeLibrarySearchPaths(string libraryName)
+		{
+			List<string> paths = new();
+
+			void AddFolder(string? folder)
+			{
+				if(string.IsNullOrWhiteSpace(folder)) {
+					return;
+				}
+
+				string candidate = Path.Combine(folder, libraryName);
+				if(!paths.Contains(candidate, StringComparer.OrdinalIgnoreCase)) {
+					paths.Add(candidate);
+				}
+			}
+
+			AddFolder(Path.GetDirectoryName(ExePath));
+			AddFolder(AppContext.BaseDirectory);
+
+			try { AddFolder(ConfigManager.HomeFolder); } catch { }
+			try { AddFolder(ConfigManager.DefaultDocumentsFolder); } catch { }
+			try { AddFolder(ConfigManager.DefaultPortableFolder); } catch { }
+
+			try {
+				string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments, Environment.SpecialFolderOption.Create);
+				AddFolder(Path.Combine(docs, "Mesen2"));
+			} catch { }
+
+			try {
+				string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.Create);
+				AddFolder(Path.Combine(home, ".config", "Mesen2"));
+			} catch { }
+
+			return paths;
+		}
+
 		private static IntPtr DllImportResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
 		{
 			if(libraryName.Contains("Mesen") || libraryName.Contains("SkiaSharp") || libraryName.Contains("HarfBuzz")) {
@@ -147,7 +184,23 @@ namespace Mesen
 						libraryName = libraryName + ".dylib";
 					}
 				}
-				return NativeLibrary.Load(Path.Combine(ConfigManager.HomeFolder, libraryName));
+
+				foreach(string path in GetNativeLibrarySearchPaths(libraryName)) {
+					if(!File.Exists(path)) {
+						continue;
+					}
+					try {
+						return NativeLibrary.Load(path);
+					} catch {
+						//Try the next path.
+					}
+				}
+
+				try {
+					return NativeLibrary.Load(libraryName);
+				} catch {
+					return IntPtr.Zero;
+				}
 			}
 			return IntPtr.Zero;
 		}
