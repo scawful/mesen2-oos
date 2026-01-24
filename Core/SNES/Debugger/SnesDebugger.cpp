@@ -139,6 +139,11 @@ void SnesDebugger::ProcessInstruction()
 {
 	SnesCpuState& state = GetCpuState();
 	uint32_t pc = (state.K << 16) | state.PC;
+	
+	// Logpoints: Check if current PC has a logpoint registered
+	if (SocketServer::HasLogpoints()) {
+		SocketServer::CheckLogpoints(_cpuType, pc, _emu);
+	}
 
 	// P register change tracking: Log if P changed since last instruction
 	if (SocketServer::IsPRegisterWatchEnabled() && state.PS != _prevPRegister) {
@@ -584,18 +589,21 @@ void SnesDebugger::ProcessInputOverrides(DebugControllerState inputOverrides[8])
 	for(int i = 0; i < 8; i++) {
 		shared_ptr<SnesController> controller = std::dynamic_pointer_cast<SnesController>(controlManager->GetControlDeviceByIndex(i));
 		if(controller && inputOverrides[i].HasPressedButton()) {
-			controller->SetBitValue(SnesController::Buttons::A, inputOverrides[i].A);
-			controller->SetBitValue(SnesController::Buttons::B, inputOverrides[i].B);
-			controller->SetBitValue(SnesController::Buttons::X, inputOverrides[i].X);
-			controller->SetBitValue(SnesController::Buttons::Y, inputOverrides[i].Y);
-			controller->SetBitValue(SnesController::Buttons::L, inputOverrides[i].L);
-			controller->SetBitValue(SnesController::Buttons::R, inputOverrides[i].R);
-			controller->SetBitValue(SnesController::Buttons::Select, inputOverrides[i].Select);
-			controller->SetBitValue(SnesController::Buttons::Start, inputOverrides[i].Start);
-			controller->SetBitValue(SnesController::Buttons::Up, inputOverrides[i].Up);
-			controller->SetBitValue(SnesController::Buttons::Down, inputOverrides[i].Down);
-			controller->SetBitValue(SnesController::Buttons::Left, inputOverrides[i].Left);
-			controller->SetBitValue(SnesController::Buttons::Right, inputOverrides[i].Right);
+			// Only SET bits for buttons that are pressed in the override.
+			// Do NOT clear bits for buttons that are false, as that would
+			// override the user's real keyboard/controller input.
+			if(inputOverrides[i].A) controller->SetBit(SnesController::Buttons::A);
+			if(inputOverrides[i].B) controller->SetBit(SnesController::Buttons::B);
+			if(inputOverrides[i].X) controller->SetBit(SnesController::Buttons::X);
+			if(inputOverrides[i].Y) controller->SetBit(SnesController::Buttons::Y);
+			if(inputOverrides[i].L) controller->SetBit(SnesController::Buttons::L);
+			if(inputOverrides[i].R) controller->SetBit(SnesController::Buttons::R);
+			if(inputOverrides[i].Select) controller->SetBit(SnesController::Buttons::Select);
+			if(inputOverrides[i].Start) controller->SetBit(SnesController::Buttons::Start);
+			if(inputOverrides[i].Up) controller->SetBit(SnesController::Buttons::Up);
+			if(inputOverrides[i].Down) controller->SetBit(SnesController::Buttons::Down);
+			if(inputOverrides[i].Left) controller->SetBit(SnesController::Buttons::Left);
+			if(inputOverrides[i].Right) controller->SetBit(SnesController::Buttons::Right);
 		}
 	}
 	controlManager->RefreshHubState();
