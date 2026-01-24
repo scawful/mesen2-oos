@@ -76,9 +76,146 @@ Files & tooling:
 - `INPUT` - set input overrides.
 - `STATEINSPECT` - compact system/CPU/PPU summary + watch HUD text.
 - `STATEINSPECT` also includes `cpus` (per-CPU state) and `watchEntries` (structured watch data by CPU).
+- `BATCH` - execute multiple commands in a single request.
+
+### BATCH Command
+The `BATCH` command allows executing multiple commands in a single socket request, reducing round-trip latency for multi-read scenarios.
+
+Request format:
+```json
+{"type":"BATCH","commands":"[{\"type\":\"PING\"},{\"type\":\"READ\",\"addr\":\"0x7E0000\"}]"}
+```
+
+Response format:
+```json
+{"success":true,"data":{"results":[{"type":"PING","success":true,"data":"PONG"},{"type":"READ","success":true,"data":"0x42"}]}}
+```
+
+### TRACE Command
+The `TRACE` command retrieves execution history from the trace logger.
+
+Request format:
+```json
+{"type":"TRACE","count":"20","offset":"0"}
+```
+
+Response format:
+```json
+{"success":true,"data":{"count":20,"offset":0,"entries":[{"pc":"0x008000","cpu":0,"bytes":"A90042","disasm":"LDA #$42"}]}}
+```
+
+Note: Trace logging must be enabled in the debugger settings for entries to be captured.
+
+### P Register Tracking (new)
+Tracks changes to the SNES processor status register (P) with PC attribution.
+
+- `P_WATCH` - Enable/disable P register change logging.
+  - `action`: `start` | `stop` | `status`
+  - `depth`: Max changes to keep (default 1000)
+- `P_LOG` - Get recent P register changes.
+  - `count`: Number of changes to return (default 50)
+  - Returns: `[{pc, old_p, new_p, opcode, flags_changed, cycle}]`
+- `P_ASSERT` - Set breakpoint when P doesn't match expected value.
+  - `addr`: Address to check (hex string)
+  - `expected_p`: Expected P value (hex string)
+  - `mask`: Comparison mask (default 0xFF)
+
+### Memory Write Attribution (new)
+Tracks writes to watched memory regions with PC attribution.
+
+- `MEM_WATCH_WRITES` - Manage memory watches.
+  - `action`: `add` | `remove` | `list` | `clear`
+  - `addr`: Start address (hex string)
+  - `size`: Bytes to watch (default 1)
+  - `depth`: Max writes to keep (default 100)
+- `MEM_BLAME` - Get write history for watched address.
+  - `watch_id` or `addr`: Target to query
+  - Returns: `[{pc, addr, value, size, cycle, stack_pointer}]`
+
+### Symbol Table (new)
+Load and resolve Oracle symbol tables.
+
+- `SYMBOLS_LOAD` - Load symbols from JSON file.
+  - `file`: Path to symbol JSON
+  - `clear`: Clear existing symbols first (default false)
+- `SYMBOLS_RESOLVE` - Resolve symbol name to address.
+  - `symbol`: Symbol name
+  - Returns: `{addr, size, type}`
+
+Symbol file format:
+```json
+{
+  "Link_X_Pos": {"addr": "7E0022", "size": 2, "type": "word"},
+  "GameMode": {"addr": "7E0010", "size": 1, "type": "byte"}
+}
+```
+
+### Collision Overlay (new)
+Visualize ALTTP collision maps on screen.
+
+- `COLLISION_OVERLAY` - Toggle collision visualization.
+  - `action`: `enable` | `disable` | `status`
+  - `colmap`: `A` | `B` | `both` (default A)
+  - `highlight`: Array of tile types to highlight
+- `COLLISION_DUMP` - Export collision map data.
+  - `colmap`: `A` | `B`
+  - Returns: 2D array of collision values
+
+ALTTP collision maps:
+- COLMAPA: `$7F2000` - Primary collision map
+- COLMAPB: `$7F6000` - Secondary collision map
+- Water tiles: 0x09, 0x0A, 0x1A
 
 ### Roadmap (planned additions)
-- Structured watch data in socket responses (per-entry address/value/type).
-- Multi-CPU state inspector output (SPC/SA-1/GSU/Cx4).
-- Additional PPU fields and per-console display state.
+- Event subscription system for push notifications (breakpoint hits, frame completion).
+- Logpoints - log without halting execution.
+- Trace buffer - capture N instructions of execution history.
 - Optional binary/bulk memory read API for faster tooling.
+
+---
+
+## Building and Deployment
+
+### Build Commands
+
+**macOS (use make, not CMake):**
+```bash
+cd /Users/scawful/src/third_party/forks/Mesen2
+make clean && make
+```
+
+This builds:
+- `bin/osx-arm64/Release/MesenCore.dylib` - Core library with socket API
+- `bin/osx-arm64/Release/Mesen` - Executable
+
+### Running the Built Version
+
+**Important:** The installed `/Applications/Mesen.app` extracts its own `MesenCore.dylib`
+from a bundled Dependencies.zip on startup, overwriting any manual replacements.
+
+**To use the fork's new features, run directly from the build folder:**
+```bash
+cd /Users/scawful/src/third_party/forks/Mesen2/bin/osx-arm64/Release
+./Mesen
+```
+
+Or create an alias:
+```bash
+alias mesen-oos='/Users/scawful/src/third_party/forks/Mesen2/bin/osx-arm64/Release/Mesen'
+```
+
+### Socket Path
+Socket is created at `/tmp/mesen2-<pid>.sock` - check terminal output for exact path.
+
+### Testing Commands
+```bash
+# Find socket
+sock=$(ls /tmp/mesen2-*.sock | head -1)
+
+# Test P_WATCH
+echo '{"type":"P_WATCH","action":"start","depth":"500"}' | nc -U $sock
+
+# Test MEM_WATCH_WRITES
+echo '{"type":"MEM_WATCH_WRITES","action":"add","addr":"0x7E0116","size":"2"}' | nc -U $sock
+```
+

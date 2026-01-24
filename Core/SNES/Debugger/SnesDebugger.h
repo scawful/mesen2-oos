@@ -62,6 +62,7 @@ class SnesDebugger final : public IDebugger
 	MemoryType _cpuMemType;
 	uint8_t _prevOpCode = 0xFF;
 	uint32_t _prevProgramCounter = 0;
+	uint8_t _prevPRegister = 0;  // For P register change tracking
 
 	bool _predictiveBreakpoints = false;
 	bool _debuggerEnabled = false;

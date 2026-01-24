@@ -38,6 +38,7 @@
 #include "Utilities/Patches/IpsPatcher.h"
 #include "Utilities/CRC32.h"
 #include "Shared/MemoryOperationType.h"
+#include "Shared/SocketServer.h"
 
 SnesDebugger::SnesDebugger(Debugger* debugger, CpuType cpuType) : IDebugger(debugger->GetEmulator())
 {
@@ -138,6 +139,12 @@ void SnesDebugger::ProcessInstruction()
 {
 	SnesCpuState& state = GetCpuState();
 	uint32_t pc = (state.K << 16) | state.PC;
+
+	// P register change tracking: Log if P changed since last instruction
+	if (SocketServer::IsPRegisterWatchEnabled() && state.PS != _prevPRegister) {
+		SocketServer::LogPRegisterChange(_prevProgramCounter, _prevPRegister, state.PS, _prevOpCode, state.CycleCount);
+	}
+
 	AddressInfo addressInfo = GetAbsoluteAddress(pc);
 	uint8_t opCode = _memoryMappings->Peek(pc);
 	MemoryOperationInfo operation(pc, opCode, MemoryOperationType::ExecOpCode, _cpuMemType);
@@ -164,6 +171,7 @@ void SnesDebugger::ProcessInstruction()
 
 	_prevOpCode = opCode;
 	_prevProgramCounter = pc;
+	_prevPRegister = state.PS;  // Update for P register tracking
 
 	_step->ProcessCpuExec();
 
@@ -256,6 +264,18 @@ void SnesDebugger::ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationTyp
 	AddressInfo addressInfo = GetAbsoluteAddress(addr);
 	MemoryOperationInfo operation(addr, value, type, _cpuMemType);
 	InstructionProgress.LastMemOperation = operation;
+
+	// Memory write tracking: Log writes to watched addresses
+	// Convert CPU bus address to absolute WRAM address format (0x7Exxxx/0x7Fxxxx)
+	uint32_t absoluteAddr = addr;
+	if (addressInfo.Type == MemoryType::SnesWorkRam && addressInfo.Address >= 0) {
+		absoluteAddr = 0x7E0000 + addressInfo.Address;
+	}
+	if (SocketServer::HasMemoryWatch(absoluteAddr)) {
+		SnesCpuState& state = GetCpuState();
+		SocketServer::LogMemoryWrite(_prevProgramCounter, absoluteAddr, value, 1, state.CycleCount, state.SP);
+	}
+
 	if(addressInfo.Address >= 0 && (addressInfo.Type == MemoryType::SnesWorkRam || addressInfo.Type == MemoryType::SnesSaveRam)) {
 		_disassembler->InvalidateCache(addressInfo, _cpuType);
 	}

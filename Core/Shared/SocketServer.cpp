@@ -9,6 +9,7 @@
 #include "CheatManager.h"
 #include "RomInfo.h"
 #include "Core/Debugger/Debugger.h"
+#include "Core/Debugger/ITraceLogger.h"
 #include "Core/Debugger/ScriptManager.h"
 #include "Core/Debugger/DebugTypes.h"
 #include "Core/Debugger/Disassembler.h"
@@ -39,6 +40,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <limits>
+#include <fstream>
 
 using std::hex;
 using std::dec;
@@ -58,6 +60,23 @@ vector<SocketBreakpoint> SocketServer::_breakpoints;
 uint32_t SocketServer::_nextBreakpointId = 1;
 SimpleLock SocketServer::_breakpointLock;
 
+// Static member definitions for P register tracking
+std::deque<PRegisterChange> SocketServer::_pRegisterLog;
+uint32_t SocketServer::_pRegisterLogMaxSize = 1000;
+bool SocketServer::_pRegisterWatchEnabled = false;
+uint8_t SocketServer::_lastPRegister = 0;
+SimpleLock SocketServer::_pRegisterLock;
+
+// Static member definitions for memory write attribution
+vector<MemoryWatchRegion> SocketServer::_memoryWatches;
+unordered_map<uint32_t, std::deque<MemoryWriteRecord>> SocketServer::_memoryWriteLog;
+uint32_t SocketServer::_nextMemoryWatchId = 1;
+SimpleLock SocketServer::_memoryWatchLock;
+
+// Static member definitions for symbol table
+unordered_map<string, SymbolEntry> SocketServer::_symbolTable;
+SimpleLock SocketServer::_symbolLock;
+
 // Forward declarations for helper functions
 static string NormalizeKey(string value);
 static bool TryParseMemoryType(const string& memtype, MemoryType& outType);
@@ -71,6 +90,27 @@ static bool ReadRequestLine(int clientFd, std::atomic<bool>& running, string& ou
 static bool ParseJsonObject(const string& json, unordered_map<string, string>& out, string& error);
 static bool ParseJsonString(const string& json, size_t& index, string& out, string& error);
 static void AppendUtf8(string& out, uint32_t codepoint);
+static bool WriteAll(int clientFd, const string& data);
+
+static bool WriteAll(int clientFd, const string& data) {
+	const char* buffer = data.c_str();
+	size_t total = data.size();
+	size_t sent = 0;
+	while(sent < total) {
+		ssize_t result = write(clientFd, buffer + sent, total - sent);
+		if(result < 0) {
+			if(errno == EINTR) {
+				continue;
+			}
+			return false;
+		}
+		if(result == 0) {
+			break;
+		}
+		sent += static_cast<size_t>(result);
+	}
+	return sent == total;
+}
 
 string SocketResponse::ToJson() const {
 	stringstream ss;
@@ -127,11 +167,91 @@ void SocketServer::RegisterHandlers() {
 	_handlers["DIFF"] = HandleDiff;
 	_handlers["LABELS"] = HandleLabels;
 	_handlers["BREAKPOINT"] = HandleBreakpoint;
+	_handlers["BATCH"] = HandleBatch;
+	_handlers["TRACE"] = HandleTrace;
+
+	// P register tracking handlers
+	_handlers["P_WATCH"] = HandlePWatch;
+	_handlers["P_LOG"] = HandlePLog;
+	_handlers["P_ASSERT"] = HandlePAssert;
+
+	// Memory write attribution handlers
+	_handlers["MEM_WATCH_WRITES"] = HandleMemWatchWrites;
+	_handlers["MEM_BLAME"] = HandleMemBlame;
+
+	// Symbol table handlers
+	_handlers["SYMBOLS_LOAD"] = HandleSymbolsLoad;
+	_handlers["SYMBOLS_RESOLVE"] = HandleSymbolsResolve;
+
+	// Collision overlay handlers
+	_handlers["COLLISION_OVERLAY"] = HandleCollisionOverlay;
+	_handlers["COLLISION_DUMP"] = HandleCollisionDump;
 }
 
 void SocketServer::RegisterHandler(const string& command, CommandHandler handler) {
 	auto lock = _lock.AcquireSafe();
 	_handlers[command] = handler;
+}
+
+// Debugger hook: Log P register changes
+void SocketServer::LogPRegisterChange(uint32_t pc, uint8_t oldP, uint8_t newP, uint8_t opcode, uint64_t cycleCount) {
+	if (!_pRegisterWatchEnabled) return;
+	if (oldP == newP) return;  // No change
+
+	auto lock = _pRegisterLock.AcquireSafe();
+
+	PRegisterChange change;
+	change.pc = pc;
+	change.oldP = oldP;
+	change.newP = newP;
+	change.opcode = opcode;
+	change.cycleCount = cycleCount;
+
+	_pRegisterLog.push_back(change);
+
+	// Trim if over max size
+	while (_pRegisterLog.size() > _pRegisterLogMaxSize) {
+		_pRegisterLog.pop_front();
+	}
+}
+
+// Debugger hook: Check if any memory watch covers an address
+bool SocketServer::HasMemoryWatch(uint32_t addr) {
+	auto lock = _memoryWatchLock.AcquireSafe();
+	for (const auto& watch : _memoryWatches) {
+		if (addr >= watch.startAddr && addr <= watch.endAddr) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Debugger hook: Log memory writes for watched addresses
+void SocketServer::LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer) {
+	auto lock = _memoryWatchLock.AcquireSafe();
+
+	// Check all watches to see if this address is being watched
+	for (auto& watch : _memoryWatches) {
+		// Check if the write overlaps with the watch region
+		uint32_t writeEnd = addr + size - 1;
+		if (writeEnd >= watch.startAddr && addr <= watch.endAddr) {
+			// This write overlaps with the watch region
+			MemoryWriteRecord record;
+			record.pc = pc;
+			record.addr = addr;
+			record.value = value;
+			record.size = size;
+			record.cycleCount = cycleCount;
+			record.stackPointer = stackPointer;
+
+			_memoryWriteLog[watch.id].push_back(record);
+
+			// Trim if over max depth
+			while (_memoryWriteLog[watch.id].size() > watch.maxDepth) {
+				_memoryWriteLog[watch.id].pop_front();
+			}
+		}
+	}
 }
 
 void SocketServer::Start() {
@@ -230,7 +350,7 @@ void SocketServer::HandleClient(int clientFd) {
 			response.success = false;
 			response.error = readError;
 			string responseJson = response.ToJson() + "\n";
-			write(clientFd, responseJson.c_str(), responseJson.size());
+			WriteAll(clientFd, responseJson);
 		}
 		return;
 	}
@@ -242,7 +362,7 @@ void SocketServer::HandleClient(int clientFd) {
 		response.success = false;
 		response.error = parseError.empty() ? "Invalid request" : parseError;
 		string responseJson = response.ToJson() + "\n";
-		write(clientFd, responseJson.c_str(), responseJson.size());
+		WriteAll(clientFd, responseJson);
 		return;
 	}
 
@@ -269,7 +389,7 @@ void SocketServer::HandleClient(int clientFd) {
 	}
 
 	string responseJson = response.ToJson() + "\n";
-	write(clientFd, responseJson.c_str(), responseJson.size());
+	WriteAll(clientFd, responseJson);
 }
 
 bool SocketServer::ParseCommand(const string& json, SocketCommand& cmd, string& error) {
@@ -3069,3 +3189,1012 @@ SocketResponse SocketServer::HandleBreakpoint(Emulator* emu, const SocketCommand
 
 	return resp;
 }
+
+SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	// Parse commands array from params
+	auto commandsIt = cmd.params.find("commands");
+	if (commandsIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing commands parameter";
+		return resp;
+	}
+
+	// The commands value should be a JSON array string
+	// Format: [{"type":"PING"},{"type":"READ","addr":"0x7E0000"}]
+	string commandsJson = commandsIt->second;
+
+	// Parse JSON array of commands
+	vector<SocketCommand> subCommands;
+	string parseError;
+
+	// Simple JSON array parsing
+	size_t pos = 0;
+	while (pos < commandsJson.size() && commandsJson[pos] != '[') pos++;
+	if (pos >= commandsJson.size()) {
+		resp.success = false;
+		resp.error = "Invalid commands format - expected JSON array";
+		return resp;
+	}
+	pos++; // Skip '['
+
+	while (pos < commandsJson.size()) {
+		// Skip whitespace
+		while (pos < commandsJson.size() && std::isspace(commandsJson[pos])) pos++;
+
+		if (pos >= commandsJson.size() || commandsJson[pos] == ']') break;
+
+		// Find the start of an object
+		if (commandsJson[pos] != '{') {
+			if (commandsJson[pos] == ',') {
+				pos++;
+				continue;
+			}
+			break;
+		}
+
+		// Find matching closing brace
+		int braceCount = 1;
+		size_t start = pos;
+		pos++;
+		while (pos < commandsJson.size() && braceCount > 0) {
+			if (commandsJson[pos] == '{') braceCount++;
+			else if (commandsJson[pos] == '}') braceCount--;
+			pos++;
+		}
+
+		if (braceCount != 0) {
+			resp.success = false;
+			resp.error = "Invalid commands format - unmatched braces";
+			return resp;
+		}
+
+		string subJson = commandsJson.substr(start, pos - start);
+
+		// Parse the sub-command
+		SocketCommand subCmd;
+		string subError;
+		unordered_map<string, string> subParams;
+		if (!ParseJsonObject(subJson, subParams, subError)) {
+			resp.success = false;
+			resp.error = "Failed to parse sub-command: " + subError;
+			return resp;
+		}
+
+		auto typeIt = subParams.find("type");
+		if (typeIt == subParams.end()) {
+			resp.success = false;
+			resp.error = "Sub-command missing type field";
+			return resp;
+		}
+
+		subCmd.type = typeIt->second;
+		std::transform(subCmd.type.begin(), subCmd.type.end(), subCmd.type.begin(),
+			[](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+
+		subParams.erase(typeIt);
+		subCmd.params = std::move(subParams);
+		subCommands.push_back(std::move(subCmd));
+	}
+
+	if (subCommands.empty()) {
+		resp.success = false;
+		resp.error = "No commands in batch";
+		return resp;
+	}
+
+	// Execute each sub-command and collect results
+	stringstream ss;
+	ss << "{\"results\":[";
+
+	bool allSuccess = true;
+	for (size_t i = 0; i < subCommands.size(); i++) {
+		const SocketCommand& subCmd = subCommands[i];
+
+		if (i > 0) ss << ",";
+
+		// Find handler for this command type
+		CommandHandler handler = nullptr;
+		{
+			// Note: We can't use _lock here as it's an instance member, but handlers map is static
+			// and read-only after construction
+			auto it = std::find_if(
+				std::begin(std::initializer_list<std::pair<const char*, CommandHandler>>{
+					{"PING", HandlePing},
+					{"STATE", HandleState},
+					{"HEALTH", HandleHealth},
+					{"PAUSE", HandlePause},
+					{"RESUME", HandleResume},
+					{"RESET", HandleReset},
+					{"READ", HandleRead},
+					{"READ16", HandleRead16},
+					{"WRITE", HandleWrite},
+					{"WRITE16", HandleWrite16},
+					{"READBLOCK", HandleReadBlock},
+					{"WRITEBLOCK", HandleWriteBlock},
+					{"SAVESTATE", HandleSaveState},
+					{"LOADSTATE", HandleLoadState},
+					{"SCREENSHOT", HandleScreenshot},
+					{"CPU", HandleGetCpuState},
+					{"STATEINSPECT", HandleStateInspector},
+					{"DISASM", HandleDisasm},
+					{"STEP", HandleStep},
+					{"FRAME", HandleRunFrame},
+					{"ROMINFO", HandleRomInfo},
+					{"BREAKPOINT", HandleBreakpoint},
+					{"LABELS", HandleLabels},
+					{"SEARCH", HandleSearch},
+					{"SNAPSHOT", HandleSnapshot},
+					{"DIFF", HandleDiff}
+				}),
+				std::end(std::initializer_list<std::pair<const char*, CommandHandler>>{}),
+				[&subCmd](const std::pair<const char*, CommandHandler>& p) {
+					return subCmd.type == p.first;
+				}
+			);
+		}
+
+		// Try to find handler in the registered map
+		SocketResponse subResp;
+		if (subCmd.type == "PING") subResp = HandlePing(emu, subCmd);
+		else if (subCmd.type == "STATE") subResp = HandleState(emu, subCmd);
+		else if (subCmd.type == "HEALTH") subResp = HandleHealth(emu, subCmd);
+		else if (subCmd.type == "PAUSE") subResp = HandlePause(emu, subCmd);
+		else if (subCmd.type == "RESUME") subResp = HandleResume(emu, subCmd);
+		else if (subCmd.type == "RESET") subResp = HandleReset(emu, subCmd);
+		else if (subCmd.type == "READ") subResp = HandleRead(emu, subCmd);
+		else if (subCmd.type == "READ16") subResp = HandleRead16(emu, subCmd);
+		else if (subCmd.type == "WRITE") subResp = HandleWrite(emu, subCmd);
+		else if (subCmd.type == "WRITE16") subResp = HandleWrite16(emu, subCmd);
+		else if (subCmd.type == "READBLOCK") subResp = HandleReadBlock(emu, subCmd);
+		else if (subCmd.type == "WRITEBLOCK") subResp = HandleWriteBlock(emu, subCmd);
+		else if (subCmd.type == "SAVESTATE") subResp = HandleSaveState(emu, subCmd);
+		else if (subCmd.type == "LOADSTATE") subResp = HandleLoadState(emu, subCmd);
+		else if (subCmd.type == "SCREENSHOT") subResp = HandleScreenshot(emu, subCmd);
+		else if (subCmd.type == "CPU") subResp = HandleGetCpuState(emu, subCmd);
+		else if (subCmd.type == "STATEINSPECT") subResp = HandleStateInspector(emu, subCmd);
+		else if (subCmd.type == "DISASM") subResp = HandleDisasm(emu, subCmd);
+		else if (subCmd.type == "STEP") subResp = HandleStep(emu, subCmd);
+		else if (subCmd.type == "FRAME") subResp = HandleRunFrame(emu, subCmd);
+		else if (subCmd.type == "ROMINFO") subResp = HandleRomInfo(emu, subCmd);
+		else if (subCmd.type == "BREAKPOINT") subResp = HandleBreakpoint(emu, subCmd);
+		else if (subCmd.type == "LABELS") subResp = HandleLabels(emu, subCmd);
+		else if (subCmd.type == "SEARCH") subResp = HandleSearch(emu, subCmd);
+		else if (subCmd.type == "SNAPSHOT") subResp = HandleSnapshot(emu, subCmd);
+		else if (subCmd.type == "DIFF") subResp = HandleDiff(emu, subCmd);
+		else {
+			subResp.success = false;
+			subResp.error = "Unknown command in batch: " + subCmd.type;
+		}
+
+		if (!subResp.success) {
+			allSuccess = false;
+		}
+
+		// Add result to output
+		ss << "{\"type\":\"" << subCmd.type << "\",";
+		ss << "\"success\":" << (subResp.success ? "true" : "false");
+		if (!subResp.data.empty()) {
+			ss << ",\"data\":" << subResp.data;
+		}
+		if (!subResp.error.empty()) {
+			ss << ",\"error\":\"" << JsonEscape(subResp.error) << "\"";
+		}
+		ss << "}";
+	}
+
+	ss << "]}";
+
+	resp.success = allSuccess;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleTrace(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	auto dbg = emu->GetDebugger(true);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	// Get optional count parameter (default 20, max 100)
+	uint32_t count = 20;
+	auto countIt = cmd.params.find("count");
+	if (countIt != cmd.params.end()) {
+		count = std::stoul(countIt->second);
+		if (count > 100) count = 100;
+		if (count == 0) count = 1;
+	}
+
+	// Get optional offset parameter (default 0)
+	uint32_t offset = 0;
+	auto offsetIt = cmd.params.find("offset");
+	if (offsetIt != cmd.params.end()) {
+		offset = std::stoul(offsetIt->second);
+	}
+
+	// Allocate trace buffer
+	vector<TraceRow> traceRows(count);
+
+	// Get execution trace from debugger
+	uint32_t actualCount = dbg.GetDebugger()->GetExecutionTrace(traceRows.data(), offset, count);
+
+	// Build JSON response
+	stringstream ss;
+	ss << "{\"count\":" << actualCount << ",\"offset\":" << offset << ",\"entries\":[";
+
+	for (uint32_t i = 0; i < actualCount; i++) {
+		const TraceRow& row = traceRows[i];
+
+		if (i > 0) ss << ",";
+
+		ss << "{";
+		ss << "\"pc\":\"" << FormatHex(row.ProgramCounter, 6) << "\",";
+		ss << "\"cpu\":" << static_cast<int>(row.Type) << ",";
+
+		// Format bytecode as hex string
+		ss << "\"bytes\":\"";
+		for (int j = 0; j < row.ByteCodeSize && j < 8; j++) {
+			ss << hex << uppercase << setw(2) << setfill('0') << (int)row.ByteCode[j];
+		}
+		ss << dec << "\",";
+
+		// Add disassembly output (escaped)
+		string logOutput(row.LogOutput, std::min((uint32_t)row.LogSize, (uint32_t)sizeof(row.LogOutput)));
+		ss << "\"disasm\":\"" << JsonEscape(logOutput) << "\"";
+
+		ss << "}";
+	}
+
+	ss << "]}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+// ============================================================================
+// P Register Tracking Handlers
+// ============================================================================
+
+SocketResponse SocketServer::HandlePWatch(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	string action = "start";
+	auto actionIt = cmd.params.find("action");
+	if (actionIt != cmd.params.end()) {
+		action = actionIt->second;
+	}
+
+	if (action == "start") {
+		uint32_t depth = 1000;
+		auto depthIt = cmd.params.find("depth");
+		if (depthIt != cmd.params.end()) {
+			depth = std::stoul(depthIt->second);
+			if (depth < 10) depth = 10;
+			if (depth > 100000) depth = 100000;
+		}
+
+		auto lock = _pRegisterLock.AcquireSafe();
+		_pRegisterLogMaxSize = depth;
+		_pRegisterWatchEnabled = true;
+		_pRegisterLog.clear();
+
+		// Initialize last P register from current CPU state if available
+		if (emu && emu->IsRunning()) {
+			auto dbg = emu->GetDebugger(false);
+			if (dbg.GetDebugger()) {
+				SnesCpuState& cpu = static_cast<SnesCpuState&>(dbg.GetDebugger()->GetCpuStateRef(CpuType::Snes));
+				_lastPRegister = cpu.PS;
+			}
+		}
+
+		stringstream ss;
+		ss << "{\"enabled\":true,\"depth\":" << depth << "}";
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "stop") {
+		auto lock = _pRegisterLock.AcquireSafe();
+		_pRegisterWatchEnabled = false;
+
+		resp.success = true;
+		resp.data = "{\"enabled\":false}";
+	}
+	else if (action == "status") {
+		auto lock = _pRegisterLock.AcquireSafe();
+		stringstream ss;
+		ss << "{\"enabled\":" << (_pRegisterWatchEnabled ? "true" : "false");
+		ss << ",\"depth\":" << _pRegisterLogMaxSize;
+		ss << ",\"count\":" << _pRegisterLog.size() << "}";
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else {
+		resp.success = false;
+		resp.error = "Unknown action: " + action + ". Use start, stop, or status.";
+	}
+
+	return resp;
+}
+
+SocketResponse SocketServer::HandlePLog(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	uint32_t count = 50;
+	auto countIt = cmd.params.find("count");
+	if (countIt != cmd.params.end()) {
+		count = std::stoul(countIt->second);
+	}
+
+	auto lock = _pRegisterLock.AcquireSafe();
+
+	stringstream ss;
+	ss << "{\"entries\":[";
+
+	uint32_t outputCount = 0;
+	// Output from most recent to oldest
+	auto it = _pRegisterLog.rbegin();
+	while (it != _pRegisterLog.rend() && outputCount < count) {
+		if (outputCount > 0) ss << ",";
+
+		ss << "{\"pc\":\"0x" << hex << uppercase << setw(6) << setfill('0') << it->pc << "\"";
+		ss << ",\"old_p\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)it->oldP << "\"";
+		ss << ",\"new_p\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)it->newP << "\"";
+		ss << ",\"opcode\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)it->opcode << "\"";
+		ss << dec;
+
+		// Decode which flags changed
+		uint8_t changed = it->oldP ^ it->newP;
+		string flagsStr;
+		if (changed & ProcFlags::Negative) flagsStr += "N";
+		if (changed & ProcFlags::Overflow) flagsStr += "V";
+		if (changed & ProcFlags::MemoryMode8) flagsStr += "M";
+		if (changed & ProcFlags::IndexMode8) flagsStr += "X";
+		if (changed & ProcFlags::Decimal) flagsStr += "D";
+		if (changed & ProcFlags::IrqDisable) flagsStr += "I";
+		if (changed & ProcFlags::Zero) flagsStr += "Z";
+		if (changed & ProcFlags::Carry) flagsStr += "C";
+
+		ss << ",\"flags_changed\":\"" << flagsStr << "\"";
+		ss << ",\"cycle\":" << it->cycleCount;
+		ss << "}";
+
+		++it;
+		++outputCount;
+	}
+
+	ss << "],\"total\":" << _pRegisterLog.size();
+	ss << ",\"returned\":" << outputCount << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandlePAssert(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu || !emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	// Get address for the assertion
+	auto addrIt = cmd.params.find("addr");
+	if (addrIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing addr parameter";
+		return resp;
+	}
+
+	uint32_t addr = 0;
+	string addrStr = addrIt->second;
+	if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+		addr = std::stoul(addrStr.substr(2), nullptr, 16);
+	} else {
+		addr = std::stoul(addrStr, nullptr, 16);
+	}
+
+	// Get expected P value
+	auto expectedIt = cmd.params.find("expected_p");
+	if (expectedIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing expected_p parameter";
+		return resp;
+	}
+
+	uint8_t expectedP = 0;
+	string expStr = expectedIt->second;
+	if (expStr.substr(0, 2) == "0x" || expStr.substr(0, 2) == "0X") {
+		expectedP = static_cast<uint8_t>(std::stoul(expStr.substr(2), nullptr, 16));
+	} else {
+		expectedP = static_cast<uint8_t>(std::stoul(expStr, nullptr, 16));
+	}
+
+	// Get mask (optional, default 0xFF = check all bits)
+	uint8_t mask = 0xFF;
+	auto maskIt = cmd.params.find("mask");
+	if (maskIt != cmd.params.end()) {
+		string maskStr = maskIt->second;
+		if (maskStr.substr(0, 2) == "0x" || maskStr.substr(0, 2) == "0X") {
+			mask = static_cast<uint8_t>(std::stoul(maskStr.substr(2), nullptr, 16));
+		} else {
+			mask = static_cast<uint8_t>(std::stoul(maskStr, nullptr, 16));
+		}
+	}
+
+	// Create a conditional breakpoint with the P assertion
+	// Condition format: (P & mask) != expected
+	stringstream condSS;
+	condSS << "(P & 0x" << hex << uppercase << (int)mask << ") != 0x" << (int)expectedP;
+	string condition = condSS.str();
+
+	// Add the breakpoint using existing infrastructure
+	auto lock = _breakpointLock.AcquireSafe();
+	uint32_t newId = _nextBreakpointId++;
+
+	SocketBreakpoint sbp;
+	sbp.id = newId;
+	sbp.cpuType = CpuType::Snes;
+	sbp.memoryType = MemoryType::SnesMemory;
+	sbp.type = static_cast<uint8_t>(BreakpointTypeFlags::Execute);
+	sbp.startAddr = static_cast<int32_t>(addr);
+	sbp.endAddr = static_cast<int32_t>(addr);
+	sbp.enabled = true;
+	sbp.condition = condition;
+
+	_breakpoints.push_back(sbp);
+	lock.Release();
+
+	SyncBreakpoints(emu);
+
+	stringstream ss;
+	ss << "{\"id\":" << newId;
+	ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << addr << "\"";
+	ss << ",\"expected_p\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)expectedP << "\"";
+	ss << ",\"mask\":\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)mask << "\"";
+	ss << ",\"condition\":\"" << JsonEscape(condition) << "\"}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+// ============================================================================
+// Memory Write Attribution Handlers
+// ============================================================================
+
+SocketResponse SocketServer::HandleMemWatchWrites(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	// Get action (add, remove, list, clear)
+	string action = "add";
+	auto actionIt = cmd.params.find("action");
+	if (actionIt != cmd.params.end()) {
+		action = actionIt->second;
+	}
+
+	if (action == "add") {
+		// Get address
+		auto addrIt = cmd.params.find("addr");
+		if (addrIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing addr parameter";
+			return resp;
+		}
+
+		uint32_t addr = 0;
+		string addrStr = addrIt->second;
+		if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+			addr = std::stoul(addrStr.substr(2), nullptr, 16);
+		} else {
+			addr = std::stoul(addrStr, nullptr, 16);
+		}
+
+		// Get size (optional, default 1)
+		uint32_t size = 1;
+		auto sizeIt = cmd.params.find("size");
+		if (sizeIt != cmd.params.end()) {
+			size = std::stoul(sizeIt->second);
+			if (size < 1) size = 1;
+			if (size > 0x10000) size = 0x10000;
+		}
+
+		// Get depth (optional, default 100)
+		uint32_t depth = 100;
+		auto depthIt = cmd.params.find("depth");
+		if (depthIt != cmd.params.end()) {
+			depth = std::stoul(depthIt->second);
+			if (depth < 1) depth = 1;
+			if (depth > 10000) depth = 10000;
+		}
+
+		// Create watch region
+		auto lock = _memoryWatchLock.AcquireSafe();
+		uint32_t newId = _nextMemoryWatchId++;
+
+		MemoryWatchRegion watch;
+		watch.id = newId;
+		watch.startAddr = addr;
+		watch.endAddr = addr + size - 1;
+		watch.maxDepth = depth;
+
+		_memoryWatches.push_back(watch);
+		_memoryWriteLog[newId] = std::deque<MemoryWriteRecord>();
+
+		stringstream ss;
+		ss << "{\"watch_id\":" << newId;
+		ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << addr << "\"";
+		ss << ",\"size\":" << dec << size;
+		ss << ",\"depth\":" << depth << "}";
+
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "remove") {
+		auto idIt = cmd.params.find("watch_id");
+		if (idIt == cmd.params.end()) {
+			resp.success = false;
+			resp.error = "Missing watch_id parameter";
+			return resp;
+		}
+
+		uint32_t watchId = std::stoul(idIt->second);
+
+		auto lock = _memoryWatchLock.AcquireSafe();
+		auto it = std::find_if(_memoryWatches.begin(), _memoryWatches.end(),
+			[watchId](const MemoryWatchRegion& w) { return w.id == watchId; });
+
+		if (it != _memoryWatches.end()) {
+			_memoryWatches.erase(it);
+			_memoryWriteLog.erase(watchId);
+			resp.success = true;
+			resp.data = "\"OK\"";
+		} else {
+			resp.success = false;
+			resp.error = "Watch not found: " + std::to_string(watchId);
+		}
+	}
+	else if (action == "list") {
+		auto lock = _memoryWatchLock.AcquireSafe();
+
+		stringstream ss;
+		ss << "{\"watches\":[";
+		bool first = true;
+		for (const auto& w : _memoryWatches) {
+			if (!first) ss << ",";
+			first = false;
+			ss << "{\"watch_id\":" << w.id;
+			ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << w.startAddr << "\"";
+			ss << ",\"end_addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << w.endAddr << "\"";
+			ss << dec << ",\"depth\":" << w.maxDepth;
+			auto logIt = _memoryWriteLog.find(w.id);
+			ss << ",\"log_count\":" << (logIt != _memoryWriteLog.end() ? logIt->second.size() : 0);
+			ss << "}";
+		}
+		ss << "]}";
+
+		resp.success = true;
+		resp.data = ss.str();
+	}
+	else if (action == "clear") {
+		auto lock = _memoryWatchLock.AcquireSafe();
+		_memoryWatches.clear();
+		_memoryWriteLog.clear();
+		resp.success = true;
+		resp.data = "\"OK\"";
+	}
+	else {
+		resp.success = false;
+		resp.error = "Unknown action: " + action;
+	}
+
+	return resp;
+}
+
+SocketResponse SocketServer::HandleMemBlame(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	// Try to get watch_id first
+	auto watchIdIt = cmd.params.find("watch_id");
+	if (watchIdIt != cmd.params.end()) {
+		uint32_t watchId = std::stoul(watchIdIt->second);
+
+		auto lock = _memoryWatchLock.AcquireSafe();
+		auto logIt = _memoryWriteLog.find(watchId);
+		if (logIt == _memoryWriteLog.end()) {
+			resp.success = false;
+			resp.error = "Watch not found: " + std::to_string(watchId);
+			return resp;
+		}
+
+		// Output the write log
+		stringstream ss;
+		ss << "{\"writes\":[";
+		bool first = true;
+		for (const auto& rec : logIt->second) {
+			if (!first) ss << ",";
+			first = false;
+			ss << "{\"pc\":\"0x" << hex << uppercase << setw(6) << setfill('0') << rec.pc << "\"";
+			ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << rec.addr << "\"";
+			ss << ",\"value\":\"0x" << hex << uppercase << setw(rec.size * 2) << setfill('0') << rec.value << "\"";
+			ss << dec << ",\"size\":" << (int)rec.size;
+			ss << ",\"sp\":\"0x" << hex << uppercase << setw(4) << setfill('0') << rec.stackPointer << "\"";
+			ss << dec << ",\"cycle\":" << rec.cycleCount;
+			ss << "}";
+		}
+		ss << "],\"count\":" << logIt->second.size() << "}";
+
+		resp.success = true;
+		resp.data = ss.str();
+		return resp;
+	}
+
+	// Otherwise, try to get addr and search all watches
+	auto addrIt = cmd.params.find("addr");
+	if (addrIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing watch_id or addr parameter";
+		return resp;
+	}
+
+	uint32_t addr = 0;
+	string addrStr = addrIt->second;
+	if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
+		addr = std::stoul(addrStr.substr(2), nullptr, 16);
+	} else {
+		addr = std::stoul(addrStr, nullptr, 16);
+	}
+
+	// Find watches covering this address and collect writes
+	auto lock = _memoryWatchLock.AcquireSafe();
+	vector<MemoryWriteRecord> matchingWrites;
+
+	for (const auto& w : _memoryWatches) {
+		if (addr >= w.startAddr && addr <= w.endAddr) {
+			auto logIt = _memoryWriteLog.find(w.id);
+			if (logIt != _memoryWriteLog.end()) {
+				for (const auto& rec : logIt->second) {
+					if (rec.addr == addr) {
+						matchingWrites.push_back(rec);
+					}
+				}
+			}
+		}
+	}
+
+	// Output matching writes
+	stringstream ss;
+	ss << "{\"writes\":[";
+	bool first = true;
+	for (const auto& rec : matchingWrites) {
+		if (!first) ss << ",";
+		first = false;
+		ss << "{\"pc\":\"0x" << hex << uppercase << setw(6) << setfill('0') << rec.pc << "\"";
+		ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << rec.addr << "\"";
+		ss << ",\"value\":\"0x" << hex << uppercase << setw(rec.size * 2) << setfill('0') << rec.value << "\"";
+		ss << dec << ",\"size\":" << (int)rec.size;
+		ss << ",\"sp\":\"0x" << hex << uppercase << setw(4) << setfill('0') << rec.stackPointer << "\"";
+		ss << dec << ",\"cycle\":" << rec.cycleCount;
+		ss << "}";
+	}
+	ss << "],\"count\":" << matchingWrites.size() << "}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+// ============================================================================
+// Symbol Table Handlers
+// ============================================================================
+
+SocketResponse SocketServer::HandleSymbolsLoad(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	auto fileIt = cmd.params.find("file");
+	if (fileIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing file parameter";
+		return resp;
+	}
+
+	string filePath = fileIt->second;
+
+	// Read and parse JSON file
+	std::ifstream file(filePath);
+	if (!file.is_open()) {
+		resp.success = false;
+		resp.error = "Cannot open file: " + filePath;
+		return resp;
+	}
+
+	stringstream buffer;
+	buffer << file.rdbuf();
+	string content = buffer.str();
+
+	// Simple JSON parsing for symbol file
+	// Expected format: {"SymbolName": {"addr": "7E0022", "size": 2, "type": "word"}, ...}
+	auto lock = _symbolLock.AcquireSafe();
+
+	// Clear existing symbols if requested
+	auto clearIt = cmd.params.find("clear");
+	if (clearIt != cmd.params.end() && (clearIt->second == "true" || clearIt->second == "1")) {
+		_symbolTable.clear();
+	}
+
+	// Parse the JSON (basic parsing)
+	size_t count = 0;
+	size_t pos = 0;
+
+	while ((pos = content.find("\"", pos)) != string::npos) {
+		// Find symbol name
+		size_t nameStart = pos + 1;
+		size_t nameEnd = content.find("\"", nameStart);
+		if (nameEnd == string::npos) break;
+
+		string symbolName = content.substr(nameStart, nameEnd - nameStart);
+		pos = nameEnd + 1;
+
+		// Skip to the value object
+		size_t objStart = content.find("{", pos);
+		if (objStart == string::npos) break;
+
+		size_t objEnd = content.find("}", objStart);
+		if (objEnd == string::npos) break;
+
+		string objContent = content.substr(objStart, objEnd - objStart + 1);
+		pos = objEnd + 1;
+
+		// Parse addr
+		size_t addrPos = objContent.find("\"addr\"");
+		if (addrPos == string::npos) continue;
+
+		size_t addrValStart = objContent.find("\"", addrPos + 6);
+		if (addrValStart == string::npos) continue;
+		addrValStart++;
+
+		size_t addrValEnd = objContent.find("\"", addrValStart);
+		if (addrValEnd == string::npos) continue;
+
+		string addrStr = objContent.substr(addrValStart, addrValEnd - addrValStart);
+		uint32_t addr = std::stoul(addrStr, nullptr, 16);
+
+		// Parse size (optional, default 1)
+		uint8_t size = 1;
+		size_t sizePos = objContent.find("\"size\"");
+		if (sizePos != string::npos) {
+			size_t sizeValStart = objContent.find(":", sizePos);
+			if (sizeValStart != string::npos) {
+				sizeValStart++;
+				while (sizeValStart < objContent.size() && std::isspace(objContent[sizeValStart])) {
+					sizeValStart++;
+				}
+				size = static_cast<uint8_t>(std::stoul(objContent.substr(sizeValStart), nullptr, 10));
+			}
+		}
+
+		// Parse type (optional)
+		string type = "byte";
+		if (size == 2) type = "word";
+		else if (size == 3) type = "long";
+
+		size_t typePos = objContent.find("\"type\"");
+		if (typePos != string::npos) {
+			size_t typeValStart = objContent.find("\"", typePos + 6);
+			if (typeValStart != string::npos) {
+				typeValStart++;
+				size_t typeValEnd = objContent.find("\"", typeValStart);
+				if (typeValEnd != string::npos) {
+					type = objContent.substr(typeValStart, typeValEnd - typeValStart);
+				}
+			}
+		}
+
+		// Add to symbol table
+		SymbolEntry entry;
+		entry.name = symbolName;
+		entry.addr = addr;
+		entry.size = size;
+		entry.type = type;
+		_symbolTable[symbolName] = entry;
+		count++;
+	}
+
+	stringstream ss;
+	ss << "{\"loaded\":" << count << ",\"total\":" << _symbolTable.size() << "}";
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleSymbolsResolve(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	auto symbolIt = cmd.params.find("symbol");
+	if (symbolIt == cmd.params.end()) {
+		resp.success = false;
+		resp.error = "Missing symbol parameter";
+		return resp;
+	}
+
+	string symbolName = symbolIt->second;
+
+	auto lock = _symbolLock.AcquireSafe();
+	auto it = _symbolTable.find(symbolName);
+	if (it == _symbolTable.end()) {
+		resp.success = false;
+		resp.error = "Symbol not found: " + symbolName;
+		return resp;
+	}
+
+	const SymbolEntry& entry = it->second;
+	stringstream ss;
+	ss << "{\"name\":\"" << JsonEscape(entry.name) << "\"";
+	ss << ",\"addr\":\"0x" << hex << uppercase << setw(6) << setfill('0') << entry.addr << "\"";
+	ss << dec << ",\"size\":" << (int)entry.size;
+	ss << ",\"type\":\"" << entry.type << "\"}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+// ============================================================================
+// Collision Overlay Handlers
+// ============================================================================
+
+// Static state for collision overlay
+static bool _collisionOverlayEnabled = false;
+static string _collisionOverlayMode = "A";  // "A", "B", or "both"
+static vector<uint8_t> _collisionHighlightTiles;
+
+SocketResponse SocketServer::HandleCollisionOverlay(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	(void)emu;
+
+	// Check for enabled parameter
+	auto enabledIt = cmd.params.find("enabled");
+	if (enabledIt != cmd.params.end()) {
+		_collisionOverlayEnabled = (enabledIt->second == "true" || enabledIt->second == "1");
+	}
+
+	// Check for colmap parameter
+	auto colmapIt = cmd.params.find("colmap");
+	if (colmapIt != cmd.params.end()) {
+		string mode = colmapIt->second;
+		if (mode == "A" || mode == "a") _collisionOverlayMode = "A";
+		else if (mode == "B" || mode == "b") _collisionOverlayMode = "B";
+		else if (mode == "both" || mode == "BOTH") _collisionOverlayMode = "both";
+	}
+
+	// Check for highlight parameter (array of tile types to highlight)
+	auto highlightIt = cmd.params.find("highlight");
+	if (highlightIt != cmd.params.end()) {
+		_collisionHighlightTiles.clear();
+		// Parse comma-separated list of hex values
+		string highlights = highlightIt->second;
+		// Remove brackets if present
+		if (!highlights.empty() && highlights[0] == '[') {
+			highlights = highlights.substr(1);
+		}
+		if (!highlights.empty() && highlights.back() == ']') {
+			highlights.pop_back();
+		}
+
+		size_t pos = 0;
+		while (pos < highlights.size()) {
+			size_t end = highlights.find(',', pos);
+			if (end == string::npos) end = highlights.size();
+			string val = highlights.substr(pos, end - pos);
+			// Trim whitespace
+			size_t start = val.find_first_not_of(" \t");
+			size_t last = val.find_last_not_of(" \t");
+			if (start != string::npos && last != string::npos) {
+				val = val.substr(start, last - start + 1);
+			}
+			if (!val.empty()) {
+				uint8_t tileType = 0;
+				if (val.substr(0, 2) == "0x" || val.substr(0, 2) == "0X") {
+					tileType = static_cast<uint8_t>(std::stoul(val.substr(2), nullptr, 16));
+				} else {
+					tileType = static_cast<uint8_t>(std::stoul(val, nullptr, 16));
+				}
+				_collisionHighlightTiles.push_back(tileType);
+			}
+			pos = end + 1;
+		}
+	}
+
+	stringstream ss;
+	ss << "{\"enabled\":" << (_collisionOverlayEnabled ? "true" : "false");
+	ss << ",\"colmap\":\"" << _collisionOverlayMode << "\"";
+	ss << ",\"highlight\":[";
+	for (size_t i = 0; i < _collisionHighlightTiles.size(); i++) {
+		if (i > 0) ss << ",";
+		ss << "\"0x" << hex << uppercase << setw(2) << setfill('0') << (int)_collisionHighlightTiles[i] << "\"";
+	}
+	ss << "]}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleCollisionDump(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+
+	if (!emu || !emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		return resp;
+	}
+
+	// Get which collision map to dump
+	string colmap = "A";
+	auto colmapIt = cmd.params.find("colmap");
+	if (colmapIt != cmd.params.end()) {
+		colmap = colmapIt->second;
+		if (colmap != "A" && colmap != "a" && colmap != "B" && colmap != "b") {
+			colmap = "A";
+		}
+	}
+
+	// ALTTP collision map addresses:
+	// COLMAPA: $7F2000 (16KB, 64x64 tiles)
+	// COLMAPB: $7F6000 (16KB, 64x64 tiles)
+	uint32_t baseAddr = (colmap == "B" || colmap == "b") ? 0x7F6000 : 0x7F2000;
+
+	auto dbg = emu->GetDebugger(false);
+	if (!dbg.GetDebugger()) {
+		resp.success = false;
+		resp.error = "Debugger not available";
+		return resp;
+	}
+
+	Debugger* debugger = dbg.GetDebugger();
+	MemoryDumper* dumper = debugger->GetMemoryDumper();
+
+	// Read collision map (64x64 = 4096 tiles)
+	const int mapSize = 64;
+
+	stringstream ss;
+	ss << "{\"colmap\":\"" << colmap << "\",\"width\":" << mapSize << ",\"height\":" << mapSize;
+	ss << ",\"data\":[";
+
+	for (int y = 0; y < mapSize; y++) {
+		if (y > 0) ss << ",";
+		ss << "[";
+		for (int x = 0; x < mapSize; x++) {
+			if (x > 0) ss << ",";
+			uint32_t addr = baseAddr + (y * mapSize) + x;
+			uint8_t value = dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
+			ss << (int)value;
+		}
+		ss << "]";
+	}
+
+	ss << "]}";
+
+	resp.success = true;
+	resp.data = ss.str();
+	return resp;
+}
+
