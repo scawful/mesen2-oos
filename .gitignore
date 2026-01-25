@@ -193,3 +193,6 @@ packages/*
 
 TestHelper/*
 UI/Dependencies.zip
+
+__pycache__/*
+build-cmake/*

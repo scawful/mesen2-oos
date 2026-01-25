@@ -1,55 +1,21 @@
-# Mesen
+# Mesen2-OOS
 
-Mesen is a multi-system emulator (NES, SNES, Game Boy, Game Boy Advance, PC Engine, Master System/Game Gear) for Windows, Linux and macOS built in C++ and C#.  
+**The Hacker's SNES Emulator.**
 
-## Development Builds
+Mesen2-OOS is a specialized fork of Mesen2, optimized for:
+- **Oracle of Secrets** development.
+- **Advanced Reverse Engineering:** Deep integration with external tools via sockets/gRPC.
+- **Automation:** First-class support for headless operation and AI agent control.
 
-[![Mesen](https://github.com/SourMesen/Mesen2/actions/workflows/build.yml/badge.svg)](https://github.com/SourMesen/Mesen2/actions/workflows/build.yml)
+## Mission
+Unlike the upstream Mesen2, which aims for accuracy and user experience, this fork prioritizes **developer ergonomics** and **instrumentation**. We break things to make them observable.
 
-#### <ins>Native builds</ins> ####
+## Key Features
+- **Socket API:** Control the emulator from Python/Node/Go.
+- **Headless Mode:** Run tests in CI without a display.
+- **Custom Debuggers:** Specialized views for Zelda 3 and Oracle of Secrets memory structures.
 
-These builds don't require .NET to be installed and offer improved start up times.  
-
-* [Windows 10 / 11](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Windows%20-%20net8.0%20-%20AoT%29.zip)
-* [Linux](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-20.04%20-%20clang_aot%29.zip)  (requires **SDL2**)
-
-#### <ins>.NET builds</ins> ####
-
-These builds require **.NET 8** to be installed (except the Windows 7 build which requires .NET 6).  
-For Linux and macOS, **SDL2** must also be installed.
-
-* [Windows 10 / 11](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Windows%20-%20net8.0%29.zip)  
-* [Windows 7 / 8 (.NET 6)](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Windows%20-%20net6.0%29.zip)  
-* [macOS - Intel](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28macOS%20-%20macos-12%29.zip)  
-* [macOS - Apple Silicon](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28macOS%20-%20macos-14%29.zip)  
-* [Linux](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20%28Linux%20-%20ubuntu-20.04%20-%20clang%29.zip)  
-* [Linux - AppImage](https://nightly.link/SourMesen/Mesen2/workflows/build/master/Mesen%20(Linux%20x64%20-%20AppImage).zip)
-
-#### <ins>Notes / limitations</ins> ####
-
-**macOS**: The macOS build still has a number of limitations (e.g no gamepad support).
-
-**SteamOS**: See [SteamOS.md](SteamOS.md)
-
-## Compiling
-
-See [COMPILING.md](COMPILING.md)
-
-## License
-
-Mesen is available under the GPL V3 license.  Full text here: <http://www.gnu.org/licenses/gpl-3.0.en.html>
-
-Copyright (C) 2014-2024 Sour
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+## Build
+```bash
+make
+```

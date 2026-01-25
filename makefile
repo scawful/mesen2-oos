@@ -25,6 +25,7 @@ SDL2INC := $(shell sdl2-config --cflags)
 LINKCHECKUNRESOLVED := -Wl,-z,defs
 
 LINKOPTIONS :=
+CXXSTDLIBS :=
 LINKSHARED := -shared
 MESENOS :=
 UNAME_S := $(shell uname -s)
@@ -98,14 +99,16 @@ ifneq ($(STATICLINK),false)
 endif
 
 ifeq ($(MESENOS),osx)
-	LINKOPTIONS += -framework Foundation -framework Cocoa -lc++
+	LINKOPTIONS += -framework Foundation -framework Cocoa
+	CXXSTDLIBS += -lc++
 endif
 
 CXX_PATH := $(shell command -v $(CXX) 2>/dev/null)
 ifneq ($(findstring $(LLVM_PREFIX),$(CXX_PATH)),)
 	LLVM_LIBCXX := $(LLVM_PREFIX)/lib/c++
 	ifneq ($(wildcard $(LLVM_LIBCXX)/libc++.1.dylib),)
-		LINKOPTIONS += -L$(LLVM_LIBCXX) -Wl,-rpath,$(LLVM_LIBCXX) -lc++ -lc++abi
+		LINKOPTIONS += -L$(LLVM_LIBCXX) -Wl,-rpath,$(LLVM_LIBCXX)
+		CXXSTDLIBS += -lc++ -lc++abi
 	endif
 endif
 
@@ -216,7 +219,7 @@ pgohelper: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 InteropDLL/$(OBJFOLDER)/$(SHAREDLIB): $(SEVENZIPOBJ) $(LUAOBJ) $(UTILOBJ) $(COREOBJ) $(SDLOBJ) $(LIBEVDEVOBJ) $(LINUXOBJ) $(DLLOBJ) $(MACOSOBJ)
 	mkdir -p bin
 	mkdir -p InteropDLL/$(OBJFOLDER)
-	$(CXX) $(CXXFLAGS) $(LINKOPTIONS) $(LINKCHECKUNRESOLVED) $(LINKSHARED) -o $(SHAREDLIB) $(DLLOBJ) $(SEVENZIPOBJ) $(LUAOBJ) $(LINUXOBJ) $(MACOSOBJ) $(LIBEVDEVOBJ) $(UTILOBJ) $(SDLOBJ) $(COREOBJ) $(SDL2INC) -pthread $(FSLIB) $(SDL2LIB) $(LIBEVDEVLIB) $(X11LIB)
+	$(CXX) $(CXXFLAGS) $(LINKOPTIONS) $(LINKCHECKUNRESOLVED) $(LINKSHARED) -o $(SHAREDLIB) $(DLLOBJ) $(SEVENZIPOBJ) $(LUAOBJ) $(LINUXOBJ) $(MACOSOBJ) $(LIBEVDEVOBJ) $(UTILOBJ) $(SDLOBJ) $(COREOBJ) $(SDL2INC) -pthread $(FSLIB) $(SDL2LIB) $(LIBEVDEVLIB) $(X11LIB) $(CXXSTDLIBS)
 	cp $(SHAREDLIB) bin/pgohelperlib.so
 	mv $(SHAREDLIB) InteropDLL/$(OBJFOLDER)
 
