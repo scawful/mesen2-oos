@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Mesen.Config;
 using Mesen.Utilities;
 using ReactiveUI.Fody.Helpers;
 
@@ -19,6 +20,15 @@ namespace Mesen.ViewModels
 
 		[Reactive] public string StateLibrarySummary { get; private set; } = "No state library loaded.";
 		[Reactive] public string StateLibraryPath { get; private set; } = "";
+		[Reactive] public string SaveStateConfigSummary { get; private set; } = "";
+		[Reactive] public string SaveStateFolder { get; private set; } = "";
+		[Reactive] public UInt32 SaveStateSlotCount { get; set; }
+		[Reactive] public bool SeparateSaveStatesByPatch { get; set; }
+
+		public OracleControlCenterViewModel()
+		{
+			RefreshSaveStateConfig();
+		}
 
 		public async Task RefreshStatusAsync()
 		{
@@ -35,6 +45,40 @@ namespace Mesen.ViewModels
 				? "No labeled states saved yet."
 				: $"{count} labeled state{(count == 1 ? "" : "s")} (latest: {latest})";
 			StateLibraryPath = "Library path: " + OracleStateLibrary.GetLibraryRootPath();
+		}
+
+		public void RefreshSaveStateConfig()
+		{
+			var prefs = ConfigManager.Config.Preferences;
+			SaveStateSlotCount = prefs.SaveStateSlotCount == 0 ? 20 : prefs.SaveStateSlotCount;
+			SeparateSaveStatesByPatch = prefs.SeparateSaveStatesByPatch;
+			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;
+			UpdateSaveStateSummary();
+		}
+
+		public void ApplySaveStateConfig()
+		{
+			var prefs = ConfigManager.Config.Preferences;
+			if(SaveStateSlotCount < 1) {
+				SaveStateSlotCount = 1;
+			} else if(SaveStateSlotCount > 99) {
+				SaveStateSlotCount = 99;
+			}
+
+			prefs.SaveStateSlotCount = SaveStateSlotCount;
+			prefs.SeparateSaveStatesByPatch = SeparateSaveStatesByPatch;
+			prefs.ApplyConfig();
+			ConfigManager.Config.Save();
+
+			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;
+			UpdateSaveStateSummary();
+		}
+
+		private void UpdateSaveStateSummary()
+		{
+			uint autoSlot = SaveStateSlotCount + 1;
+			string patchMode = SeparateSaveStatesByPatch ? "per patch" : "shared";
+			SaveStateConfigSummary = $"Slots: {SaveStateSlotCount} (auto: {autoSlot}) · {patchMode}";
 		}
 
 		private void ApplySnapshot(OracleStatusSnapshot snapshot)

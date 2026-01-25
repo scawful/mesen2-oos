@@ -75,6 +75,16 @@ namespace Mesen.Windows
 			OracleAgentLauncher.OpenOracleSavestateLibrary();
 		}
 
+		private void OnApplySaveStateSettingsClick(object? sender, RoutedEventArgs e)
+		{
+			ViewModel.ApplySaveStateConfig();
+		}
+
+		private async void OnLabelSaveStateSlotClick(object? sender, RoutedEventArgs e)
+		{
+			await OracleStateActions.LabelSaveStateSlotAsync(this);
+		}
+
 		private void OnToggleOverlayClick(object? sender, RoutedEventArgs e)
 		{
 			if(sender is Button button && button.Tag is string property) {

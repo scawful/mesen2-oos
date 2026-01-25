@@ -1115,6 +1115,16 @@ namespace Mesen.ViewModels
 			};
 		}
 
+		private MainMenuAction CreateOracleActionWithOutput(string label, string action, Func<bool>? isEnabled = null)
+		{
+			return new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				CustomText = label,
+				IsEnabled = isEnabled,
+				OnClick = () => OracleAgentLauncher.RunGatewayActionWithOutput(action, label)
+			};
+		}
+
 		private MainMenuAction CreateOracleCommand(string label, Action onClick, Func<bool>? isEnabled = null)
 		{
 			return new MainMenuAction() {
@@ -1184,6 +1194,7 @@ namespace Mesen.ViewModels
 					CustomText = "Save States",
 					SubActions = new List<object>() {
 						CreateOracleCommand("Save Labeled State...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
+						CreateOracleCommand("Label Save State Slot...", () => { _ = OracleStateActions.LabelSaveStateSlotAsync(wnd); }, () => IsGameRunning),
 						CreateOracleCommand("Open State Library", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new StateLibraryWindow())),
 						CreateOracleCommand("Open Save States Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.SaveStates)),
 					}
@@ -1200,8 +1211,17 @@ namespace Mesen.ViewModels
 						CreateOracleCommand("Open Overlay Controls...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Overlays)),
 					}
 				},
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Diagnostics",
+					SubActions = new List<object>() {
+						CreateOracleActionWithOutput("Run ZSCustomOverworld Status", "check_zsow_status"),
+						CreateOracleActionWithOutput("Run Day/Night Status", "check_day_night"),
+						CreateOracleCommand("Open Diagnostics Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Diagnostics)),
+					}
+				},
 				new ContextMenuSeparator(),
-				CreateOracleAction("Capture State + Screenshot", "capture_state", () => IsGameRunning),
+				CreateOracleActionWithOutput("Capture State + Screenshot", "capture_state", () => IsGameRunning),
 				CreateOracleCommand("Health Check (Output)", () => OracleAgentLauncher.RunGatewayActionWithOutput("health", "Oracle Health Check")),
 			};
 		}

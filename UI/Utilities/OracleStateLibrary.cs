@@ -154,6 +154,11 @@ namespace Mesen.Utilities
 			// For now we'll just add basic info
 			var romInfo = EmuApi.GetRomInfo();
 			string romName = romInfo.Format == RomFormat.Unknown ? "unknown" : romInfo.GetRomName();
+			string patchName = "";
+			if(!string.IsNullOrWhiteSpace(romInfo.PatchPath)) {
+				ResourcePath patchPath = romInfo.PatchPath;
+				patchName = Path.GetFileNameWithoutExtension(patchPath.FileName);
+			}
 			var entry = new OracleStateEntry {
 				Id = $"{timestamp}_{cleanLabel}",
 				Path = filename,
@@ -161,7 +166,10 @@ namespace Mesen.Utilities
 				CreatedAt = timestamp,
 				Tags = tags ?? new List<string>(),
 				Metadata = new Dictionary<string, object> {
-					{ "rom", romName }
+					{ "rom", romName },
+					{ "rom_path", romInfo.RomPath },
+					{ "patch", patchName },
+					{ "patch_path", romInfo.PatchPath }
 				}
 			};
 
