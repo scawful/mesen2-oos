@@ -43,10 +43,46 @@ namespace Mesen.Utilities
 			OpenPath(root);
 		}
 
+		public static void OpenOracleRoot()
+		{
+			if(!TryGetOracleRoot(out string root, out string? error)) {
+				ShowError(error ?? "Oracle-of-Secrets root not found.");
+				return;
+			}
+
+			OpenPath(root);
+		}
+
+		public static void OpenOracleRoms()
+		{
+			OpenOraclePath("Roms");
+		}
+
+		public static void OpenOracleDocs()
+		{
+			OpenOraclePath("Docs");
+		}
+
+		public static void OpenOracleSavestateLibrary()
+		{
+			OpenOraclePath(Path.Combine("Roms", "savestates"));
+		}
+
 		public static void OpenMesen2Doc(string relativePath)
 		{
 			if(!TryGetMesen2Root(out string root, out string? error)) {
 				ShowError(error ?? "Mesen2 OOS root not found.");
+				return;
+			}
+
+			string path = Path.Combine(root, relativePath);
+			OpenPath(path);
+		}
+
+		private static void OpenOraclePath(string relativePath)
+		{
+			if(!TryGetOracleRoot(out string root, out string? error)) {
+				ShowError(error ?? "Oracle-of-Secrets root not found.");
 				return;
 			}
 
@@ -247,6 +283,33 @@ namespace Mesen.Utilities
 			}
 
 			error = "Mesen2 OOS root not found. Set MESEN2_OOS_ROOT or MESEN2_ROOT.";
+			return false;
+		}
+
+		private static bool TryGetOracleRoot(out string root, out string? error)
+		{
+			root = string.Empty;
+			error = null;
+
+			string? envRoot = Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
+				?? Environment.GetEnvironmentVariable("OOS_ROOT");
+
+			if(!string.IsNullOrWhiteSpace(envRoot)) {
+				string expanded = ExpandHome(envRoot);
+				if(Directory.Exists(expanded)) {
+					root = expanded;
+					return true;
+				}
+			}
+
+			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+			string defaultRoot = Path.Combine(home, "src", "hobby", "oracle-of-secrets");
+			if(Directory.Exists(defaultRoot)) {
+				root = defaultRoot;
+				return true;
+			}
+
+			error = "Oracle-of-Secrets root not found. Set ORACLE_OF_SECRETS_ROOT or OOS_ROOT.";
 			return false;
 		}
 

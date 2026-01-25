@@ -1213,6 +1213,7 @@ namespace Mesen.ViewModels
 						CreateOracleCommand("Save Labeled State...", () => SaveLabeledStateAsync(wnd), () => IsGameRunning),
 						new ContextMenuSeparator(),
 						CreateOracleAction("Open State Library", "open_state_library"),
+						CreateOracleCommand("Open State Library Folder", OracleAgentLauncher.OpenOracleSavestateLibrary),
 					}
 				},
 
@@ -1292,6 +1293,19 @@ namespace Mesen.ViewModels
 						CreateOracleAction("Open Integration Plan", "open_integration_plan"),
 						CreateOracleAction("Open VSCode Local Models", "open_vscode_models"),
 						CreateOracleAction("Open ~/models", "open_models_dir"),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Oracle-of-Secrets",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Open Oracle Repo", OracleAgentLauncher.OpenOracleRoot),
+						CreateOracleCommand("Open ROMs Folder", OracleAgentLauncher.OpenOracleRoms),
+						CreateOracleCommand("Open SaveState Library", OracleAgentLauncher.OpenOracleSavestateLibrary),
+						CreateOracleCommand("Open Docs Folder", OracleAgentLauncher.OpenOracleDocs),
 					}
 				},
 
