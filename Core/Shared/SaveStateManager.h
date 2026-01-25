@@ -11,11 +11,14 @@ private:
 	static constexpr uint32_t MinIndex = 1;
 	static constexpr uint32_t MaxIndexLimit = 99;
 
+	static std::atomic<uint32_t> _configuredMaxIndex;
+
 	atomic<uint32_t> _lastIndex;
 	Emulator* _emu;
 
 	static uint32_t ResolveMaxIndex();
 	static string GetLabelFilepathFromStatePath(const string& statePath);
+	string GetStateFilenameBase();
 
 	void SaveVideoData(ostream& stream);
 	bool GetVideoData(vector<uint8_t>& out, RenderedFrame& frame, istream& stream);
@@ -26,6 +29,7 @@ private:
 public:
 	static constexpr uint32_t FileFormatVersion = 4;
 	static constexpr uint32_t MinimumSupportedVersion = 3;
+	static void SetConfiguredMaxIndex(uint32_t maxIndex);
 	static uint32_t GetMaxIndex();
 	static uint32_t GetAutoSaveIndex();
 

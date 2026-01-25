@@ -20,6 +20,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+std::atomic<uint32_t> SaveStateManager::_configuredMaxIndex{0};
+
 SaveStateManager::SaveStateManager(Emulator* emu)
 {
 	_emu = emu;
@@ -46,8 +48,21 @@ uint32_t SaveStateManager::ResolveMaxIndex()
 	return maxIndex;
 }
 
+void SaveStateManager::SetConfiguredMaxIndex(uint32_t maxIndex)
+{
+	if(maxIndex < MinIndex) {
+		_configuredMaxIndex.store(0);
+		return;
+	}
+	_configuredMaxIndex.store(std::min<uint32_t>(MaxIndexLimit, maxIndex));
+}
+
 uint32_t SaveStateManager::GetMaxIndex()
 {
+	uint32_t configured = _configuredMaxIndex.load();
+	if(configured >= MinIndex) {
+		return std::min<uint32_t>(MaxIndexLimit, configured);
+	}
 	static uint32_t maxIndex = ResolveMaxIndex();
 	return maxIndex;
 }
@@ -57,11 +72,39 @@ uint32_t SaveStateManager::GetAutoSaveIndex()
 	return GetMaxIndex() + 1;
 }
 
-string SaveStateManager::GetStateFilepath(int stateIndex)
+string SaveStateManager::GetStateFilenameBase()
 {
 	string romFile = _emu->GetRomInfo().RomFile.GetFileName();
+	string baseName = FolderUtilities::GetFilename(romFile, false);
+	if(baseName.empty()) {
+		baseName = "rom";
+	}
+
+	PreferencesConfig preferences = _emu->GetSettings()->GetPreferences();
+	if(!preferences.SeparateSaveStatesByPatch) {
+		return baseName;
+	}
+
+	VirtualFile patchFile = _emu->GetRomInfo().PatchFile;
+	if(!patchFile.IsValid()) {
+		return baseName;
+	}
+
+	string patchName = FolderUtilities::GetFilename(patchFile.GetFileName(), false);
+	if(patchName.empty()) {
+		return baseName;
+	}
+	if(StringUtilities::ToLower(patchName) == StringUtilities::ToLower(baseName)) {
+		return baseName;
+	}
+
+	return baseName + "_" + patchName;
+}
+
+string SaveStateManager::GetStateFilepath(int stateIndex)
+{
 	string folder = FolderUtilities::GetSaveStateFolder();
-	string filename = FolderUtilities::GetFilename(romFile, false) + "_" + std::to_string(stateIndex) + ".mss";
+	string filename = GetStateFilenameBase() + "_" + std::to_string(stateIndex) + ".mss";
 	return FolderUtilities::CombinePath(folder, filename);
 }
 
@@ -352,7 +395,7 @@ void SaveStateManager::SaveRecentGame(string romName, string romPath, string pat
 		return;
 	}
 
-	string filename = FolderUtilities::GetFilename(_emu->GetRomInfo().RomFile.GetFileName(), false) + ".rgd";
+	string filename = GetStateFilenameBase() + ".rgd";
 	ZipWriter writer;
 	writer.Initialize(FolderUtilities::CombinePath(FolderUtilities::GetRecentGamesFolder(), filename));
 

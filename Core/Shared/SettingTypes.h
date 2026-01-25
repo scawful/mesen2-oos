@@ -768,6 +768,8 @@ struct PreferencesConfig
 
 	uint32_t AutoSaveStateDelay = 5;
 	uint32_t RewindBufferSize = 300;
+	uint32_t SaveStateSlotCount = 0;
+	bool SeparateSaveStatesByPatch = false;
 
 	const char* SaveFolderOverride = nullptr;
 	const char* SaveStateFolderOverride = nullptr;

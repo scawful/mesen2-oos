@@ -610,6 +610,9 @@
 			<Control ID="chkWaveOverride">Audio:</Control>
 			<Control ID="chkSaveStatesOverride">Save States:</Control>
 			<Control ID="chkMoviesOverride">Movies:</Control>
+			<Control ID="lblSaveStateOptions">Save State Options</Control>
+			<Control ID="lblSaveStateSlotCount">Save state slots:</Control>
+			<Control ID="chkSeparateSaveStatesByPatch">Separate save states by patch file</Control>
 
 			<Control ID="tpgAdvanced">Advanced</Control>
 			<Control ID="chkShowFullPathInRecents">Show full file path in recent file list</Control>

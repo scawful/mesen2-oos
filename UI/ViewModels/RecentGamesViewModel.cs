@@ -67,11 +67,10 @@ namespace Mesen.ViewModels
 
 				Title = mode == GameScreenMode.LoadState ? ResourceHelper.GetMessage("LoadStateDialog") : ResourceHelper.GetMessage("SaveStateDialog");
 				
-				string romName = EmuApi.GetRomInfo().GetRomName();
 				int maxSlots = SaveStateSlotHelper.GetMaxSlots();
 				for(int i = 0; i < maxSlots; i++) {
 					int slotIndex = i + 1;
-					string statePath = Path.Combine(ConfigManager.SaveStateFolder, romName + "_" + slotIndex + "." + FileDialogHelper.MesenSaveStateExt);
+					string statePath = SaveStateSlotHelper.GetSaveStatePath(slotIndex);
 					entries.Add(new RecentGameInfo() {
 						FileName = statePath,
 						StateIndex = slotIndex,
@@ -81,7 +80,7 @@ namespace Mesen.ViewModels
 				}
 				if(mode == GameScreenMode.LoadState) {
 					int autoSlot = SaveStateSlotHelper.GetAutoSlot();
-					string autoStatePath = Path.Combine(ConfigManager.SaveStateFolder, romName + "_" + autoSlot + "." + FileDialogHelper.MesenSaveStateExt);
+					string autoStatePath = SaveStateSlotHelper.GetSaveStatePath(autoSlot);
 					entries.Add(new RecentGameInfo() {
 						FileName = autoStatePath,
 						StateIndex = autoSlot,
@@ -89,7 +88,7 @@ namespace Mesen.ViewModels
 						SaveMode = false
 					});
 					entries.Add(new RecentGameInfo() {
-						FileName = Path.Combine(ConfigManager.RecentGamesFolder, romName + ".rgd"),
+						FileName = SaveStateSlotHelper.GetRecentGamePath(),
 						Name = ResourceHelper.GetMessage("LastSession")
 					});
 				}

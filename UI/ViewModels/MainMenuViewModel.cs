@@ -115,7 +115,7 @@ namespace Mesen.ViewModels
 
 				new MainMenuAction(EmulatorShortcut.LoadLastSession) {
 					ActionType = ActionType.LoadLastSession,
-					IsEnabled = () => File.Exists(Path.Combine(ConfigManager.RecentGamesFolder, MainWindow.RomInfo.GetRomName() + ".rgd"))
+					IsEnabled = () => File.Exists(SaveStateSlotHelper.GetRecentGamePath())
 				},
 
 				new ContextMenuSeparator(),
@@ -191,7 +191,7 @@ namespace Mesen.ViewModels
 
 			action.ActionType = ActionType.Custom;
 			action.DynamicText = () => {
-				string statePath = Path.Combine(ConfigManager.SaveStateFolder, EmuApi.GetRomInfo().GetRomName() + "_" + slot + "." + FileDialogHelper.MesenSaveStateExt);
+				string statePath = SaveStateSlotHelper.GetSaveStatePath(slot);
 				string slotName = slotNameOverride ?? slot.ToString();
 
 				string header;

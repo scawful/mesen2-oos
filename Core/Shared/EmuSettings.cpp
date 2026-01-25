@@ -6,6 +6,7 @@
 #include "Shared/Emulator.h"
 #include "Shared/DebuggerRequest.h"
 #include "Shared/NotificationManager.h"
+#include "Shared/SaveStateManager.h"
 #include "Utilities/FolderUtilities.h"
 #include "Utilities/Serializer.h"
 
@@ -277,6 +278,8 @@ void EmuSettings::SetPreferences(PreferencesConfig& config)
 		_screenshotFolder,
 		""
 	);
+
+	SaveStateManager::SetConfiguredMaxIndex(_preferences.SaveStateSlotCount);
 }
 
 PreferencesConfig& EmuSettings::GetPreferences()

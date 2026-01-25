@@ -49,6 +49,8 @@ namespace Mesen.Config
 
 		[Reactive] public bool EnableAutoSaveState { get; set; } = true;
 		[Reactive] public UInt32 AutoSaveStateDelay { get; set; } = 5;
+		[Reactive] public UInt32 SaveStateSlotCount { get; set; } = 20;
+		[Reactive] public bool SeparateSaveStatesByPatch { get; set; } = false;
 
 		[Reactive] public bool EnableRewind { get; set; } = true;
 		[Reactive] public UInt32 RewindBufferSize { get; set; } = 300;
@@ -235,7 +237,9 @@ namespace Mesen.Config
 				SaveStateFolderOverride = OverrideSaveStateFolder ? SaveStateFolder : "",
 				ScreenshotFolderOverride = OverrideScreenshotFolder ? ScreenshotFolder : "",
 				RewindBufferSize = EnableRewind ? RewindBufferSize : 0,
-				AutoSaveStateDelay = EnableAutoSaveState ? AutoSaveStateDelay : 0
+				AutoSaveStateDelay = EnableAutoSaveState ? AutoSaveStateDelay : 0,
+				SaveStateSlotCount = SaveStateSlotCount,
+				SeparateSaveStatesByPatch = SeparateSaveStatesByPatch
 			});
 		}
 	}
@@ -284,6 +288,8 @@ namespace Mesen.Config
 
 		public UInt32 AutoSaveStateDelay;
 		public UInt32 RewindBufferSize;
+		public UInt32 SaveStateSlotCount;
+		[MarshalAs(UnmanagedType.I1)] public bool SeparateSaveStatesByPatch;
 
 		public string SaveFolderOverride;
 		public string SaveStateFolderOverride;

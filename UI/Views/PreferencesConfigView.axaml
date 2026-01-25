@@ -148,6 +148,16 @@
 							/>
 						</Grid>
 					</c:OptionSection>
+
+					<c:OptionSection Header="{l:Translate lblSaveStateOptions}">
+						<StackPanel>
+							<StackPanel Orientation="Horizontal" Margin="0 0 0 5">
+								<TextBlock Text="{l:Translate lblSaveStateSlotCount}" VerticalAlignment="Center" />
+								<NumericUpDown Value="{Binding Config.SaveStateSlotCount}" Margin="5 0 0 0" Minimum="1" Maximum="99" Width="80" />
+							</StackPanel>
+							<CheckBox Content="{l:Translate chkSeparateSaveStatesByPatch}" IsChecked="{Binding Config.SeparateSaveStatesByPatch}" />
+						</StackPanel>
+					</c:OptionSection>
 				</StackPanel>
 			</ScrollViewer>
 		</TabItem>
