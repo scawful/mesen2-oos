@@ -34,7 +34,7 @@
 								<TextBlock Text="{Binding Label}" FontWeight="Bold" FontSize="14" />
 								<TextBlock Text="{Binding Path}" FontSize="10" Foreground="Gray" />
 							</StackPanel>
-							<TextBlock Grid.Column="1" Text="{Binding CreatedAt}" FontSize="10" VerticalAlignment="Center" />
+							<TextBlock Grid.Column="1" Text="{Binding CreatedAtDisplay}" FontSize="10" VerticalAlignment="Center" />
 						</Grid>
 					</DataTemplate>
 				</ListBox.ItemTemplate>

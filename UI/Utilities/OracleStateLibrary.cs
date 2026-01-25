@@ -23,6 +23,20 @@ namespace Mesen.Utilities
 		[JsonPropertyName("created_at")]
 		public long CreatedAt { get; set; }
 
+		[JsonIgnore]
+		public string CreatedAtDisplay
+		{
+			get
+			{
+				if(CreatedAt <= 0) {
+					return "Unknown";
+				}
+				return DateTimeOffset.FromUnixTimeSeconds(CreatedAt)
+					.ToLocalTime()
+					.ToString("yyyy-MM-dd HH:mm:ss");
+			}
+		}
+
 		[JsonPropertyName("tags")]
 		public List<string> Tags { get; set; } = new();
 
@@ -119,15 +133,27 @@ namespace Mesen.Utilities
 		{
 			long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 			string cleanLabel = new string(label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+			if(string.IsNullOrWhiteSpace(cleanLabel)) {
+				cleanLabel = "state";
+			}
 			string filename = $"oos_{timestamp}_{cleanLabel}.mss";
 			string libraryRoot = GetLibraryRoot();
 			string fullPath = Path.Combine(libraryRoot, filename);
 
+			if (!Directory.Exists(libraryRoot)) {
+				Directory.CreateDirectory(libraryRoot);
+			}
+
 			// Save via EmuApi
 			EmuApi.SaveStateFile(fullPath);
+			if(!File.Exists(fullPath)) {
+				throw new IOException("Save state file was not created.");
+			}
 
 			// Capture metadata (simplified for now, ideally read from RAM directly or via interop)
 			// For now we'll just add basic info
+			var romInfo = EmuApi.GetRomInfo();
+			string romName = romInfo.Format == RomFormat.Unknown ? "unknown" : romInfo.GetRomName();
 			var entry = new OracleStateEntry {
 				Id = $"{timestamp}_{cleanLabel}",
 				Path = filename,
@@ -135,7 +161,7 @@ namespace Mesen.Utilities
 				CreatedAt = timestamp,
 				Tags = tags ?? new List<string>(),
 				Metadata = new Dictionary<string, object> {
-					{ "rom", EmuApi.GetRomInfo().GetRomName() }
+					{ "rom", romName }
 				}
 			};
 
