@@ -105,7 +105,6 @@ namespace Mesen.Debugger.Windows
 				e.Cancel = true;
 				ValidateExit();
 			} else {
-				_model.StopScript();
 				_timer.Stop();
 				_model.Config.SaveWindowSettings(this);
 			}

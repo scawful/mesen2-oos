@@ -34,5 +34,12 @@ namespace Mesen.Views
 				model.UpdateNetplayMenu();
 			}
 		}
+
+		private void mnuOracle_Opened(object sender, RoutedEventArgs e)
+		{
+			if(DataContext is MainMenuViewModel model) {
+				model.UpdateOracleStatus();
+			}
+		}
 	}
 }

@@ -1,0 +1,39 @@
+<Window
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:m="clr-namespace:Mesen"
+	xmlns:l="using:Mesen.Localization"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="360"
+	x:Class="Mesen.Windows.OracleAgentOutputWindow"
+	Width="640" Height="360"
+	Title="Oracle Output"
+	Name="root"
+>
+	<DockPanel>
+		<StackPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="5 3">
+			<Button
+				MinWidth="70"
+				HorizontalContentAlignment="Center"
+				IsCancel="True"
+				Click="Close_OnClick"
+				Content="{l:Translate btnClose}"
+			/>
+		</StackPanel>
+
+		<TextBox
+			Name="OutputBox"
+			AcceptsReturn="True"
+			VerticalAlignment="Stretch"
+			Height="NaN"
+			IsReadOnly="True"
+			Text="{Binding Output, ElementName=root}"
+			TextWrapping="NoWrap"
+			FontFamily="{DynamicResource MesenFont}"
+			FontSize="{DynamicResource MesenFontSize}"
+			ScrollViewer.HorizontalScrollBarVisibility="Auto"
+			ScrollViewer.VerticalScrollBarVisibility="Auto"
+		/>
+	</DockPanel>
+</Window>

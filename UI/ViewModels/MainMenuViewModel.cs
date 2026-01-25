@@ -36,9 +36,17 @@ namespace Mesen.ViewModels
 		[Reactive] public List<object> OptionsMenuItems { get; set; } = new();
 		[Reactive] public List<object> ToolsMenuItems { get; set; } = new();
 		[Reactive] public List<object> DebugMenuItems { get; set; } = new();
+		[Reactive] public List<object> OracleMenuItems { get; set; } = new();
 		[Reactive] public List<object> HelpMenuItems { get; set; } = new();
 		
 		[Reactive] private List<object> _netPlayControllers { get; set; } = new();
+
+		private OracleStatusSnapshot _oracleStatus = OracleStatusSnapshot.Empty();
+		private MainMenuAction? _oracleGatewayStatusAction;
+		private MainMenuAction? _oracleMesenStatusAction;
+		private MainMenuAction? _oracleSocketStatusAction;
+		private MainMenuAction? _oracleYazeStatusAction;
+		private MainMenuAction? _oracleStatusUpdatedAction;
 
 		private RomInfo RomInfo => MainWindow.RomInfo;
 		private bool IsGameRunning => RomInfo.Format != RomFormat.Unknown;
@@ -87,6 +95,7 @@ namespace Mesen.ViewModels
 			InitOptionsMenu(wnd);
 			InitToolMenu(wnd);
 			InitDebugMenu(wnd);
+			InitOracleMenu(wnd);
 			InitHelpMenu(wnd);
 		}
 
@@ -97,41 +106,11 @@ namespace Mesen.ViewModels
 				new ContextMenuSeparator(),
 				new MainMenuAction() {
 					ActionType = ActionType.SaveState,
-					SubActions = new List<object> {
-						GetSaveStateMenuItem(1, true),
-						GetSaveStateMenuItem(2, true),
-						GetSaveStateMenuItem(3, true),
-						GetSaveStateMenuItem(4, true),
-						GetSaveStateMenuItem(5, true),
-						GetSaveStateMenuItem(6, true),
-						GetSaveStateMenuItem(7, true),
-						GetSaveStateMenuItem(8, true),
-						GetSaveStateMenuItem(9, true),
-						GetSaveStateMenuItem(10, true),
-						new ContextMenuSeparator(),
-						new MainMenuAction(EmulatorShortcut.SaveStateDialog) { ActionType = ActionType.SaveStateDialog },
-						new MainMenuAction(EmulatorShortcut.SaveStateToFile) { ActionType = ActionType.SaveStateToFile },
-					}
+					SubActions = BuildSaveStateMenuItems(true)
 				},
 				new MainMenuAction() {
 					ActionType = ActionType.LoadState,
-					SubActions = new List<object> {
-						GetSaveStateMenuItem(1, false),
-						GetSaveStateMenuItem(2, false),
-						GetSaveStateMenuItem(3, false),
-						GetSaveStateMenuItem(4, false),
-						GetSaveStateMenuItem(5, false),
-						GetSaveStateMenuItem(6, false),
-						GetSaveStateMenuItem(7, false),
-						GetSaveStateMenuItem(8, false),
-						GetSaveStateMenuItem(9, false),
-						GetSaveStateMenuItem(10, false),
-						new ContextMenuSeparator(),
-						GetSaveStateMenuItem(11, false),
-						new ContextMenuSeparator(),
-						new MainMenuAction(EmulatorShortcut.LoadStateDialog) { ActionType = ActionType.LoadStateDialog },
-						new MainMenuAction(EmulatorShortcut.LoadStateFromFile) { ActionType = ActionType.LoadStateFromFile },
-					}
+					SubActions = BuildSaveStateMenuItems(false)
 				},
 
 				new MainMenuAction(EmulatorShortcut.LoadLastSession) {
@@ -176,40 +155,111 @@ namespace Mesen.ViewModels
 			};
 		}
 
-		private MainMenuAction GetSaveStateMenuItem(int slot, bool forSave)
+		private static string NormalizeSaveStateLabel(string? label, int maxLength = 40)
 		{
-			EmulatorShortcut shortcut;
-			if(forSave) {
-				shortcut = (EmulatorShortcut)((int)EmulatorShortcut.SaveStateSlot1 + slot - 1);
-			} else {
-				shortcut = (EmulatorShortcut)((int)EmulatorShortcut.LoadStateSlot1 + slot - 1);
+			if(string.IsNullOrWhiteSpace(label)) {
+				return string.Empty;
 			}
-			
-			bool isAutoSaveSlot = slot == 11;
 
-			return new MainMenuAction(shortcut) {
-				ActionType = ActionType.Custom,
-				DynamicText = () => {
-					string statePath = Path.Combine(ConfigManager.SaveStateFolder, EmuApi.GetRomInfo().GetRomName() + "_" + slot + "." + FileDialogHelper.MesenSaveStateExt);
-					string slotName = isAutoSaveSlot ? "Auto" : slot.ToString();
+			string normalized = label.Replace("\r", " ").Replace("\n", " ").Trim();
+			if(normalized.Length <= maxLength) {
+				return normalized;
+			}
 
-					string header;
-					if(!File.Exists(statePath)) {
-						header = slotName + ". " + ResourceHelper.GetMessage("EmptyState");
-					} else {
-						DateTime dateTime = new FileInfo(statePath).LastWriteTime;
-						header = slotName + ". " + dateTime.ToShortDateString() + " " + dateTime.ToShortTimeString();
-					}
-					return header;
-				},
-				OnClick = () => {
-					if(forSave) {
-						EmuApi.SaveState((uint)slot);
-					} else {
-						EmuApi.LoadState((uint)slot);
-					}
+			int trimmedLength = Math.Max(0, maxLength - 3);
+			if(trimmedLength == 0) {
+				return string.Empty;
+			}
+
+			return normalized.Substring(0, trimmedLength) + "...";
+		}
+
+		private MainMenuAction GetSaveStateMenuItem(int slot, bool forSave, EmulatorShortcut? shortcutOverride = null, string? slotNameOverride = null)
+		{
+			EmulatorShortcut? shortcut = shortcutOverride;
+			if(!shortcut.HasValue && slot >= 1 && slot <= 10) {
+				shortcut = forSave
+					? (EmulatorShortcut)((int)EmulatorShortcut.SaveStateSlot1 + slot - 1)
+					: (EmulatorShortcut)((int)EmulatorShortcut.LoadStateSlot1 + slot - 1);
+			}
+
+			MainMenuAction action = shortcut.HasValue ? new MainMenuAction(shortcut.Value) : new MainMenuAction();
+			if(!shortcut.HasValue) {
+				EmulatorShortcut fallbackShortcut = forSave ? EmulatorShortcut.SaveState : EmulatorShortcut.LoadState;
+				action.IsEnabled = () => EmuApi.IsShortcutAllowed(fallbackShortcut);
+			}
+
+			action.ActionType = ActionType.Custom;
+			action.DynamicText = () => {
+				string statePath = Path.Combine(ConfigManager.SaveStateFolder, EmuApi.GetRomInfo().GetRomName() + "_" + slot + "." + FileDialogHelper.MesenSaveStateExt);
+				string slotName = slotNameOverride ?? slot.ToString();
+
+				string header;
+				if(!File.Exists(statePath)) {
+					header = slotName + ". " + ResourceHelper.GetMessage("EmptyState");
+				} else {
+					string? label = SaveStateLabelStore.TryGetLabel(statePath);
+					string normalizedLabel = NormalizeSaveStateLabel(label);
+					DateTime dateTime = new FileInfo(statePath).LastWriteTime;
+					string timestamp = dateTime.ToShortDateString() + " " + dateTime.ToShortTimeString();
+					header = string.IsNullOrWhiteSpace(normalizedLabel)
+						? slotName + ". " + timestamp
+						: slotName + ". " + normalizedLabel + " (" + timestamp + ")";
+				}
+				return header;
+			};
+			action.OnClick = () => {
+				if(forSave) {
+					EmuApi.SaveState((uint)slot);
+				} else {
+					EmuApi.LoadState((uint)slot);
 				}
 			};
+
+			return action;
+		}
+
+		private List<object> BuildSaveStateMenuItems(bool forSave)
+		{
+			int maxSlots = SaveStateSlotHelper.GetMaxSlots();
+			const int groupSize = 10;
+
+			List<object> items = new();
+			int firstGroupEnd = Math.Min(groupSize, maxSlots);
+			for(int slot = 1; slot <= firstGroupEnd; slot++) {
+				items.Add(GetSaveStateMenuItem(slot, forSave));
+			}
+
+			if(maxSlots > groupSize) {
+				items.Add(new ContextMenuSeparator());
+				for(int start = groupSize + 1; start <= maxSlots; start += groupSize) {
+					int end = Math.Min(start + groupSize - 1, maxSlots);
+					List<object> subItems = new();
+					for(int slot = start; slot <= end; slot++) {
+						subItems.Add(GetSaveStateMenuItem(slot, forSave));
+					}
+					items.Add(new MainMenuAction() {
+						ActionType = ActionType.Custom,
+						CustomText = $"Slots {start}-{end}",
+						SubActions = subItems
+					});
+				}
+			}
+
+			items.Add(new ContextMenuSeparator());
+
+			if(forSave) {
+				items.Add(new MainMenuAction(EmulatorShortcut.SaveStateDialog) { ActionType = ActionType.SaveStateDialog });
+				items.Add(new MainMenuAction(EmulatorShortcut.SaveStateToFile) { ActionType = ActionType.SaveStateToFile });
+			} else {
+				int autoSlot = SaveStateSlotHelper.GetAutoSlot();
+				items.Add(GetSaveStateMenuItem(autoSlot, false, EmulatorShortcut.LoadStateSlotAuto, ResourceHelper.GetMessage("AutoSave")));
+				items.Add(new ContextMenuSeparator());
+				items.Add(new MainMenuAction(EmulatorShortcut.LoadStateDialog) { ActionType = ActionType.LoadStateDialog });
+				items.Add(new MainMenuAction(EmulatorShortcut.LoadStateFromFile) { ActionType = ActionType.LoadStateFromFile });
+			}
+
+			return items;
 		}
 
 		private void InitGameMenu(MainWindow wnd)
@@ -1053,6 +1103,309 @@ namespace Mesen.ViewModels
 			};
 
 			DebugShortcutManager.RegisterActions(wnd, DebugMenuItems);
+		}
+
+		private MainMenuAction CreateOracleAction(string label, string action, Func<bool>? isEnabled = null)
+		{
+			return new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				CustomText = label,
+				IsEnabled = isEnabled,
+				OnClick = () => OracleAgentLauncher.RunGatewayAction(action)
+			};
+		}
+
+		private MainMenuAction CreateOracleCommand(string label, Action onClick, Func<bool>? isEnabled = null)
+		{
+			return new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				CustomText = label,
+				IsEnabled = isEnabled,
+				OnClick = onClick
+			};
+		}
+
+		private void RunLuaSnippet(string content)
+		{
+			// LoadScript(name, path, content, scriptId)
+			// Using scriptId = -1 ensures it's treated as a new transient script
+			DebugApi.LoadScript("OracleOverlayCommand", Program.OriginalFolder, content, -1);
+		}
+
+		private void ToggleOracleOverlay(string property)
+		{
+			string script = $"if hudState then hudState.{property} = not hudState.{property} end";
+			RunLuaSnippet(script);
+		}
+
+		private async void SaveLabeledStateAsync(Window wnd)
+		{
+			bool isPaused = EmuApi.IsPaused();
+			if (!isPaused) {
+				EmuApi.Pause();
+			}
+
+			string? label = await TextInputWindow.ShowDialog(wnd, "Enter a label for this save state:", "Quick Save");
+			
+			if (!string.IsNullOrWhiteSpace(label)) {
+				try {
+					string id = OracleStateLibrary.SaveLabeledState(label);
+					await MesenMsgBox.Show(wnd, $"Saved state '{label}' (ID: {id})", MessageBoxButtons.OK, MessageBoxIcon.Info);
+				} catch (Exception ex) {
+					await MesenMsgBox.Show(wnd, "Failed to save state: " + ex.Message, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				}
+			}
+
+			if (!isPaused) {
+				EmuApi.Resume();
+			}
+		}
+
+		private void InitOracleMenu(Window wnd)
+		{
+			_oracleGatewayStatusAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = FormatOracleGatewayStatus,
+				IsEnabled = () => false
+			};
+			_oracleMesenStatusAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = FormatOracleMesenStatus,
+				IsEnabled = () => false
+			};
+			_oracleSocketStatusAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = FormatOracleSocketStatus,
+				IsEnabled = () => !string.IsNullOrWhiteSpace(_oracleStatus.SocketPath),
+				OnClick = CopyOracleSocketPath
+			};
+			_oracleYazeStatusAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = FormatOracleYazeStatus,
+				IsEnabled = () => false
+			};
+			_oracleStatusUpdatedAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = FormatOracleStatusUpdated,
+				IsEnabled = () => false
+			};
+
+			OracleMenuItems = new List<object>() {
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Status",
+					SubActions = new List<object>() {
+						_oracleGatewayStatusAction,
+						_oracleMesenStatusAction,
+						_oracleSocketStatusAction,
+						_oracleYazeStatusAction,
+						_oracleStatusUpdatedAction,
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Refresh Status", UpdateOracleStatus),
+					}
+				},
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Save States",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Save Labeled State...", () => SaveLabeledStateAsync(wnd), () => IsGameRunning),
+						new ContextMenuSeparator(),
+						CreateOracleAction("Open State Library", "open_state_library"),
+					}
+				},
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Debug Overlays",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Toggle HUD", () => ToggleOracleOverlay("enabled")),
+						CreateOracleCommand("Toggle Player Info", () => ToggleOracleOverlay("showPlayer")),
+						CreateOracleCommand("Toggle Sprite Boxes", () => ToggleOracleOverlay("showSprites")),
+						CreateOracleCommand("Toggle Issue Detection", () => ToggleOracleOverlay("showIssues")),
+					}
+				},
+
+				new ContextMenuSeparator(),
+				CreateOracleAction("Capture State + Screenshot", "capture_state", () => IsGameRunning),
+				CreateOracleAction("Open Scratchpad", "open_scratchpad"),
+				CreateOracleAction("Open Agent Handoff", "open_agent_handoff"),
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Build + Symbols",
+					SubActions = new List<object>() {
+						CreateOracleAction("Build ROM (oos168x)", "build_rom"),
+						CreateOracleAction("Export Symbols (sync)", "export_symbols"),
+					}
+				},
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Testing",
+					SubActions = new List<object>() {
+						CreateOracleAction("Run Smoke Test", "run_smoke_tests"),
+						CreateOracleAction("Run Test Suite", "run_test_suite"),
+						new ContextMenuSeparator(),
+						CreateOracleAction("Open Tests Folder", "open_tests_dir"),
+						CreateOracleCommand("Open State Library", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new StateLibraryWindow())),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Yaze",
+					SubActions = new List<object>() {
+						CreateOracleAction("Start Service", "yaze_start"),
+						CreateOracleAction("Stop Service", "yaze_stop"),
+						CreateOracleAction("Toggle GUI", "yaze_gui_toggle"),
+						new ContextMenuSeparator(),
+						CreateOracleAction("Start Headless Workflow", "headless_workflow_start"),
+						CreateOracleAction("Stop Headless Workflow", "headless_workflow_stop"),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Gateway",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Start Oracle Agent Gateway", OracleAgentLauncher.StartGateway),
+						CreateOracleCommand("Stop Oracle Agent Gateway", OracleAgentLauncher.StopGateway),
+						CreateOracleCommand("Gateway Status", OracleAgentLauncher.GatewayStatus),
+						CreateOracleAction("Health Check", "health"),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Models + Docs",
+					SubActions = new List<object>() {
+						CreateOracleAction("Open Model Catalog", "open_model_catalog"),
+						CreateOracleAction("Open Integration Plan", "open_integration_plan"),
+						CreateOracleAction("Open VSCode Local Models", "open_vscode_models"),
+						CreateOracleAction("Open ~/models", "open_models_dir"),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Mesen2",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Open Mesen2 Repo", OracleAgentLauncher.OpenMesen2Root),
+						CreateOracleCommand("Open Socket API Reference", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Socket_API_Reference.md"))),
+						CreateOracleCommand("Open Agent Integration Guide", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Agent_Integration_Guide.md"))),
+						CreateOracleCommand("Open Fork Debugging Guide", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Mesen2_Fork_Debugging.md"))),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Open Save State Folder", () => OracleAgentLauncher.OpenPath(ConfigManager.SaveStateFolder)),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "AFS",
+					SubActions = new List<object>() {
+						CreateOracleAction("Warm Context", "afs_context_warm"),
+						CreateOracleAction("Open AFS Repo", "open_afs_repo"),
+						CreateOracleAction("Open AFS-Scawful Repo", "open_afs_scawful_repo"),
+						CreateOracleAction("Open Chat Registry", "open_chat_registry"),
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Local LLM Gateway",
+					SubActions = new List<object>() {
+						CreateOracleAction("Start OpenAI Gateway", "start_llm_gateway"),
+						CreateOracleAction("Open Gateway Status", "open_llm_status"),
+					}
+				},
+			};
+		}
+
+		public void UpdateOracleStatus()
+		{
+			Task.Run(async () => {
+				try {
+					OracleStatusSnapshot snapshot = await OracleAgentStatus.FetchAsync();
+					Dispatcher.UIThread.Post(() => {
+						_oracleStatus = snapshot;
+						RefreshOracleStatusMenu();
+					});
+				} catch {
+					// ignore background failures; status remains unchanged
+				}
+			});
+		}
+
+		private void RefreshOracleStatusMenu()
+		{
+			_oracleGatewayStatusAction?.Update();
+			_oracleMesenStatusAction?.Update();
+			_oracleSocketStatusAction?.Update();
+			_oracleYazeStatusAction?.Update();
+			_oracleStatusUpdatedAction?.Update();
+		}
+
+		private string FormatOracleGatewayStatus()
+		{
+			return _oracleStatus.GatewayOnline ? "Gateway: online" : "Gateway: offline";
+		}
+
+		private string FormatOracleMesenStatus()
+		{
+			if(_oracleStatus.Mesen2Connected.HasValue) {
+				return _oracleStatus.Mesen2Connected.Value ? "Mesen2: connected" : "Mesen2: disconnected";
+			}
+			return "Mesen2: unknown";
+		}
+
+		private string FormatOracleSocketStatus()
+		{
+			if(_oracleStatus.SocketFound) {
+				if(!string.IsNullOrWhiteSpace(_oracleStatus.SocketPath)) {
+					return $"Socket: found ({_oracleStatus.SocketPath})";
+				}
+				return "Socket: found";
+			}
+			return "Socket: missing";
+		}
+
+		private string FormatOracleYazeStatus()
+		{
+			if(_oracleStatus.YazeRunning.HasValue) {
+				return _oracleStatus.YazeRunning.Value ? "Yaze: running" : "Yaze: stopped";
+			}
+			return "Yaze: unknown";
+		}
+
+		private void CopyOracleSocketPath()
+		{
+			if(string.IsNullOrWhiteSpace(_oracleStatus.SocketPath)) {
+				return;
+			}
+			ApplicationHelper.GetActiveOrMainWindow()?.Clipboard?.SetTextAsync(_oracleStatus.SocketPath);
+		}
+
+		private string FormatOracleStatusUpdated()
+		{
+			if(_oracleStatus.Timestamp == DateTimeOffset.MinValue) {
+				return "Updated: unknown";
+			}
+			return "Updated: " + _oracleStatus.Timestamp.ToLocalTime().ToString("HH:mm:ss");
 		}
 
 		private void InitHelpMenu(Window wnd)

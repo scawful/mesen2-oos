@@ -132,6 +132,58 @@ namespace Mesen.Debugger.ViewModels
 				rows.Add(new RegEntry("", "Frame", ppu.FrameCount, Format.X32));
 				rows.Add(new RegEntry("", "Forced Blank", ppu.ForcedBlank));
 				rows.Add(new RegEntry("", "Brightness", ppu.ScreenBrightness, Format.X8));
+			} else if(_romInfo.ConsoleType == ConsoleType.Nes) {
+				NesCpuState cpu = DebugApi.GetCpuState<NesCpuState>(CpuType);
+				NesPpuState ppu = DebugApi.GetPpuState<NesPpuState>(CpuType.Nes);
+
+				rows.Add(new RegEntry("", "CPU"));
+				rows.Add(new RegEntry("", "A", cpu.A, Format.X8));
+				rows.Add(new RegEntry("", "X", cpu.X, Format.X8));
+				rows.Add(new RegEntry("", "Y", cpu.Y, Format.X8));
+				rows.Add(new RegEntry("", "SP", cpu.SP, Format.X8));
+				rows.Add(new RegEntry("", "PC", cpu.PC, Format.X16));
+				rows.Add(new RegEntry("", "P (Flags)", FormatNesFlags(cpu), cpu.PS));
+
+				rows.Add(new RegEntry("", "PPU"));
+				rows.Add(new RegEntry("", "Scanline", ppu.Scanline, Format.X16));
+				rows.Add(new RegEntry("", "Cycle", ppu.Cycle, Format.X16));
+				rows.Add(new RegEntry("", "Frame", ppu.FrameCount, Format.X32));
+			} else if(_romInfo.ConsoleType == ConsoleType.Gameboy) {
+				GbCpuState cpu = DebugApi.GetCpuState<GbCpuState>(CpuType);
+				GbPpuState ppu = DebugApi.GetPpuState<GbPpuState>(CpuType.Gameboy);
+
+				rows.Add(new RegEntry("", "CPU"));
+				rows.Add(new RegEntry("", "A", cpu.A, Format.X8));
+				rows.Add(new RegEntry("", "B", cpu.B, Format.X8));
+				rows.Add(new RegEntry("", "C", cpu.C, Format.X8));
+				rows.Add(new RegEntry("", "D", cpu.D, Format.X8));
+				rows.Add(new RegEntry("", "E", cpu.E, Format.X8));
+				rows.Add(new RegEntry("", "H", cpu.H, Format.X8));
+				rows.Add(new RegEntry("", "L", cpu.L, Format.X8));
+				rows.Add(new RegEntry("", "SP", cpu.SP, Format.X16));
+				rows.Add(new RegEntry("", "PC", cpu.PC, Format.X16));
+				rows.Add(new RegEntry("", "F (Flags)", FormatGbFlags(cpu), cpu.Flags));
+
+				rows.Add(new RegEntry("", "PPU"));
+				rows.Add(new RegEntry("", "Scanline", ppu.Scanline, Format.X8));
+				rows.Add(new RegEntry("", "Cycle", ppu.Cycle, Format.X16));
+				rows.Add(new RegEntry("", "Frame", ppu.FrameCount, Format.X32));
+			} else if(_romInfo.ConsoleType == ConsoleType.PcEngine) {
+				PceCpuState cpu = DebugApi.GetCpuState<PceCpuState>(CpuType);
+				PceVdcState ppu = DebugApi.GetPpuState<PceVdcState>(CpuType.Pce);
+
+				rows.Add(new RegEntry("", "CPU"));
+				rows.Add(new RegEntry("", "A", cpu.A, Format.X8));
+				rows.Add(new RegEntry("", "X", cpu.X, Format.X8));
+				rows.Add(new RegEntry("", "Y", cpu.Y, Format.X8));
+				rows.Add(new RegEntry("", "SP", cpu.SP, Format.X8));
+				rows.Add(new RegEntry("", "PC", cpu.PC, Format.X16));
+				rows.Add(new RegEntry("", "P (Flags)", FormatPceFlags(cpu), cpu.PS));
+
+				rows.Add(new RegEntry("", "VDC"));
+				rows.Add(new RegEntry("", "Scanline", ppu.Scanline, Format.X16));
+				rows.Add(new RegEntry("", "Cycle", ppu.HClock, Format.X16));
+				rows.Add(new RegEntry("", "Frame", ppu.FrameCount, Format.X32));
 			}
 
 			AppendWatchEntries(rows);
@@ -193,6 +245,62 @@ namespace Mesen.Debugger.ViewModels
 				flagZ ? 'Z' : 'z',
 				flagC ? 'C' : 'c',
 				flagE
+			);
+		}
+
+		private string FormatNesFlags(NesCpuState cpu)
+		{
+			bool flagN = (cpu.PS & 0x80) != 0;
+			bool flagV = (cpu.PS & 0x40) != 0;
+			bool flagD = (cpu.PS & 0x08) != 0;
+			bool flagI = (cpu.PS & 0x04) != 0;
+			bool flagZ = (cpu.PS & 0x02) != 0;
+			bool flagC = (cpu.PS & 0x01) != 0;
+
+			return string.Format(
+				"{0}{1}{2}{3}{4}{5}",
+				flagN ? 'N' : 'n',
+				flagV ? 'V' : 'v',
+				flagD ? 'D' : 'd',
+				flagI ? 'I' : 'i',
+				flagZ ? 'Z' : 'z',
+				flagC ? 'C' : 'c'
+			);
+		}
+
+		private string FormatGbFlags(GbCpuState cpu)
+		{
+			bool flagZ = (cpu.Flags & 0x80) != 0;
+			bool flagN = (cpu.Flags & 0x40) != 0;
+			bool flagH = (cpu.Flags & 0x20) != 0;
+			bool flagC = (cpu.Flags & 0x10) != 0;
+
+			return string.Format(
+				"{0}{1}{2}{3}",
+				flagZ ? 'Z' : 'z',
+				flagN ? 'N' : 'n',
+				flagH ? 'H' : 'h',
+				flagC ? 'C' : 'c'
+			);
+		}
+
+		private string FormatPceFlags(PceCpuState cpu)
+		{
+			bool flagN = (cpu.PS & 0x80) != 0;
+			bool flagV = (cpu.PS & 0x40) != 0;
+			bool flagD = (cpu.PS & 0x08) != 0;
+			bool flagI = (cpu.PS & 0x04) != 0;
+			bool flagZ = (cpu.PS & 0x02) != 0;
+			bool flagC = (cpu.PS & 0x01) != 0;
+
+			return string.Format(
+				"{0}{1}{2}{3}{4}{5}",
+				flagN ? 'N' : 'n',
+				flagV ? 'V' : 'v',
+				flagD ? 'D' : 'd',
+				flagI ? 'I' : 'i',
+				flagZ ? 'Z' : 'z',
+				flagC ? 'C' : 'c'
 			);
 		}
 

@@ -36,6 +36,8 @@ public class CommandLineHelper
 	public bool OpenDebuggerRequested { get; private set; }
 	public bool OpenStateInspectorRequested { get; private set; }
 	public bool EnableWatchHudRequested { get; private set; }
+	public bool OpenScriptWindowRequested { get; private set; }
+	public bool HeadlessRequested { get; private set; }
 
 	private List<string> _errorMessages = new();
 	private bool _debugToolsOpened = false;
@@ -47,6 +49,7 @@ public class CommandLineHelper
 
 	private void ProcessCommandLineArgs(string[] args, bool forStartup)
 	{
+		bool hasUserLua = false;
 		foreach(string arg in args) {
 			string absPath;
 			if(Path.IsPathRooted(arg)) {
@@ -57,7 +60,12 @@ public class CommandLineHelper
 
 			if(File.Exists(absPath)) {
 				switch(Path.GetExtension(absPath).ToLowerInvariant()) {
-					case ".lua": LuaScriptsToLoad.Add(absPath); break;
+					case ".lua":
+						LuaScriptsToLoad.Add(absPath);
+						if(!IsBridgeScriptArg(absPath)) {
+							hasUserLua = true;
+						}
+						break;
 					default: FilesToLoad.Add(absPath); break;
 				}
 			} else if(arg.StartsWith("-") || arg.StartsWith("/")) {
@@ -72,6 +80,12 @@ public class CommandLineHelper
 					case "opendebugger": OpenDebuggerRequested = true; break;
 					case "openstateinspector": OpenStateInspectorRequested = true; break;
 					case "enablewatchhud": EnableWatchHudRequested = true; break;
+					case "openscriptwindow": OpenScriptWindowRequested = true; break;
+					case "headless":
+					case "nogui":
+					case "noui":
+						HeadlessRequested = true;
+						break;
 					case "autodebug":
 						OpenDebuggerRequested = true;
 						OpenStateInspectorRequested = true;
@@ -104,6 +118,8 @@ public class CommandLineHelper
 							if(int.TryParse(values[1], out int timeout)) {
 								TestRunnerTimeout = timeout;
 							}
+						} else if(switchArg.StartsWith("instanceguid=") || switchArg.StartsWith("instancename=") || switchArg == "multiinstance") {
+							//Handled early in Program.Main; ignore here to avoid invalid switch errors.
 						} else {
 							if(!ConfigManager.ProcessSwitch(switchArg)) {
 								_errorMessages.Add(ResourceHelper.GetMessage("InvalidArgument", arg));
@@ -114,6 +130,11 @@ public class CommandLineHelper
 			} else {
 				_errorMessages.Add(ResourceHelper.GetMessage("FileNotFound", arg));
 			}
+		}
+
+		if(!HeadlessRequested && hasUserLua && !OpenScriptWindowRequested &&
+			!OpenDebuggerRequested && !OpenStateInspectorRequested && !EnableWatchHudRequested) {
+			HeadlessRequested = true;
 		}
 	}
 
@@ -166,6 +187,71 @@ public class CommandLineHelper
 		return arg;
 	}
 
+	private static bool IsBridgeScriptArg(string arg)
+	{
+		if(string.IsNullOrWhiteSpace(arg)) {
+			return false;
+		}
+
+		string fileName = Path.GetFileName(arg);
+		if(string.IsNullOrWhiteSpace(fileName)) {
+			return false;
+		}
+
+		string baseName = Path.GetFileNameWithoutExtension(fileName);
+		return baseName.StartsWith("mesen_live_bridge", StringComparison.OrdinalIgnoreCase)
+			|| baseName.StartsWith("mesen_socket_bridge", StringComparison.OrdinalIgnoreCase);
+	}
+
+	public static bool ShouldHideMainWindow(string[] args)
+	{
+		bool headless = false;
+		bool hasUserLua = false;
+		bool openScriptWindow = false;
+		bool openDebugger = false;
+		bool openStateInspector = false;
+		bool enableWatchHud = false;
+
+		foreach(string arg in args) {
+			if(arg.StartsWith("-") || arg.StartsWith("/")) {
+				string switchArg = ConvertArg(arg).ToLowerInvariant();
+				switch(switchArg) {
+					case "headless":
+					case "nogui":
+					case "noui":
+						headless = true;
+						break;
+					case "openscriptwindow":
+						openScriptWindow = true;
+						break;
+					case "opendebugger":
+						openDebugger = true;
+						break;
+					case "openstateinspector":
+						openStateInspector = true;
+						break;
+					case "enablewatchhud":
+						enableWatchHud = true;
+						break;
+				}
+			} else if(Path.GetExtension(arg).Equals(".lua", StringComparison.OrdinalIgnoreCase)) {
+				if(!IsBridgeScriptArg(arg)) {
+					hasUserLua = true;
+				}
+			}
+		}
+
+		if(headless) {
+			return true;
+		}
+
+		if(hasUserLua && !openScriptWindow && !openDebugger && !openStateInspector && !enableWatchHud) {
+			return true;
+		}
+
+		return false;
+	}
+
 	public static bool IsTestRunner(string[] args)
 	{
 		return args.Any(arg => CommandLineHelper.ConvertArg(arg).ToLowerInvariant() == "testrunner");
@@ -175,9 +261,16 @@ public class CommandLineHelper
 	{
 		if(LuaScriptsToLoad.Count > 0) {
 			foreach(string luaScript in LuaScriptsToLoad) {
-				ScriptWindowViewModel model = new();
-				model.LoadScript(luaScript);
-				DebugWindowManager.OpenDebugWindow(() => new ScriptWindow(model));
+				if(OpenScriptWindowRequested) {
+					ScriptWindowViewModel model = new();
+					model.LoadScript(luaScript);
+					if(IsBridgeScriptArg(luaScript)) {
+						model.RunScript();
+					}
+					DebugWindowManager.OpenDebugWindow(() => new ScriptWindow(model));
+				} else {
+					LoadScriptHeadless(luaScript);
+				}
 			}
 		}
 
@@ -200,6 +293,18 @@ public class CommandLineHelper
 		}
 
 		ProcessDebugAutomation(wnd);
+	}
+
+	private void LoadScriptHeadless(string luaScript)
+	{
+		string? content = FileHelper.ReadAllText(luaScript);
+		if(string.IsNullOrEmpty(content)) {
+			return;
+		}
+
+		string name = Path.GetFileName(luaScript);
+		string path = (Path.GetDirectoryName(luaScript) ?? Program.OriginalFolder) + Path.DirectorySeparatorChar;
+		DebugApi.LoadScript(name, path, content, -1);
 	}
 
 	private void ProcessDebugAutomation(MainWindow wnd)
@@ -254,6 +359,11 @@ public class CommandLineHelper
 --openDebugger - Open the main debugger window after a ROM loads.
 --openStateInspector - Open the State Inspector window after a ROM loads.
 --enableWatchHud - Enable the watch HUD overlay.
+--openScriptWindow - Open a Script Window for any .lua file passed on the command line.
+--headless - Hide the main window (default when non-bridge .lua scripts are passed without UI flags).
+--instanceGuid=<guid> - Override the single-instance identifier for this process.
+--instanceName=<name> - Derive a stable instance GUID from a name.
+--multiInstance - Always use a new instance GUID (allows multiple simultaneous instances).
 --autoDebug - Enable watch HUD and open Debugger + State Inspector after a ROM loads.";
 
 		result["General"] = general;

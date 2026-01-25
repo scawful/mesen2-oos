@@ -550,7 +550,9 @@ namespace Mesen.Debugger.Integration
 		private void GetRamLabelAddressAndType(int address, out int absoluteAddress, out MemoryType? memoryType)
 		{
 			if(address < 0) {
-
+				absoluteAddress = -1;
+				memoryType = null;
+				return;
 			}
 			AddressInfo absAddress = DebugApi.GetAbsoluteAddress(new AddressInfo() { Address = address, Type = _cpuMemType });
 			absoluteAddress = absAddress.Address;

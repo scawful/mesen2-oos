@@ -99,6 +99,27 @@ namespace Mesen.ViewModels
 						ResourceHelper.GetEnumText(ConfigManager.Config.Video.VideoFilter));
 				}
 			}
+
+			// Append agent title/source markers for multi-instance workflows
+			string? agentActive = Environment.GetEnvironmentVariable("MESEN2_AGENT_ACTIVE");
+			bool isActive = !string.IsNullOrWhiteSpace(agentActive)
+				&& agentActive != "0"
+				&& !agentActive.Equals("false", StringComparison.OrdinalIgnoreCase)
+				&& !agentActive.Equals("no", StringComparison.OrdinalIgnoreCase);
+			if(isActive) {
+				title = "ACTIVE " + title;
+			}
+
+			string? agentTitle = Environment.GetEnvironmentVariable("MESEN2_AGENT_TITLE");
+			if(!string.IsNullOrWhiteSpace(agentTitle)) {
+				title += " [" + agentTitle + "]";
+			}
+
+			string? agentSource = Environment.GetEnvironmentVariable("MESEN2_AGENT_SOURCE");
+			if(!string.IsNullOrWhiteSpace(agentSource)) {
+				title += " [src:" + agentSource + "]";
+			}
+
 			WindowTitle = title;
 		}
 	}

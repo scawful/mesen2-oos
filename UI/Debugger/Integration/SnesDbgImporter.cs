@@ -25,7 +25,7 @@ namespace Mesen.Debugger.Integration
 
 		protected override bool IsBranchInstruction(byte opCode)
 		{
-			return opCode == 0x20 || opCode == 0x10 || opCode == 0x30 || opCode == 0x50 || opCode == 0x70 || opCode == 0x80 || opCode == 0x90 || opCode == 0xB0 || opCode == 0xD0 || opCode == 0xF0 || opCode == 0x4C || opCode == 0x20 || opCode == 0x4C || opCode == 0x5C || opCode == 0x6C;
+			return opCode == 0x10 || opCode == 0x30 || opCode == 0x50 || opCode == 0x70 || opCode == 0x80 || opCode == 0x90 || opCode == 0xB0 || opCode == 0xD0 || opCode == 0xF0 || opCode == 0x20 || opCode == 0x22 || opCode == 0x4C || opCode == 0x5C || opCode == 0x6C || opCode == 0xDC;
 		}
 
 		protected override bool IsJumpToSubroutine(byte opCode)

@@ -7,6 +7,7 @@
 			<Control ID="mnuOptions">_Settings</Control>
 			<Control ID="mnuTools">_Tools</Control>
 			<Control ID="mnuDebug">_Debug</Control>
+			<Control ID="mnuOracleAI">_Oracle</Control>
 			<Control ID="mnuHelp">_Help</Control>
 		</Form>
 		<Form ID="AudioConfigView">

@@ -1,0 +1,44 @@
+<Window
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	xmlns:util="using:Mesen.Utilities"
+	mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="500"
+	x:Class="Mesen.Windows.StateLibraryWindow"
+	x:DataType="vm:StateLibraryViewModel"
+	Title="Oracle State Library"
+	Width="450" Height="500"
+	WindowStartupLocation="CenterOwner"
+>
+	<Design.DataContext>
+		<vm:StateLibraryViewModel />
+	</Design.DataContext>
+
+	<DockPanel Margin="10">
+		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10" Margin="0 10 0 0">
+			<Button Content="Refresh" Command="{Binding Refresh}" Width="80" HorizontalContentAlignment="Center" />
+			<Button Content="Delete" Command="{Binding DeleteSelected}" IsEnabled="{Binding SelectedState, Converter={x:Static ObjectConverters.IsNotNull}}" Width="80" HorizontalContentAlignment="Center" Background="#44FF0000" />
+			<Separator Width="20" Background="Transparent" />
+			<Button Content="Load" Command="{Binding LoadSelected}" IsEnabled="{Binding SelectedState, Converter={x:Static ObjectConverters.IsNotNull}}" Width="100" HorizontalContentAlignment="Center" FontWeight="Bold" />
+			<Button Content="Close" Click="OnCloseClick" Width="80" HorizontalContentAlignment="Center" />
+		</StackPanel>
+
+		<Border BorderThickness="1" BorderBrush="{StaticResource MesenGrayBorderColor}">
+			<ListBox ItemsSource="{Binding States}" SelectedItem="{Binding SelectedState}" DoubleTapped="OnListBoxDoubleTapped">
+				<ListBox.ItemTemplate>
+					<DataTemplate x:DataType="util:OracleStateEntry">
+						<Grid ColumnDefinitions="*, Auto">
+							<StackPanel Grid.Column="0">
+								<TextBlock Text="{Binding Label}" FontWeight="Bold" FontSize="14" />
+								<TextBlock Text="{Binding Path}" FontSize="10" Foreground="Gray" />
+							</StackPanel>
+							<TextBlock Grid.Column="1" Text="{Binding CreatedAt}" FontSize="10" VerticalAlignment="Center" />
+						</Grid>
+					</DataTemplate>
+				</ListBox.ItemTemplate>
+			</ListBox>
+		</Border>
+	</DockPanel>
+</Window>

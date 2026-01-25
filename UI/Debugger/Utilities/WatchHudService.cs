@@ -21,18 +21,7 @@ namespace Mesen.Debugger.Utilities
 		private static bool _cleared = true;
 		private static bool _dataCleared = true;
 
-		private sealed class WatchEntryDto
-		{
-			[JsonPropertyName("expression")] public string Expression { get; set; } = "";
-			[JsonPropertyName("value")] public string Value { get; set; } = "";
-			[JsonPropertyName("numeric")] public long NumericValue { get; set; }
-			[JsonPropertyName("changed")] public bool IsChanged { get; set; }
-		}
 
-		private static readonly JsonSerializerOptions _watchJsonOptions = new()
-		{
-			DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-		};
 
 		public static void ProcessNotification(NotificationEventArgs e)
 		{
@@ -222,7 +211,7 @@ namespace Mesen.Debugger.Utilities
 				if(watchData.Count == 0) {
 					ClearDataInternal();
 				} else {
-					string dataJson = JsonSerializer.Serialize(watchData, _watchJsonOptions);
+					string dataJson = JsonSerializer.Serialize(watchData, WatchDataJsonContext.Default.DictionaryStringListWatchEntryDto);
 					if(force || dataJson != _lastDataJson) {
 						EmuApi.SetWatchHudData(dataJson);
 						_lastDataJson = dataJson;
@@ -280,5 +269,21 @@ namespace Mesen.Debugger.Utilities
 			}
 			return false;
 		}
+	}
+
+	// DTO for watch entry serialization (must be outside static class for source generator)
+	internal sealed class WatchEntryDto
+	{
+		[JsonPropertyName("expression")] public string Expression { get; set; } = "";
+		[JsonPropertyName("value")] public string Value { get; set; } = "";
+		[JsonPropertyName("numeric")] public long NumericValue { get; set; }
+		[JsonPropertyName("changed")] public bool IsChanged { get; set; }
+	}
+
+	// Source-generated JSON context for AOT compatibility (fixes IL2026/IL3050 warnings)
+	[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+	[JsonSerializable(typeof(Dictionary<string, List<WatchEntryDto>>))]
+	internal partial class WatchDataJsonContext : JsonSerializerContext
+	{
 	}
 }

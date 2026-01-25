@@ -45,6 +45,7 @@ namespace Mesen.Windows
 		private readonly CancellationTokenSource _shutdownCts = new();
 		
 		private bool _preventFullscreenToggle = false;
+		private bool _headlessRequested = false;
 
 		private Panel _rendererPanel;
 		private NativeRenderer _renderer;
@@ -71,6 +72,12 @@ namespace Mesen.Windows
 			_testModeEnabled = System.Diagnostics.Debugger.IsAttached;
 			_isLinux = OperatingSystem.IsLinux();
 			_usesSoftwareRenderer = ConfigManager.Config.Video.UseSoftwareRenderer || OperatingSystem.IsMacOS();
+			_headlessRequested = CommandLineHelper.ShouldHideMainWindow(Program.CommandLineArgs);
+			if(_headlessRequested) {
+				ShowInTaskbar = false;
+				Opacity = 0;
+				WindowState = WindowState.Minimized;
+			}
 
 			_model = new MainWindowViewModel();
 			DataContext = _model;
@@ -216,6 +223,7 @@ namespace Mesen.Windows
 			Task.Run(() => {
 				CommandLineHelper cmdLine = new CommandLineHelper(Program.CommandLineArgs, true);
 				_cmdLine = cmdLine;
+				_headlessRequested = cmdLine.HeadlessRequested;
 
 				EmuApi.InitializeEmu(
 					ConfigManager.HomeFolder,
@@ -253,6 +261,7 @@ namespace Mesen.Windows
 				Dispatcher.UIThread.Post(() => {
 					cmdLine.LoadFiles();
 					cmdLine.OnAfterInit(this, _shutdownCts.Token);
+					ApplyHeadlessMode();
 
 					if(ConfigManager.Config.Preferences.AutomaticallyCheckForUpdates) {
 						_model.MainMenu.CheckForUpdate(this, true);
@@ -395,6 +404,20 @@ namespace Mesen.Windows
 		{
 			//Used to update input devices when the core requests changes (NES-only for now)
 			ConfigManager.Config.Nes.UpdateInputFromCoreConfig();
+		}
+
+		private void ApplyHeadlessMode()
+		{
+			if(!_headlessRequested) {
+				return;
+			}
+
+			ShowInTaskbar = false;
+			Opacity = 0;
+			if(WindowState != WindowState.Minimized) {
+				WindowState = WindowState.Minimized;
+			}
+			Hide();
 		}
 
 		private void InitializeComponent()

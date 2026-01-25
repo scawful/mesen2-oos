@@ -87,7 +87,7 @@ namespace Mesen.Debugger.Utilities
 					Dispatcher.UIThread.RunJobs();
 				}
 				DebugWorkspaceManager.Save(true);
-				if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud) {
+				if(!ConfigManager.Config.Debug.Debugger.ShowWatchHud && !DebugApi.HasScriptRunning()) {
 					WatchHudService.Shutdown();
 					DebugApi.ReleaseDebugger();
 				}
@@ -165,7 +165,7 @@ namespace Mesen.Debugger.Utilities
 
 		public static void ReleaseDebuggerIfIdle()
 		{
-			if(_openedWindows.Count == 0) {
+			if(_openedWindows.Count == 0 && !DebugApi.HasScriptRunning()) {
 				DebugApi.ReleaseDebugger();
 			}
 		}

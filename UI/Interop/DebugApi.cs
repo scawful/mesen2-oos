@@ -197,6 +197,7 @@ namespace Mesen.Interop
 
 		[DllImport(DllPath)] public static extern Int32 LoadScript([MarshalAs(UnmanagedType.LPUTF8Str)]string name, [MarshalAs(UnmanagedType.LPUTF8Str)]string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string content, Int32 scriptId = -1);
 		[DllImport(DllPath)] public static extern void RemoveScript(Int32 scriptId);
+		[DllImport(DllPath)][return: MarshalAs(UnmanagedType.I1)] public static extern bool HasScriptRunning();
 
 		[DllImport(DllPath, EntryPoint = "GetScriptLog")] private static extern void GetScriptLogWrapper(Int32 scriptId, IntPtr outScriptLog, Int32 maxLength);
 		public unsafe static string GetScriptLog(Int32 scriptId)

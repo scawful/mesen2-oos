@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Mesen.Config;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Mesen.Utilities
 {
@@ -13,7 +15,38 @@ namespace Mesen.Utilities
 	{
 		public static SingleInstance Instance { get; private set; } = new SingleInstance();
 
-		private static Guid _identifier = new Guid("{A46696B7-2D1C-4CC5-A52F-43BCAF094AEF}");
+		private static Guid _identifier = ResolveIdentifier();
+
+	private static Guid ResolveIdentifier()
+	{
+		string? overrideGuid = Environment.GetEnvironmentVariable("MESEN2_INSTANCE_GUID");
+		if(!string.IsNullOrWhiteSpace(overrideGuid) && Guid.TryParse(overrideGuid, out Guid parsed)) {
+			return parsed;
+		}
+
+		string? legacyGuid = Environment.GetEnvironmentVariable("MESEN2_INSTANCE_LEGACY_GUID");
+		if(!string.IsNullOrWhiteSpace(legacyGuid)
+			&& (legacyGuid.Equals("1", StringComparison.OrdinalIgnoreCase) || legacyGuid.Equals("true", StringComparison.OrdinalIgnoreCase))) {
+			return new Guid("{A46696B7-2D1C-4CC5-A52F-43BCAF094AEF}");
+		}
+
+		string? processPath = Environment.ProcessPath;
+		if(string.IsNullOrWhiteSpace(processPath)) {
+			processPath = AppContext.BaseDirectory;
+		}
+
+		if(!string.IsNullOrWhiteSpace(processPath)) {
+			try {
+				string normalized = Path.GetFullPath(processPath).ToLowerInvariant();
+				byte[] hash = MD5.HashData(Encoding.UTF8.GetBytes(normalized));
+				return new Guid(hash);
+			} catch {
+				// Fall back to legacy GUID below.
+			}
+		}
+
+		return new Guid("{A46696B7-2D1C-4CC5-A52F-43BCAF094AEF}");
+	}
 
 		private Mutex? _mutex;
 		private FileStream? _lockFileStream;

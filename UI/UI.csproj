@@ -41,7 +41,7 @@
 	<PropertyGroup>
 		<CFBundleName>Mesen2 OOS</CFBundleName> <!-- Also defines .app file name -->
 		<CFBundleDisplayName>Mesen2 OOS</CFBundleDisplayName>
-		<CFBundleIdentifier>ca.mesen</CFBundleIdentifier>
+		<CFBundleIdentifier>ca.mesen.oos</CFBundleIdentifier>
 		<CFBundleVersion>1.0.0</CFBundleVersion>
 		<CFBundleShortVersionString>1.0</CFBundleShortVersionString>
 		<CFBundlePackageType>APPL</CFBundlePackageType>
@@ -432,6 +432,12 @@
     </Compile>
     <Compile Update="Controls\StateGrid.axaml.cs">
       <DependentUpon>StateGrid.axaml</DependentUpon>
+    </Compile>
+    <Compile Update="Windows\StateLibraryWindow.axaml.cs">
+      <DependentUpon>StateLibraryWindow.axaml</DependentUpon>
+    </Compile>
+    <Compile Update="Windows\TextInputWindow.axaml.cs">
+      <DependentUpon>TextInputWindow.axaml</DependentUpon>
     </Compile>
     <Compile Update="Windows\CheatDatabaseWindow.axaml.cs">
       <DependentUpon>CheatDatabaseWindow.axaml</DependentUpon>

@@ -15,6 +15,8 @@ using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Mesen.Interop;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Mesen
 {
@@ -52,28 +54,41 @@ namespace Mesen
 				return 0;
 			}
 
+			ApplyInstanceOverrides(args);
+			bool headlessRequested = CommandLineHelper.ShouldHideMainWindow(args);
+
 			Environment.CurrentDirectory = ConfigManager.HomeFolder;
 
 			if(!File.Exists(ConfigManager.GetConfigFile())) {
 				//Could not find configuration file, show wizard
-				ExtractNativeDependencies(ConfigManager.HomeFolder);
-				App.ShowConfigWindow = true;
-				BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnMainWindowClose);
-				if(File.Exists(ConfigManager.GetConfigFile())) {
-					//Configuration done, restart process
-					Process.Start(Program.ExePath);
+				if(headlessRequested) {
+					ConfigManager.CreateConfig(false);
+				} else {
+					ExtractNativeDependencies(ConfigManager.HomeFolder);
+					App.ShowConfigWindow = true;
+					BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnMainWindowClose);
+					if(File.Exists(ConfigManager.GetConfigFile())) {
+						//Configuration done, restart process
+						Process.Start(Program.ExePath);
+					}
+					return 0;
 				}
-				return 0;
 			}
 
 			//Start loading config file in a separate thread
-			Task.Run(() => ConfigManager.LoadConfig());
+			if(!headlessRequested) {
+				Task.Run(() => ConfigManager.LoadConfig());
+			}
 
 			//Extract core dll & other native dependencies
 			ExtractNativeDependencies(ConfigManager.HomeFolder);
 
 			if(CommandLineHelper.IsTestRunner(args)) {
 				return TestRunner.Run(args);
+			}
+
+			if(headlessRequested) {
+				return HeadlessRunner.Run(args);
 			}
 
 			using SingleInstance instance = SingleInstance.Instance;
@@ -214,5 +229,63 @@ namespace Mesen
 					.With(new X11PlatformOptions { })
 					.With(new AvaloniaNativePlatformOptions { })
 					.LogToTrace();
+
+		private static void ApplyInstanceOverrides(string[] args)
+		{
+			string? instanceGuid = null;
+			string? instanceName = null;
+			bool multiInstance = false;
+
+			foreach(string arg in args) {
+				if(!(arg.StartsWith("-") || arg.StartsWith("/"))) {
+					continue;
+				}
+
+				string switchArg = ConvertArg(arg);
+				if(switchArg.StartsWith("instanceguid=", StringComparison.OrdinalIgnoreCase)) {
+					instanceGuid = switchArg.Substring("instanceguid=".Length);
+				} else if(switchArg.StartsWith("instancename=", StringComparison.OrdinalIgnoreCase)) {
+					instanceName = switchArg.Substring("instancename=".Length);
+				} else if(switchArg.Equals("multiinstance", StringComparison.OrdinalIgnoreCase)) {
+					multiInstance = true;
+				}
+			}
+
+			if(!string.IsNullOrWhiteSpace(instanceGuid)) {
+				if(Guid.TryParse(instanceGuid, out Guid parsed)) {
+					Environment.SetEnvironmentVariable("MESEN2_INSTANCE_GUID", parsed.ToString());
+				} else {
+					Console.WriteLine($"Invalid --instanceGuid value: {instanceGuid}");
+				}
+				return;
+			}
+
+			if(!string.IsNullOrWhiteSpace(instanceName)) {
+				Environment.SetEnvironmentVariable("MESEN2_INSTANCE_GUID", GuidFromName(instanceName).ToString());
+				return;
+			}
+
+			if(multiInstance) {
+				Environment.SetEnvironmentVariable("MESEN2_INSTANCE_GUID", Guid.NewGuid().ToString());
+			}
+		}
+
+		private static string ConvertArg(string arg)
+		{
+			arg = arg.Trim();
+			if(arg.StartsWith("--")) {
+				return arg.Substring(2);
+			}
+			if(arg.StartsWith("-") || arg.StartsWith("/")) {
+				return arg.Substring(1);
+			}
+			return arg;
+		}
+
+		private static Guid GuidFromName(string name)
+		{
+			byte[] hash = MD5.HashData(Encoding.UTF8.GetBytes(name));
+			return new Guid(hash);
+		}
 	}
 }

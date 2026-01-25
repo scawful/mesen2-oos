@@ -110,6 +110,7 @@ namespace Mesen.Interop
 		[DllImport(DllPath)] public static extern void LoadState(UInt32 stateIndex);
 		[DllImport(DllPath)] public static extern void SaveStateFile([MarshalAs(UnmanagedType.LPUTF8Str)]string filepath);
 		[DllImport(DllPath)] public static extern void LoadStateFile([MarshalAs(UnmanagedType.LPUTF8Str)]string filepath);
+		[DllImport(DllPath)] public static extern UInt32 GetSaveStateSlotCount();
 
 		[DllImport(DllPath, EntryPoint = "GetSaveStatePreview")] private static extern Int32 GetSaveStatePreviewWrapper([MarshalAs(UnmanagedType.LPUTF8Str)]string saveStatePath, [Out]byte[] imgData);
 		public static Bitmap? GetSaveStatePreview(string saveStatePath)
