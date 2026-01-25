@@ -12,6 +12,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 
 namespace Mesen.ViewModels
 {
@@ -59,6 +60,12 @@ namespace Mesen.ViewModels
 				List<string> files = Directory.GetFiles(ConfigManager.RecentGamesFolder, "*.rgd").OrderByDescending((file) => new FileInfo(file).LastWriteTime).ToList();
 				for(int i = 0; i < files.Count && entries.Count < 72; i++) {
 					entries.Add(new RecentGameInfo() { FileName = files[i], Name = Path.GetFileNameWithoutExtension(files[i]) });
+				}
+				if(entries.Count == 0) {
+					entries.Add(new RecentGameInfo() {
+						Name = ResourceHelper.GetMessage("OpenFileTile"),
+						IsOpenFileEntry = true
+					});
 				}
 			} else {
 				if(!Visible) {
@@ -151,14 +158,32 @@ namespace Mesen.ViewModels
 		public int StateIndex { get; set; } = -1;
 		public string Name { get; set; } = "";
 		public bool SaveMode { get; set; } = false;
+		public bool IsOpenFileEntry { get; set; } = false;
 
 		public bool IsEnabled()
 		{
-			return SaveMode || File.Exists(FileName);
+			return IsOpenFileEntry || SaveMode || File.Exists(FileName);
 		}
 
 		public void Load()
 		{
+			if(IsOpenFileEntry) {
+				Dispatcher.UIThread.Post(async () => {
+					string? initialFolder = null;
+					if(ConfigManager.Config.Preferences.OverrideGameFolder && Directory.Exists(ConfigManager.Config.Preferences.GameFolder)) {
+						initialFolder = ConfigManager.Config.Preferences.GameFolder;
+					} else if(ConfigManager.Config.RecentFiles.Items.Count > 0) {
+						initialFolder = ConfigManager.Config.RecentFiles.Items[0].RomFile.Folder;
+					}
+
+					string? filename = await FileDialogHelper.OpenFile(initialFolder, null, FileDialogHelper.RomExt);
+					if(filename != null) {
+						LoadRomHelper.LoadFile(filename);
+					}
+				});
+				return;
+			}
+
 			if(StateIndex > 0) {
 				Task.Run(() => {
 					//Run in another thread to prevent deadlocks etc. when emulator notifications are processed UI-side

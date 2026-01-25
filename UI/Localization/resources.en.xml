@@ -1666,6 +1666,8 @@ E
 
 		<Message ID="CouldNotInstallRuntime">The Visual Studio Runtime could not be installed properly.</Message>
 		<Message ID="EmptyState">&lt;empty&gt;</Message>
+		<Message ID="OpenFileTile">Open ROM</Message>
+		<Message ID="OpenFileTileHint">Browse for a ROM to load.</Message>
 		<Message ID="ErrorWhileCheckingUpdates">An error has occurred while trying to check for updates. Check your internet connection and try again.&#xA;&#xA;Error details:&#xA;{0}</Message>
 		<Message ID="AutoUpdateDisabledMessage">Automatic updates are not enabled on this build - please download the latest version of the code and recompile Mesen to get the latest updates.</Message>
 		<Message ID="FileNotFound">File not found: {0}</Message>

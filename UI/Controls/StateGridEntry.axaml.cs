@@ -103,6 +103,13 @@ namespace Mesen.Controls
 
 			Title = game.Name;
 
+			if(game.IsOpenFileEntry) {
+				SubTitle = ResourceHelper.GetMessage("OpenFileTileHint");
+				Enabled = true;
+				Image = StateGridEntry.EmptyImage;
+				return;
+			}
+
 			bool fileExists = File.Exists(game.FileName);
 			if(fileExists) {
 				if(Path.GetExtension(game.FileName) == "." + FileDialogHelper.MesenSaveStateExt) {
@@ -114,7 +121,7 @@ namespace Mesen.Controls
 			} else {
 				SubTitle = ResourceHelper.GetMessage("EmptyState");
 			}
-			Enabled = fileExists || game.SaveMode;
+			Enabled = game.IsEnabled();
 			Image = StateGridEntry.EmptyImage;
 
 			if(fileExists) {
