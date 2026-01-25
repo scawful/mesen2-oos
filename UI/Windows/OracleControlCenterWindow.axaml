@@ -1,0 +1,178 @@
+<Window
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	mc:Ignorable="d"
+	x:Class="Mesen.Windows.OracleControlCenterWindow"
+	x:DataType="vm:OracleControlCenterViewModel"
+	Title="Oracle Control Center"
+	Width="760" Height="620"
+	MinWidth="640" MinHeight="480"
+	WindowStartupLocation="CenterOwner"
+>
+	<Design.DataContext>
+		<vm:OracleControlCenterViewModel />
+	</Design.DataContext>
+
+	<DockPanel Margin="10">
+		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10" Margin="0 10 0 0">
+			<Button Content="Refresh Status" Click="OnRefreshStatusClick" />
+			<Button Content="Close" Click="OnCloseClick" Width="90" HorizontalContentAlignment="Center" />
+		</StackPanel>
+
+		<TabControl x:Name="Tabs">
+			<TabItem Header="Status">
+				<StackPanel Spacing="6">
+					<TextBlock Text="Live status from Oracle Agent Gateway and local probes." Foreground="Gray" />
+					<StackPanel Spacing="4" Margin="0 8 0 0">
+						<TextBlock Text="{Binding GatewayStatus}" FontWeight="Bold" />
+						<TextBlock Text="{Binding MesenStatus}" />
+						<TextBlock Text="{Binding SocketStatus}" />
+						<TextBlock Text="{Binding YazeStatus}" />
+						<TextBlock Text="{Binding UpdatedStatus}" />
+					</StackPanel>
+					<TextBlock Text="{Binding GatewayError}" Foreground="IndianRed" IsVisible="{Binding HasGatewayError}" TextWrapping="Wrap" />
+					<StackPanel Orientation="Horizontal" Spacing="8" Margin="0 6 0 0">
+						<Button Content="Refresh Status" Click="OnRefreshStatusClick" />
+						<Button Content="Copy Socket Path" IsEnabled="{Binding HasSocketPath}" Click="OnCopySocketClick" />
+					</StackPanel>
+				</StackPanel>
+			</TabItem>
+
+			<TabItem Header="Save States">
+				<StackPanel Spacing="6">
+					<TextBlock Text="{Binding StateLibrarySummary}" FontWeight="Bold" />
+					<TextBlock Text="{Binding StateLibraryPath}" FontSize="11" Foreground="Gray" TextWrapping="Wrap" />
+					<WrapPanel Spacing="8" Margin="0 6 0 0">
+						<Button Content="Save Labeled State..." Click="OnSaveLabeledStateClick" />
+						<Button Content="Open State Library" Click="OnOpenStateLibraryClick" />
+						<Button Content="Open Library Folder" Click="OnOpenStateLibraryFolderClick" />
+					</WrapPanel>
+				</StackPanel>
+			</TabItem>
+
+			<TabItem Header="Overlays">
+				<StackPanel Spacing="6">
+					<TextBlock Text="Oracle live overlay toggles (Lua bridge)." Foreground="Gray" />
+					<WrapPanel Spacing="8" Margin="0 6 0 0">
+						<Button Content="Toggle HUD" Tag="enabled" Click="OnToggleOverlayClick" />
+						<Button Content="Toggle Player Info" Tag="showPlayer" Click="OnToggleOverlayClick" />
+						<Button Content="Toggle Sprite Boxes" Tag="showSprites" Click="OnToggleOverlayClick" />
+						<Button Content="Toggle Issue Detection" Tag="showIssues" Click="OnToggleOverlayClick" />
+					</WrapPanel>
+				</StackPanel>
+			</TabItem>
+
+			<TabItem Header="Actions">
+				<ScrollViewer VerticalScrollBarVisibility="Auto">
+					<StackPanel Spacing="10" Margin="0 4 0 0">
+						<GroupBox Header="Capture + Notes">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Capture State + Screenshot" Tag="capture_state" Click="OnGatewayActionClick" />
+								<Button Content="Open Scratchpad" Tag="open_scratchpad" Click="OnGatewayActionClick" />
+								<Button Content="Open Agent Handoff" Tag="open_agent_handoff" Click="OnGatewayActionClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Build + Symbols">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Build ROM (oos168x)" Tag="build_rom" Click="OnGatewayActionClick" />
+								<Button Content="Export Symbols (sync)" Tag="export_symbols" Click="OnGatewayActionClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Testing">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Run Smoke Test" Tag="run_smoke_tests" Click="OnGatewayActionClick" />
+								<Button Content="Run Test Suite" Tag="run_test_suite" Click="OnGatewayActionClick" />
+								<Button Content="Open Tests Folder" Tag="open_tests_dir" Click="OnGatewayActionClick" />
+								<Button Content="Health Check (Output)" Tag="health" Click="OnGatewayActionWithOutputClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Yaze">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Start Service" Tag="yaze_start" Click="OnGatewayActionClick" />
+								<Button Content="Stop Service" Tag="yaze_stop" Click="OnGatewayActionClick" />
+								<Button Content="Toggle GUI" Tag="yaze_gui_toggle" Click="OnGatewayActionClick" />
+								<Button Content="Start Headless Workflow" Tag="headless_workflow_start" Click="OnGatewayActionClick" />
+								<Button Content="Stop Headless Workflow" Tag="headless_workflow_stop" Click="OnGatewayActionClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Gateway">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Start Oracle Agent Gateway" Click="OnGatewayStartClick" />
+								<Button Content="Stop Oracle Agent Gateway" Click="OnGatewayStopClick" />
+								<Button Content="Gateway Status (Output)" Click="OnGatewayStatusClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Local LLM Gateway">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Start OpenAI Gateway" Tag="start_llm_gateway" Click="OnGatewayActionClick" />
+								<Button Content="Open Gateway Status" Tag="open_llm_status" Click="OnGatewayActionClick" />
+							</WrapPanel>
+						</GroupBox>
+					</StackPanel>
+				</ScrollViewer>
+			</TabItem>
+
+			<TabItem Header="Paths + Docs">
+				<ScrollViewer VerticalScrollBarVisibility="Auto">
+					<StackPanel Spacing="10" Margin="0 4 0 0">
+						<GroupBox Header="Oracle-of-Secrets">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Open Oracle Repo" Tag="oracle_root" Click="OnOpenPathClick" />
+								<Button Content="Open ROMs Folder" Tag="oracle_roms" Click="OnOpenPathClick" />
+								<Button Content="Open SaveState Library" Tag="oracle_savestates" Click="OnOpenPathClick" />
+								<Button Content="Open Docs Folder" Tag="oracle_docs" Click="OnOpenPathClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Mesen2">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Open Mesen2 Repo" Tag="mesen_root" Click="OnOpenPathClick" />
+								<Button Content="Open Socket API Reference" Tag="mesen_socket_doc" Click="OnOpenPathClick" />
+								<Button Content="Open Agent Integration Guide" Tag="mesen_agent_doc" Click="OnOpenPathClick" />
+								<Button Content="Open Fork Debugging Guide" Tag="mesen_debug_doc" Click="OnOpenPathClick" />
+								<Button Content="Open Save State Folder" Tag="mesen_savestate_folder" Click="OnOpenPathClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="Models + Docs">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Open Model Catalog" Tag="model_catalog" Click="OnOpenPathClick" />
+								<Button Content="Open Integration Plan" Tag="integration_plan" Click="OnOpenPathClick" />
+								<Button Content="Open VSCode Local Models" Tag="vscode_models" Click="OnOpenPathClick" />
+								<Button Content="Open ~/models" Tag="models_dir" Click="OnOpenPathClick" />
+							</WrapPanel>
+						</GroupBox>
+
+						<GroupBox Header="AFS">
+							<WrapPanel Spacing="8" Margin="6">
+								<Button Content="Warm Context" Tag="afs_context_warm" Click="OnGatewayActionClick" />
+								<Button Content="Open AFS Repo" Tag="afs_repo" Click="OnOpenPathClick" />
+								<Button Content="Open AFS-Scawful Repo" Tag="afs_scawful_repo" Click="OnOpenPathClick" />
+								<Button Content="Open Chat Registry" Tag="chat_registry" Click="OnOpenPathClick" />
+							</WrapPanel>
+						</GroupBox>
+					</StackPanel>
+				</ScrollViewer>
+			</TabItem>
+
+			<TabItem Header="Diagnostics">
+				<StackPanel Spacing="6">
+					<TextBlock Text="TODO: wire ZSCustomOverworld v3 and Day/Night checks to gateway scripts." TextWrapping="Wrap" />
+					<TextBlock Text="See docs/Oracle_Menu_TODO.md for implementation ideas." Foreground="Gray" />
+					<WrapPanel Spacing="8" Margin="0 6 0 0">
+						<Button Content="Run ZSCustomOverworld v3 Check (TODO)" IsEnabled="False" />
+						<Button Content="Run Day/Night Stability Check (TODO)" IsEnabled="False" />
+					</WrapPanel>
+				</StackPanel>
+			</TabItem>
+		</TabControl>
+	</DockPanel>
+</Window>

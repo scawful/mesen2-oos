@@ -1125,39 +1125,11 @@ namespace Mesen.ViewModels
 			};
 		}
 
-		private void RunLuaSnippet(string content)
+		private void OpenOracleControlCenter(Window wnd, OracleControlCenterTab? tab = null)
 		{
-			// LoadScript(name, path, content, scriptId)
-			// Using scriptId = -1 ensures it's treated as a new transient script
-			DebugApi.LoadScript("OracleOverlayCommand", Program.OriginalFolder, content, -1);
-		}
-
-		private void ToggleOracleOverlay(string property)
-		{
-			string script = $"if hudState then hudState.{property} = not hudState.{property} end";
-			RunLuaSnippet(script);
-		}
-
-		private async void SaveLabeledStateAsync(Window wnd)
-		{
-			bool isPaused = EmuApi.IsPaused();
-			if (!isPaused) {
-				EmuApi.Pause();
-			}
-
-			string? label = await TextInputWindow.ShowDialog(wnd, "Enter a label for this save state:", "Quick Save");
-			
-			if (!string.IsNullOrWhiteSpace(label)) {
-				try {
-					string id = OracleStateLibrary.SaveLabeledState(label);
-					await MesenMsgBox.Show(wnd, $"Saved state '{label}' (ID: {id})", MessageBoxButtons.OK, MessageBoxIcon.Info);
-				} catch (Exception ex) {
-					await MesenMsgBox.Show(wnd, "Failed to save state: " + ex.Message, MessageBoxButtons.OK, MessageBoxIcon.Error);
-				}
-			}
-
-			if (!isPaused) {
-				EmuApi.Resume();
+			OracleControlCenterWindow center = ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleControlCenterWindow());
+			if(tab.HasValue) {
+				center.SelectTab(tab.Value);
 			}
 		}
 
@@ -1191,6 +1163,8 @@ namespace Mesen.ViewModels
 			};
 
 			OracleMenuItems = new List<object>() {
+				CreateOracleCommand("Control Center...", () => OpenOracleControlCenter(wnd)),
+				new ContextMenuSeparator(),
 				new MainMenuAction() {
 					ActionType = ActionType.Custom,
 					CustomText = "Status",
@@ -1202,151 +1176,33 @@ namespace Mesen.ViewModels
 						_oracleStatusUpdatedAction,
 						new ContextMenuSeparator(),
 						CreateOracleCommand("Refresh Status", UpdateOracleStatus),
+						CreateOracleCommand("Open Status Window...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Status)),
 					}
 				},
-				new ContextMenuSeparator(),
-
 				new MainMenuAction() {
 					ActionType = ActionType.Custom,
 					CustomText = "Save States",
 					SubActions = new List<object>() {
-						CreateOracleCommand("Save Labeled State...", () => SaveLabeledStateAsync(wnd), () => IsGameRunning),
-						new ContextMenuSeparator(),
-						CreateOracleAction("Open State Library", "open_state_library"),
-						CreateOracleCommand("Open State Library Folder", OracleAgentLauncher.OpenOracleSavestateLibrary),
+						CreateOracleCommand("Save Labeled State...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
+						CreateOracleCommand("Open State Library", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new StateLibraryWindow())),
+						CreateOracleCommand("Open Save States Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.SaveStates)),
 					}
 				},
-
 				new MainMenuAction() {
 					ActionType = ActionType.Custom,
-					CustomText = "Debug Overlays",
+					CustomText = "Overlays",
 					SubActions = new List<object>() {
-						CreateOracleCommand("Toggle HUD", () => ToggleOracleOverlay("enabled")),
-						CreateOracleCommand("Toggle Player Info", () => ToggleOracleOverlay("showPlayer")),
-						CreateOracleCommand("Toggle Sprite Boxes", () => ToggleOracleOverlay("showSprites")),
-						CreateOracleCommand("Toggle Issue Detection", () => ToggleOracleOverlay("showIssues")),
+						CreateOracleCommand("Toggle HUD", () => OracleOverlayController.Toggle("enabled")),
+						CreateOracleCommand("Toggle Player Info", () => OracleOverlayController.Toggle("showPlayer")),
+						CreateOracleCommand("Toggle Sprite Boxes", () => OracleOverlayController.Toggle("showSprites")),
+						CreateOracleCommand("Toggle Issue Detection", () => OracleOverlayController.Toggle("showIssues")),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Open Overlay Controls...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Overlays)),
 					}
 				},
-
 				new ContextMenuSeparator(),
 				CreateOracleAction("Capture State + Screenshot", "capture_state", () => IsGameRunning),
-				CreateOracleAction("Open Scratchpad", "open_scratchpad"),
-				CreateOracleAction("Open Agent Handoff", "open_agent_handoff"),
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Build + Symbols",
-					SubActions = new List<object>() {
-						CreateOracleAction("Build ROM (oos168x)", "build_rom"),
-						CreateOracleAction("Export Symbols (sync)", "export_symbols"),
-					}
-				},
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Testing",
-					SubActions = new List<object>() {
-						CreateOracleAction("Run Smoke Test", "run_smoke_tests"),
-						CreateOracleAction("Run Test Suite", "run_test_suite"),
-						new ContextMenuSeparator(),
-						CreateOracleAction("Open Tests Folder", "open_tests_dir"),
-						CreateOracleCommand("Open State Library", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new StateLibraryWindow())),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Yaze",
-					SubActions = new List<object>() {
-						CreateOracleAction("Start Service", "yaze_start"),
-						CreateOracleAction("Stop Service", "yaze_stop"),
-						CreateOracleAction("Toggle GUI", "yaze_gui_toggle"),
-						new ContextMenuSeparator(),
-						CreateOracleAction("Start Headless Workflow", "headless_workflow_start"),
-						CreateOracleAction("Stop Headless Workflow", "headless_workflow_stop"),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Gateway",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Start Oracle Agent Gateway", OracleAgentLauncher.StartGateway),
-						CreateOracleCommand("Stop Oracle Agent Gateway", OracleAgentLauncher.StopGateway),
-						CreateOracleCommand("Gateway Status", OracleAgentLauncher.GatewayStatus),
-						CreateOracleAction("Health Check", "health"),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Models + Docs",
-					SubActions = new List<object>() {
-						CreateOracleAction("Open Model Catalog", "open_model_catalog"),
-						CreateOracleAction("Open Integration Plan", "open_integration_plan"),
-						CreateOracleAction("Open VSCode Local Models", "open_vscode_models"),
-						CreateOracleAction("Open ~/models", "open_models_dir"),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Oracle-of-Secrets",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Open Oracle Repo", OracleAgentLauncher.OpenOracleRoot),
-						CreateOracleCommand("Open ROMs Folder", OracleAgentLauncher.OpenOracleRoms),
-						CreateOracleCommand("Open SaveState Library", OracleAgentLauncher.OpenOracleSavestateLibrary),
-						CreateOracleCommand("Open Docs Folder", OracleAgentLauncher.OpenOracleDocs),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Mesen2",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Open Mesen2 Repo", OracleAgentLauncher.OpenMesen2Root),
-						CreateOracleCommand("Open Socket API Reference", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Socket_API_Reference.md"))),
-						CreateOracleCommand("Open Agent Integration Guide", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Agent_Integration_Guide.md"))),
-						CreateOracleCommand("Open Fork Debugging Guide", () => OracleAgentLauncher.OpenMesen2Doc(Path.Combine("docs", "Mesen2_Fork_Debugging.md"))),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Open Save State Folder", () => OracleAgentLauncher.OpenPath(ConfigManager.SaveStateFolder)),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "AFS",
-					SubActions = new List<object>() {
-						CreateOracleAction("Warm Context", "afs_context_warm"),
-						CreateOracleAction("Open AFS Repo", "open_afs_repo"),
-						CreateOracleAction("Open AFS-Scawful Repo", "open_afs_scawful_repo"),
-						CreateOracleAction("Open Chat Registry", "open_chat_registry"),
-					}
-				},
-
-				new ContextMenuSeparator(),
-
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Local LLM Gateway",
-					SubActions = new List<object>() {
-						CreateOracleAction("Start OpenAI Gateway", "start_llm_gateway"),
-						CreateOracleAction("Open Gateway Status", "open_llm_status"),
-					}
-				},
+				CreateOracleCommand("Health Check (Output)", () => OracleAgentLauncher.RunGatewayActionWithOutput("health", "Oracle Health Check")),
 			};
 		}
 

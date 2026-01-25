@@ -18,6 +18,11 @@ namespace Mesen.Utilities
 			RunGatewayCommand(new[] { "action", action });
 		}
 
+		public static void RunGatewayActionWithOutput(string action, string title)
+		{
+			RunGatewayCommandWithOutput(new[] { "action", action }, title);
+		}
+
 		public static void StartGateway()
 		{
 			RunGatewayCommand(new[] { "serve", "--daemon" });

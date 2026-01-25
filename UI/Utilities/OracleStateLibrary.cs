@@ -46,8 +46,8 @@ namespace Mesen.Utilities
 	{
 		private static string GetLibraryRoot()
 		{
-			// Try to find the oracle-of-secrets repo root relative to the app
-			// Based on the user's structure: ~/src/hobby/mesen2-oos vs ~/src/hobby/oracle-of-secrets
+			// Prefer the Oracle-of-Secrets save state library if it exists.
+			// Fallback to the standard Mesen SaveStates folder otherwise.
 			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 			string path = Path.Combine(home, "src", "hobby", "oracle-of-secrets", "Roms", "savestates");
 			
@@ -57,6 +57,11 @@ namespace Mesen.Utilities
 			}
 			
 			return path;
+		}
+
+		public static string GetLibraryRootPath()
+		{
+			return GetLibraryRoot();
 		}
 
 		private static string GetManifestPath()
