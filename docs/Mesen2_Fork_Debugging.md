@@ -22,6 +22,12 @@ This fork adds a few quality-of-life features for live debugging and state inspe
   - Watch: current watch list values.
 - Refresh behavior follows the standard **Refresh Timing** controls at the bottom of the window.
 
+## Oracle Control Center
+- Open from **Oracle > Control Center...**.
+- Centralizes Oracle workflow actions (build/test/yaze/gateway), status, overlays, and docs.
+- Save States tab provides labeled saves and quick access to the State Library.
+- Diagnostics tab is reserved for ZSCustomOverworld v3 + Day/Night checks (see `docs/Oracle_Menu_TODO.md`).
+
 ## .symbols auto-load
 - `.symbols` files (asar output) are accepted as aliases for `.sym` when auto-loading symbols.
 
