@@ -3,6 +3,7 @@
 #include "Utilities/ZipWriter.h"
 #include "Utilities/ZipReader.h"
 #include "Utilities/PNGHelper.h"
+#include "Utilities/StringUtilities.h"
 #include "Shared/SaveStateManager.h"
 #include "Shared/MessageManager.h"
 #include "Shared/Emulator.h"
@@ -15,11 +16,45 @@
 #include "Shared/Video/VideoDecoder.h"
 #include "Shared/Video/VideoRenderer.h"
 #include "Shared/Video/BaseVideoFilter.h"
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 
 SaveStateManager::SaveStateManager(Emulator* emu)
 {
 	_emu = emu;
 	_lastIndex = 1;
+}
+
+uint32_t SaveStateManager::ResolveMaxIndex()
+{
+	uint32_t maxIndex = DefaultMaxIndex;
+	const char* envValue = std::getenv("MESEN2_SAVE_STATE_SLOTS");
+	if(!envValue || envValue[0] == '\0') {
+		envValue = std::getenv("OOS_SAVE_STATE_SLOTS");
+	}
+	if(envValue && envValue[0] != '\0') {
+		try {
+			int parsed = std::stoi(envValue);
+			if(parsed >= (int)MinIndex) {
+				maxIndex = std::min<uint32_t>(MaxIndexLimit, (uint32_t)parsed);
+			}
+		} catch(...) {
+			// Ignore invalid environment overrides
+		}
+	}
+	return maxIndex;
+}
+
+uint32_t SaveStateManager::GetMaxIndex()
+{
+	static uint32_t maxIndex = ResolveMaxIndex();
+	return maxIndex;
+}
+
+uint32_t SaveStateManager::GetAutoSaveIndex()
+{
+	return GetMaxIndex() + 1;
 }
 
 string SaveStateManager::GetStateFilepath(int stateIndex)
@@ -30,21 +65,76 @@ string SaveStateManager::GetStateFilepath(int stateIndex)
 	return FolderUtilities::CombinePath(folder, filename);
 }
 
+string SaveStateManager::GetLabelFilepathFromStatePath(const string& statePath)
+{
+	return statePath + ".label";
+}
+
+string SaveStateManager::GetLabelFilepath(const string& statePath)
+{
+	return GetLabelFilepathFromStatePath(statePath);
+}
+
+string SaveStateManager::GetStateLabel(const string& statePath)
+{
+	string labelPath = GetLabelFilepathFromStatePath(statePath);
+	ifstream file(labelPath, ios::in | ios::binary);
+	if(!file) {
+		return "";
+	}
+
+	string label((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	return StringUtilities::Trim(label);
+}
+
+bool SaveStateManager::SetStateLabel(const string& statePath, const string& label)
+{
+	string trimmed = StringUtilities::Trim(label);
+	if(trimmed.empty()) {
+		return ClearStateLabel(statePath);
+	}
+
+	string labelPath = GetLabelFilepathFromStatePath(statePath);
+	ofstream file(labelPath, ios::out | ios::binary | ios::trunc);
+	if(!file) {
+		return false;
+	}
+	file.write(trimmed.data(), trimmed.size());
+	return true;
+}
+
+bool SaveStateManager::ClearStateLabel(const string& statePath)
+{
+	string labelPath = GetLabelFilepathFromStatePath(statePath);
+	if(std::remove(labelPath.c_str()) == 0) {
+		return true;
+	}
+	return errno == ENOENT;
+}
+
 void SaveStateManager::SelectSaveSlot(int slotIndex)
 {
+	uint32_t maxIndex = GetMaxIndex();
+	if(slotIndex < (int)MinIndex) {
+		slotIndex = (int)MinIndex;
+	} else if(slotIndex > (int)maxIndex) {
+		slotIndex = (int)maxIndex;
+	}
 	_lastIndex = slotIndex;
 	MessageManager::DisplayMessage("SaveStates", "SaveStateSlotSelected", std::to_string(_lastIndex));
 }
 
 void SaveStateManager::MoveToNextSlot()
 {
-	_lastIndex = (_lastIndex % MaxIndex) + 1;
+	uint32_t maxIndex = GetMaxIndex();
+	_lastIndex = (_lastIndex % maxIndex) + 1;
 	MessageManager::DisplayMessage("SaveStates", "SaveStateSlotSelected", std::to_string(_lastIndex));
 }
 
 void SaveStateManager::MoveToPreviousSlot()
 {
-	_lastIndex = (_lastIndex == 1 ? SaveStateManager::MaxIndex : (_lastIndex - 1));
+	uint32_t maxIndex = GetMaxIndex();
+	_lastIndex = (_lastIndex == 1 ? maxIndex : (_lastIndex - 1));
 	MessageManager::DisplayMessage("SaveStates", "SaveStateSlotSelected", std::to_string(_lastIndex));
 }
 

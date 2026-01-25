@@ -17,6 +17,16 @@
 
 ScriptingContext* ScriptingContext::_context = nullptr;
 
+namespace
+{
+	bool IsBridgeScriptName(const std::string& scriptName)
+	{
+		std::string lower = scriptName;
+		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+		return lower.rfind("mesen_live_bridge", 0) == 0 || lower.rfind("mesen_socket_bridge", 0) == 0;
+	}
+}
+
 ScriptingContext::ScriptingContext(Debugger *debugger)
 {
 	_debugger = debugger;
@@ -63,6 +73,10 @@ bool ScriptingContext::LoadScript(string scriptName, string path, string scriptC
 
 	EmuSettings* settings = debugger->GetEmulator()->GetSettings();
 	bool allowIoOsAccess = settings->GetDebugConfig().ScriptAllowIoOsAccess;
+	if(!allowIoOsAccess && IsBridgeScriptName(scriptName)) {
+		allowIoOsAccess = true;
+		Log("Bridge script detected; enabling IO/OS access.");
+	}
 	LuaOpenLibs(_lua, allowIoOsAccess);
 
 	//Prevent lua code from loading any files
@@ -92,7 +106,11 @@ bool ScriptingContext::LoadScript(string scriptName, string path, string scriptC
 
 	luaL_requiref(_lua, "emu", LuaApi::GetLibrary, 1);
 	Log("Loading script...");
-	if((iErr = luaL_loadbufferx(_lua, scriptContent.c_str(), scriptContent.size(), ("@" + scriptName).c_str(), nullptr)) == 0) {
+	string debugName = scriptName;
+	if(scriptName.find('/') == string::npos && scriptName.find('\\') == string::npos && !path.empty()) {
+		debugName = path + scriptName;
+	}
+	if((iErr = luaL_loadbufferx(_lua, scriptContent.c_str(), scriptContent.size(), ("@" + debugName).c_str(), nullptr)) == 0) {
 		_timer.Reset();
 		lua_setwatchdogtimer(_lua, ScriptingContext::ExecutionCountHook, 1000);
 		if((iErr = lua_pcall(_lua, 0, LUA_MULTRET, 0)) == 0) {

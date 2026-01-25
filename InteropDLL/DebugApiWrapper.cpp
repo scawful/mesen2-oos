@@ -194,6 +194,19 @@ extern "C"
 
 	DllExport int32_t __stdcall LoadScript(char* name, char* path, char* content, int32_t scriptId) { return WithTool(int32_t, GetScriptManager(), LoadScript(name, path, content, scriptId)); }
 	DllExport void __stdcall RemoveScript(int32_t scriptId) { WithToolVoid(GetScriptManager(), RemoveScript(scriptId)); }
+	DllExport bool __stdcall HasScriptRunning()
+	{
+		if(!_emu) {
+			return false;
+		}
+
+		DebuggerRequest dbgRequest = _emu->GetDebugger(false);
+		Debugger* dbg = dbgRequest.GetDebugger();
+		if(!dbg || !dbg->GetScriptManager()) {
+			return false;
+		}
+		return dbg->GetScriptManager()->HasScript();
+	}
 
 	DllExport void __stdcall GetScriptLog(int32_t scriptId, char* outScriptLog, uint32_t maxLength)
 	{

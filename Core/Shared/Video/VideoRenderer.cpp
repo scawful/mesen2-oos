@@ -21,7 +21,7 @@ VideoRenderer::VideoRenderer(Emulator* emu)
 	_rendererHud.reset(new DebugHud());
 	_systemHud.reset(new SystemHud(_emu));
 	_inputHud.reset(new InputHud(emu, _rendererHud.get()));
-	_watchHud.reset(new WatchHud());
+	_watchHud.reset(new WatchHud(_emu));
 }
 
 VideoRenderer::~VideoRenderer()

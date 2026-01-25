@@ -250,9 +250,12 @@ void ShortcutKeyHandler::ProcessShortcutPressed(EmulatorShortcut shortcut, uint3
 			_emu->GetSaveStateManager()->SaveState((int)shortcut - (int)EmulatorShortcut::SaveStateSlot1 + 1);
 			break;
 		
+		case EmulatorShortcut::LoadStateSlotAuto:
+			_emu->GetSaveStateManager()->LoadState(SaveStateManager::GetAutoSaveIndex());
+			break;
+
 		case EmulatorShortcut::LoadStateSlot1: case EmulatorShortcut::LoadStateSlot2: case EmulatorShortcut::LoadStateSlot3: case EmulatorShortcut::LoadStateSlot4: case EmulatorShortcut::LoadStateSlot5:
 		case EmulatorShortcut::LoadStateSlot6: case EmulatorShortcut::LoadStateSlot7: case EmulatorShortcut::LoadStateSlot8: case EmulatorShortcut::LoadStateSlot9: case EmulatorShortcut::LoadStateSlot10:
-		case EmulatorShortcut::LoadStateSlotAuto:
 			_emu->GetSaveStateManager()->LoadState((int)shortcut - (int)EmulatorShortcut::LoadStateSlot1 + 1);
 			break;
 

@@ -7,6 +7,7 @@
 #include "SNES/SnesConsole.h"
 #include "SNES/SnesMemoryManager.h"
 #include "SNES/SnesDmaController.h"
+#include "Shared/SocketServer.h"
 #include "SNES/SnesCpu.Instructions.h"
 #include "SNES/SnesCpu.Shared.h"
 #include "Shared/EventType.h"

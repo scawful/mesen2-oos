@@ -14,9 +14,9 @@ protected:
 	void InternalSetStateFromInput() override;
 	uint16_t ToByte();
 	void Serialize(Serializer &s) override;
-	void RefreshStateBuffer() override;
 
 public:
+	void RefreshStateBuffer() override;
 	enum Buttons { A = 0, B, X, Y, L, R, Select, Start, Up, Down, Left, Right };
 
 	SnesController(Emulator* emu, uint8_t port, KeyMappingSet keyMappings);

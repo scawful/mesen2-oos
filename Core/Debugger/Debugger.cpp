@@ -19,6 +19,7 @@
 #include "Debugger/TraceLogFileSaver.h"
 #include "Debugger/CdlManager.h"
 #include "Debugger/ITraceLogger.h"
+#include "Shared/SocketServer.h"
 #include "SNES/SnesCpuTypes.h"
 #include "SNES/SpcTypes.h"
 #include "SNES/Coprocessors/SA1/Sa1Types.h"
@@ -454,6 +455,12 @@ void Debugger::SleepUntilResume(CpuType sourceCpu, BreakSource source, MemoryOpe
 		}
 
 		_waitForBreakResume = true;
+
+		// Broadcast BREAK event to socket clients
+		stringstream ss;
+		ss << "{\"cpu\":" << (int)sourceCpu << ",\"id\":" << breakpointId << ",\"pc\":\"" << HexUtilities::ToHex(GetProgramCounter(sourceCpu, true)) << "\"}";
+		SocketServer::BroadcastEvent("breakpoint_hit", ss.str());
+
 		_emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::CodeBreak, &evt);
 		ProcessEvent(EventType::CodeBreak, sourceCpu);
 		notificationSent = true;

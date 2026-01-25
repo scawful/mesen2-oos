@@ -8,6 +8,7 @@
 #include "SNES/MemoryMappings.h"
 #include "Shared/MemoryOperationType.h"
 #include "Shared/EventType.h"
+#include "Shared/SocketServer.h"
 
 #define SnesCpu Sa1Cpu
 #include "SNES/SnesCpu.Instructions.h"

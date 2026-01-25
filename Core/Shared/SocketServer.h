@@ -8,19 +8,61 @@
 #include <functional>
 #include <unordered_map>
 #include <deque>
+#include <set>
 
 class Emulator;
+
+// Error codes for better error categorization
+enum class SocketErrorCode {
+	None = 0,
+	InvalidRequest = 1,
+	MissingParameter = 2,
+	InvalidParameter = 3,
+	CommandNotFound = 4,
+	NotImplemented = 5,
+	EmulatorNotRunning = 6,
+	DebuggerNotAvailable = 7,
+	MemoryOutOfRange = 8,
+	RequestTooLarge = 9,
+	Timeout = 10,
+	ConnectionError = 11,
+	InternalError = 12,
+	PermissionDenied = 13,
+	ResourceExhausted = 14,
+	InvalidState = 15
+};
+
+// Log level for filtering debug messages
+enum class SocketLogLevel {
+	Debug = 0,
+	Info = 1,
+	Warn = 2,
+	Error = 3
+};
 
 // JSON-like command structure (simple key-value parsing)
 struct SocketCommand {
 	string type;
 	unordered_map<string, string> params;
+	int clientFd = -1;
+	
+	// Validation helpers
+	bool HasParam(const string& key) const {
+		return params.find(key) != params.end();
+	}
+	
+	string GetParam(const string& key, const string& defaultValue = "") const {
+		auto it = params.find(key);
+		return (it != params.end()) ? it->second : defaultValue;
+	}
 };
 
 struct SocketResponse {
 	bool success;
 	string data;
 	string error;
+	SocketErrorCode errorCode = SocketErrorCode::None;
+	bool retryable = false;  // Hint for client retry
 
 	string ToJson() const;
 };
@@ -63,6 +105,16 @@ struct MemoryWatchRegion {
 	uint32_t maxDepth;
 };
 
+// Watch trigger for conditional breakpoints/events
+struct WatchTrigger {
+	uint32_t id;
+	uint32_t addr;
+	uint16_t value;       // Value to match
+	string condition;     // "eq", "ne", "lt", "gt", "lte", "gte"
+	bool enabled;
+	bool triggered;       // Set true when condition met
+};
+
 // Symbol table entry for Oracle debugging
 struct SymbolEntry {
 	string name;
@@ -99,6 +151,33 @@ struct LogpointHit {
 	CpuType cpuType;
 	uint64_t cycleCount;
 	string value;  // Evaluated expression result
+};
+
+// Request validation structure
+struct CommandValidation {
+	size_t maxRequestSize;  // Max request size in bytes
+	size_t maxParams;       // Max number of parameters
+	std::set<string> requiredParams;  // Required parameter keys
+	std::set<string> optionalParams;  // Optional parameter keys
+	bool allowEmptyParams;  // Allow commands with no params
+};
+
+// Agent registration info
+struct AgentInfo {
+	string agentId;
+	string agentName;
+	string version;
+	uint64_t connectedAt;
+	uint64_t lastSeen;
+	int clientFd;
+};
+
+// Command history entry
+struct CommandHistoryEntry {
+	string command;
+	string timestamp;
+	SocketErrorCode errorCode;
+	uint64_t latencyUs;  // Latency in microseconds
 };
 
 class SocketServer {
@@ -138,11 +217,55 @@ private:
 	static unordered_map<string, SymbolEntry> _symbolTable;
 	static SimpleLock _symbolLock;
 
+	// Logpoints (static for use in static handlers)
+	static vector<SocketLogpoint> _logpoints;
+	static std::deque<LogpointHit> _logpointHits;
+	static uint32_t _nextLogpointId;
+	static uint32_t _logpointHitMaxSize;
+	static SimpleLock _logpointLock;
+
+	// Event subscription (static for use in static handlers)
+	// Maps client FD -> set of subscribed event types
+	static unordered_map<int, std::set<string>> _eventSubscriptions;
+	static SimpleLock _eventLock;
+
+	// Agent registration (static for use in static handlers)
+	static unordered_map<int, AgentInfo> _registeredAgents;
+	static SimpleLock _agentLock;
+
+	// Command history for debugging (static for use in static handlers)
+	static std::deque<CommandHistoryEntry> _commandHistory;
+	static uint32_t _commandHistoryMaxSize;
+	static SimpleLock _historyLock;
+
+	// Request validation rules per command type
+	static unordered_map<string, CommandValidation> _validationRules;
+	static SimpleLock _validationLock;
+
+	// Log level control
+	static SocketLogLevel _logLevel;
+	static SimpleLock _logLevelLock;
+
+	// State diff caching
+	static unordered_map<string, string> _lastState;
+	static SimpleLock _stateLock;
+
+	// Watch triggers
+	static vector<WatchTrigger> _watchTriggers;
+	static uint32_t _nextWatchTriggerId;
+	static SimpleLock _watchTriggerLock;
+
 	// Helper to sync breakpoints with emulator
 	static void SyncBreakpoints(Emulator* emu);
+	
+	// Request validation helper
+	static bool ValidateCommand(const SocketCommand& cmd, string& error, SocketErrorCode& errorCode);
+	
+	// Initialize validation rules (called once)
+	static void InitializeValidationRules();
 
 	void ServerLoop();
-	void HandleClient(int clientFd);
+	bool HandleClient(int clientFd);
 	bool ParseCommand(const string& json, SocketCommand& cmd, string& error);
 	void RegisterHandlers();
 
@@ -160,6 +283,7 @@ private:
 	static SocketResponse HandleReadBlock(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleWriteBlock(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSaveState(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleSaveStateLabel(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadScript(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
@@ -169,6 +293,8 @@ private:
 	static SocketResponse HandleDisasm(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleStep(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRunFrame(Emulator* emu, const SocketCommand& cmd);
+        static SocketResponse HandleCallstack(Emulator* emu, const SocketCommand& cmd);
+        static SocketResponse HandleOsd(Emulator* emu, const SocketCommand& cmd);
 
 	// Emulation control handlers
 	static SocketResponse HandleRomInfo(Emulator* emu, const SocketCommand& cmd);
@@ -191,6 +317,12 @@ private:
 	// Trace handler
 	static SocketResponse HandleTrace(Emulator* emu, const SocketCommand& cmd);
 
+	// Logpoint handler
+	static SocketResponse HandleLogpoint(Emulator* emu, const SocketCommand& cmd);
+
+	// Subscribe handler
+	static SocketResponse HandleSubscribe(Emulator* emu, const SocketCommand& cmd);
+
 	// P register tracking handlers
 	static SocketResponse HandlePWatch(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandlePLog(Emulator* emu, const SocketCommand& cmd);
@@ -208,6 +340,31 @@ private:
 	static SocketResponse HandleCollisionOverlay(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleCollisionDump(Emulator* emu, const SocketCommand& cmd);
 
+	// Performance handlers
+	static SocketResponse HandleReadBlockBinary(Emulator* emu, const SocketCommand& cmd);
+
+	// API discovery handlers
+	static SocketResponse HandleHelp(Emulator* emu, const SocketCommand& cmd);
+
+	// ALTTP game state handlers
+	static SocketResponse HandleGameState(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleSprites(Emulator* emu, const SocketCommand& cmd);
+
+	// Agent discovery & health handlers
+	static SocketResponse HandleCapabilities(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleAgentRegister(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleMetrics(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleLogLevel(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleCommandHistory(Emulator* emu, const SocketCommand& cmd);
+
+	// YAZE state sync handlers
+	static SocketResponse HandleSaveStateSync(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleSaveStateWatch(Emulator* emu, const SocketCommand& cmd);
+
+	// Agent-friendly feature handlers
+	static SocketResponse HandleStateDiff(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleWatchTrigger(Emulator* emu, const SocketCommand& cmd);
+
 public:
 	SocketServer(Emulator* emu);
 	~SocketServer();
@@ -216,6 +373,10 @@ public:
 	void Stop();
 	bool IsRunning() const { return _running; }
 	string GetSocketPath() const { return _socketPath; }
+	
+	// Status file management
+	void UpdateStatusFile();
+	string GetStatusFilePath() const;
 
 	// Register custom command handler
 	void RegisterHandler(const string& command, CommandHandler handler);
@@ -223,6 +384,14 @@ public:
 	// Debugger hook methods - called from SnesDebugger to log events
 	static void LogPRegisterChange(uint32_t pc, uint8_t oldP, uint8_t newP, uint8_t opcode, uint64_t cycleCount);
 	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer);
+	static void CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu);
+	static void BroadcastEvent(string eventType, string data);
 	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled; }
 	static bool HasMemoryWatch(uint32_t addr);
+	static bool HasLogpoints() { return !_logpoints.empty(); }
+
+	// Collision overlay accessors - called from WatchHud for rendering
+	static bool IsCollisionOverlayEnabled();
+	static string GetCollisionOverlayMode();
+	static const vector<uint8_t>& GetCollisionHighlightTiles();
 };

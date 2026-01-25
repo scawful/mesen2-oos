@@ -185,7 +185,7 @@ void Emulator::ProcessAutoSaveState()
 	if(_autoSaveStateFrameCounter > 0) {
 		_autoSaveStateFrameCounter--;
 		if(_autoSaveStateFrameCounter == 0) {
-			_saveStateManager->SaveState(SaveStateManager::AutoSaveStateIndex, false);
+			_saveStateManager->SaveState(SaveStateManager::GetAutoSaveIndex(), false);
 		}
 	} else {
 		uint32_t saveStateDelay = _settings->GetPreferences().AutoSaveStateDelay;
@@ -261,6 +261,13 @@ void Emulator::OnBeforeSendFrame()
 
 void Emulator::ProcessEndOfFrame()
 {
+	// Broadcast frame_complete event
+	if (_socketServer && _socketServer->IsRunning()) {
+		stringstream ss;
+		ss << "{\"frame\":" << GetFrameCount() << "}";
+		SocketServer::BroadcastEvent("frame_complete", ss.str());
+	}
+
 	if(!_isRunAheadFrame) {
 		_frameLimiter->ProcessFrame();
 		while(_frameLimiter->WaitForNextFrame()) {
@@ -600,7 +607,7 @@ void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_pt
 string Emulator::GetHash(HashType type)
 {
 	shared_ptr<IConsole> console = _console.lock();
-	string hash = console->GetHash(type);
+	string hash = console ? console->GetHash(type) : "";
 	if(hash.size()) {
 		return hash;
 	} else if(type == HashType::Sha1) {

@@ -1158,6 +1158,9 @@ void SnesCpu::STP()
 {
 	//Stop the CPU
 	_state.StopState = SnesCpuStopState::Stopped;
+#ifndef DUMMYCPU
+SocketServer::BroadcastEvent("CRASH", "{\"reason\":\"STP\"}");
+#endif
 }
 
 void SnesCpu::WAI()

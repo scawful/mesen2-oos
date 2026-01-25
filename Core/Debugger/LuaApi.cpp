@@ -900,7 +900,12 @@ int LuaApi::SetInput(lua_State* lua)
 			}
 		}
 	}
-	
+
+	// B005 FIX: RefreshStateBuffer() is CRITICAL for input to reach the game.
+	// SetBitValue() modifies _state, but the game reads from _stateBuffer via ReadRam().
+	// Without this call, emu.setInput() changes never reach the emulated game.
+	controller->RefreshStateBuffer();
+
 	lua_pop(lua, 1);
 
 	return l.ReturnCount();

@@ -370,6 +370,7 @@ extern "C" {
 	DllExport void __stdcall LoadStateFile(char* filepath) { if(_emu) { _emu->GetSaveStateManager()->LoadState(filepath); } }
 	DllExport void __stdcall LoadRecentGame(char* filepath, bool resetGame) { if(_emu) { _emu->GetSaveStateManager()->LoadRecentGame(filepath, resetGame); } }
 	DllExport int32_t __stdcall GetSaveStatePreview(char* saveStatePath, uint8_t* pngData) { return _emu ? _emu->GetSaveStateManager()->GetSaveStatePreview(saveStatePath, pngData) : 0; }
+	DllExport uint32_t __stdcall GetSaveStateSlotCount() { return SaveStateManager::GetMaxIndex(); }
 
 	class PgoKeyManager : public IKeyManager
 	{

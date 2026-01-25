@@ -7,12 +7,16 @@ struct RenderedFrame;
 class SaveStateManager
 {
 private:
-	static constexpr uint32_t MaxIndex = 10;
+	static constexpr uint32_t DefaultMaxIndex = 20;
+	static constexpr uint32_t MinIndex = 1;
+	static constexpr uint32_t MaxIndexLimit = 99;
 
 	atomic<uint32_t> _lastIndex;
 	Emulator* _emu;
 
-	string GetStateFilepath(int stateIndex);
+	static uint32_t ResolveMaxIndex();
+	static string GetLabelFilepathFromStatePath(const string& statePath);
+
 	void SaveVideoData(ostream& stream);
 	bool GetVideoData(vector<uint8_t>& out, RenderedFrame& frame, istream& stream);
 
@@ -22,9 +26,17 @@ private:
 public:
 	static constexpr uint32_t FileFormatVersion = 4;
 	static constexpr uint32_t MinimumSupportedVersion = 3;
-	static constexpr uint32_t AutoSaveStateIndex = 11;
+	static uint32_t GetMaxIndex();
+	static uint32_t GetAutoSaveIndex();
 
 	SaveStateManager(Emulator* emu);
+
+	string GetStateFilepath(int stateIndex);
+
+	static string GetLabelFilepath(const string& statePath);
+	static string GetStateLabel(const string& statePath);
+	static bool SetStateLabel(const string& statePath, const string& label);
+	static bool ClearStateLabel(const string& statePath);
 
 	void SaveState();
 	bool LoadState();

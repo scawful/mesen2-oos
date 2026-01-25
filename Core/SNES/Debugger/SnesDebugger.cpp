@@ -604,6 +604,11 @@ void SnesDebugger::ProcessInputOverrides(DebugControllerState inputOverrides[8])
 			if(inputOverrides[i].Down) controller->SetBit(SnesController::Buttons::Down);
 			if(inputOverrides[i].Left) controller->SetBit(SnesController::Buttons::Left);
 			if(inputOverrides[i].Right) controller->SetBit(SnesController::Buttons::Right);
+
+			// CRITICAL: Update the state buffer so ReadRam() returns the new values.
+			// SetBit() modifies _state, but the game reads from _stateBuffer via ReadRam().
+			// Without this call, the input override never reaches the game!
+			controller->RefreshStateBuffer();
 		}
 	}
 	controlManager->RefreshHubState();

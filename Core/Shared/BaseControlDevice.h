@@ -29,8 +29,6 @@ protected:
 	bool _connected = true;
 	SimpleLock _stateLock;
 
-	virtual void RefreshStateBuffer() { }
-
 	void EnsureCapacity(int32_t minBitCount);
 	uint32_t GetByteIndex(uint8_t bit);
 	virtual bool HasCoordinates();
@@ -56,6 +54,10 @@ public:
 	static constexpr int DeviceYCoordButtonId = 0xFFFF;
 
 	static constexpr uint8_t ExpDevicePort = 4;
+
+	// Virtual method to update the internal state buffer from _state.
+	// Called by debugger input overrides to make SetBit() changes visible to ReadRam().
+	virtual void RefreshStateBuffer() { }
 	static constexpr uint8_t ConsoleInputPort = 5;
 	static constexpr uint8_t MapperInputPort = 6;
 	static constexpr uint8_t ExpDevicePort2 = 7;
