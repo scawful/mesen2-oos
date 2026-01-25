@@ -23,6 +23,7 @@ namespace Mesen.Debugger.ViewModels
 		public IntegrationConfig Integration { get; set; }
 
 		public List<object> CpuTypeList { get; set; } = new();
+		public bool IsMacOs { get; } = OperatingSystem.IsMacOS();
 
 		[Reactive] public DebugConfigWindowTab SelectedIndex { get; set; }
 

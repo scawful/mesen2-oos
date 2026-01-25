@@ -81,18 +81,49 @@ namespace Mesen.Debugger.Utilities
 
 		private static bool IsShortcutMatch(KeyEventArgs e, DbgShortKeys keys)
 		{
-			if(e.Key != Key.None && e.Key == keys.ShortcutKey && e.KeyModifiers == keys.Modifiers) {
+			if(e.Key == Key.None) {
+				return false;
+			}
+
+			if(e.Key == keys.ShortcutKey && IsModifierMatch(e.KeyModifiers, keys.Modifiers)) {
 				return true;
 			}
 
 			// macOS: Ctrl+M can arrive as Ctrl+Enter/Return in Avalonia, which breaks the default Debug shortcut.
-			if(OperatingSystem.IsMacOS() && e.KeyModifiers == KeyModifiers.Control) {
-				if(keys.Modifiers == KeyModifiers.Control && keys.ShortcutKey == Key.M && e.Key == Key.Enter) {
+			if(OperatingSystem.IsMacOS() && IsModifierMatch(e.KeyModifiers, KeyModifiers.Control)) {
+				if(IsModifierMatch(keys.Modifiers, KeyModifiers.Control) && keys.ShortcutKey == Key.M && e.Key == Key.Enter) {
 					return true;
 				}
 			}
 
 			return false;
+		}
+
+		private static bool IsModifierMatch(KeyModifiers input, KeyModifiers expected)
+		{
+			if(input == expected) {
+				return true;
+			}
+
+			if(!OperatingSystem.IsMacOS()) {
+				return false;
+			}
+
+			if(!ConfigManager.Config.Debug.Debugger.UseCommandKeyForShortcuts) {
+				return false;
+			}
+
+			return NormalizeCommandModifier(input) == NormalizeCommandModifier(expected);
+		}
+
+		private static KeyModifiers NormalizeCommandModifier(KeyModifiers modifiers)
+		{
+			if((modifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0) {
+				modifiers &= ~(KeyModifiers.Control | KeyModifiers.Meta);
+				modifiers |= KeyModifiers.Control;
+			}
+
+			return modifiers;
 		}
 	}
 }

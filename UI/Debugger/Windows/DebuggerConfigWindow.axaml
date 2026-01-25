@@ -284,23 +284,36 @@
 					</StackPanel>
 				</TabItem.Header>
 
-				<TabControl>
-					<TabItem Header="{l:Translate tabShared}">
-						<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding SharedShortcuts}" />
-					</TabItem>
-					<TabItem Header="{l:Translate tabDebugger}">
-						<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding DebuggerShortcuts}" />
-					</TabItem>
-					<TabItem Header="{l:Translate tabMemoryTools}">
-						<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding MemoryToolsShortcuts}" />
-					</TabItem>
-					<TabItem Header="{l:Translate tabMisc}">
-						<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding MiscShortcuts}" />
-					</TabItem>
-					<TabItem Header="{l:Translate tabScriptWindow}">
-						<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding ScriptShortcuts}" />
-					</TabItem>
-				</TabControl>
+				<DockPanel>
+					<c:OptionSection
+						DockPanel.Dock="Top"
+						Header="{l:Translate lblShortcutSettings}"
+						Margin="5"
+						IsVisible="{Binding IsMacOs}"
+					>
+						<CheckBox
+							IsChecked="{Binding Debugger.UseCommandKeyForShortcuts}"
+							Content="{l:Translate chkUseCommandKeyForDebugShortcuts}"
+						/>
+					</c:OptionSection>
+					<TabControl>
+						<TabItem Header="{l:Translate tabShared}">
+							<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding SharedShortcuts}" />
+						</TabItem>
+						<TabItem Header="{l:Translate tabDebugger}">
+							<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding DebuggerShortcuts}" />
+						</TabItem>
+						<TabItem Header="{l:Translate tabMemoryTools}">
+							<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding MemoryToolsShortcuts}" />
+						</TabItem>
+						<TabItem Header="{l:Translate tabMisc}">
+							<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding MiscShortcuts}" />
+						</TabItem>
+						<TabItem Header="{l:Translate tabScriptWindow}">
+							<dc:DebuggerShortcutKeyGrid Shortcuts="{Binding ScriptShortcuts}" />
+						</TabItem>
+					</TabControl>
+				</DockPanel>
 			</TabItem>
 		</TabControl>
 	</DockPanel>

@@ -1423,6 +1423,8 @@
 			<Control ID="chkImportComments">Import comments (restricted to the label types selected above)</Control>
 			
 			<Control ID="tabShortcuts">Shortcuts</Control>
+			<Control ID="lblShortcutSettings">Shortcut settings</Control>
+			<Control ID="chkUseCommandKeyForDebugShortcuts">Use Command key for debugger shortcuts (macOS)</Control>
 			<Control ID="tabShared">Shared</Control>
 			<Control ID="tabMemoryTools">Memory Viewer</Control>
 			<Control ID="tabMisc">Misc.</Control>

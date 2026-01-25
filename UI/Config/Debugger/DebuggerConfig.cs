@@ -16,6 +16,7 @@ namespace Mesen.Config
 		public DockEntryDefinition? SavedDockLayout { get; set; } = null;
 
 		[Reactive] public bool ShowSettingsPanel { get; set; } = true;
+		[Reactive] public bool UseCommandKeyForShortcuts { get; set; } = OperatingSystem.IsMacOS();
 
 		[Reactive] public bool ShowByteCode { get; set; } = false;
 		[Reactive] public bool ShowMemoryValues { get; set; } = true;
