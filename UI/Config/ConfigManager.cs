@@ -21,13 +21,37 @@ namespace Mesen.Config
 		private static object _initLock = new object();
 
 		public static string DefaultPortableFolder { get { return Path.GetDirectoryName(Program.ExePath) ?? "./"; } }
-		public static string DefaultDocumentsFolder
+		public static string DefaultDocumentsFolder => ResolveDefaultDocumentsFolder();
+
+		private static string ResolveDefaultDocumentsFolder()
 		{
-			get
-			{
-				Environment.SpecialFolder folder = OperatingSystem.IsWindows() ? Environment.SpecialFolder.MyDocuments : Environment.SpecialFolder.ApplicationData;
-				return Path.Combine(Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create), "Mesen2");
+			Environment.SpecialFolder folder = OperatingSystem.IsWindows() ? Environment.SpecialFolder.MyDocuments : Environment.SpecialFolder.ApplicationData;
+			string basePath = Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create);
+
+			if(OperatingSystem.IsMacOS()) {
+				// Some launchers strip HOME, which can make ApplicationData resolve to /var/root or empty.
+				if(string.IsNullOrWhiteSpace(basePath) || basePath == "/" || basePath.StartsWith("/var/root") || basePath.StartsWith("/private/var/root")) {
+					string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.Create);
+					if(!string.IsNullOrWhiteSpace(userProfile)) {
+						basePath = Path.Combine(userProfile, "Library", "Application Support");
+					} else {
+						string? envHome = Environment.GetEnvironmentVariable("HOME");
+						if(!string.IsNullOrWhiteSpace(envHome)) {
+							basePath = Path.Combine(envHome, "Library", "Application Support");
+						}
+					}
+				}
 			}
+
+			if(string.IsNullOrWhiteSpace(basePath)) {
+				basePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.Create);
+			}
+
+			if(string.IsNullOrWhiteSpace(basePath)) {
+				basePath = DefaultPortableFolder;
+			}
+
+			return Path.Combine(basePath, "Mesen2");
 		}
 
 		public static string DefaultAviFolder { get { return Path.Combine(HomeFolder, "Avi"); } }
@@ -425,7 +449,11 @@ namespace Mesen.Config
 					List<string> candidates = new();
 					string portableConfig = Path.Combine(portableFolder, "settings.json");
 					string defaultConfig = Path.Combine(documentsFolder, "settings.json");
-					if(File.Exists(portableConfig)) {
+					bool ignorePortableConfig = OperatingSystem.IsMacOS() && IsMacAppBundlePath(portableFolder);
+					if(ignorePortableConfig && File.Exists(portableConfig)) {
+						EmuApi.WriteLogEntry("[UI] Ignoring portable config inside app bundle: " + portableFolder);
+					}
+					if(File.Exists(portableConfig) && !ignorePortableConfig) {
 						candidates.Add(portableFolder);
 					}
 					if(File.Exists(defaultConfig)) {
@@ -442,7 +470,7 @@ namespace Mesen.Config
 						} else {
 							EmuApi.WriteLogEntry("[UI] Using config folder: " + _homeFolder);
 						}
-					} else if(File.Exists(portableConfig)) {
+					} else if(File.Exists(portableConfig) && !ignorePortableConfig) {
 						_homeFolder = portableFolder;
 					} else if(File.Exists(defaultConfig)) {
 						_homeFolder = documentsFolder;
@@ -537,6 +565,15 @@ namespace Mesen.Config
 			}
 			SingleInstance.Instance.Dispose();
 			Process.Start(mainModule.FileName);
+		}
+
+		private static bool IsMacAppBundlePath(string folder)
+		{
+			if(!OperatingSystem.IsMacOS() || string.IsNullOrWhiteSpace(folder)) {
+				return false;
+			}
+			string normalized = folder.Replace('\\', '/');
+			return normalized.Contains(".app/Contents/", StringComparison.OrdinalIgnoreCase);
 		}
 	}
 }

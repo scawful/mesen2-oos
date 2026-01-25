@@ -33,6 +33,7 @@ namespace Mesen.Config
 		[Reactive] public bool ShowMovieIcons { get; set; } = true;
 		[Reactive] public bool ShowTurboRewindIcons { get; set; } = true;
 		[Reactive] public bool ConfirmExitResetPower { get; set; } = false;
+		[Reactive] public bool UseCommandKeyForShortcuts { get; set; } = OperatingSystem.IsMacOS();
 
 		[Reactive] public bool AssociateSnesRomFiles { get; set; } = false;
 		[Reactive] public bool AssociateSnesMusicFiles { get; set; } = false;
@@ -228,6 +229,7 @@ namespace Mesen.Config
 				ShowLagCounter = ShowLagCounter,
 				DisableOsd = DisableOsd,
 				AllowBackgroundInput = AllowBackgroundInput,
+				UseCommandKeyForShortcuts = UseCommandKeyForShortcuts,
 				PauseOnMovieEnd = PauseOnMovieEnd,
 				ShowMovieIcons = ShowMovieIcons,
 				ShowTurboRewindIcons = ShowTurboRewindIcons,
@@ -279,6 +281,7 @@ namespace Mesen.Config
 		[MarshalAs(UnmanagedType.I1)] public bool ShowDebugInfo;
 		[MarshalAs(UnmanagedType.I1)] public bool DisableOsd;
 		[MarshalAs(UnmanagedType.I1)] public bool AllowBackgroundInput;
+		[MarshalAs(UnmanagedType.I1)] public bool UseCommandKeyForShortcuts;
 		[MarshalAs(UnmanagedType.I1)] public bool PauseOnMovieEnd;
 		[MarshalAs(UnmanagedType.I1)] public bool ShowMovieIcons;
 		[MarshalAs(UnmanagedType.I1)] public bool ShowTurboRewindIcons;

@@ -51,7 +51,15 @@
 		</TabItem>
 		
 		<TabItem Header="{l:Translate tpgShortcuts}">
-			<v:ShortcutKeysTabView ShortcutKeys="{Binding ShortcutKeys}" />
+			<StackPanel>
+				<CheckBox
+					Content="{l:Translate chkUseCommandKeyForShortcuts}"
+					IsChecked="{Binding Config.UseCommandKeyForShortcuts}"
+					IsVisible="{Binding IsOsx}"
+					Margin="2 6"
+				/>
+				<v:ShortcutKeysTabView ShortcutKeys="{Binding ShortcutKeys}" />
+			</StackPanel>
 		</TabItem>
 		
 		<TabItem Header="{l:Translate tpgFiles}">

@@ -759,6 +759,7 @@ struct PreferencesConfig
 	bool ShowDebugInfo = false;
 	bool DisableOsd = false;
 	bool AllowBackgroundInput = false;
+	bool UseCommandKeyForShortcuts = false;
 	bool PauseOnMovieEnd = false;
 	bool ShowMovieIcons = false;
 	bool ShowTurboRewindIcons = false;

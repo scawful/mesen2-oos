@@ -38,6 +38,45 @@ ShortcutKeyHandler::~ShortcutKeyHandler()
 	_thread.join();
 }
 
+static vector<uint16_t> BuildCommandKeyCodes()
+{
+	vector<string> names = {
+		"Left Command", "Right Command",
+		"Left Cmd", "Right Cmd",
+		"Left Meta", "Right Meta",
+		"Left Win", "Right Win",
+		"Left Super", "Right Super",
+		"Left Windows", "Right Windows"
+	};
+
+	vector<uint16_t> codes;
+	for(const string &name : names) {
+		uint16_t code = KeyManager::GetKeyCode(name);
+		if(code != 0 && std::find(codes.begin(), codes.end(), code) == codes.end()) {
+			codes.push_back(code);
+		}
+	}
+	return codes;
+}
+
+static bool IsCommandKeyPressed()
+{
+	static vector<uint16_t> commandKeys = BuildCommandKeyCodes();
+	for(uint16_t code : commandKeys) {
+		if(KeyManager::IsKeyPressed(code)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool IsControlKeyCode(uint16_t keyCode)
+{
+	static uint16_t leftCtrl = KeyManager::GetKeyCode("Left Ctrl");
+	static uint16_t rightCtrl = KeyManager::GetKeyCode("Right Ctrl");
+	return (leftCtrl != 0 && keyCode == leftCtrl) || (rightCtrl != 0 && keyCode == rightCtrl);
+}
+
 bool ShortcutKeyHandler::IsKeyPressed(EmulatorShortcut shortcut)
 {
 	KeyCombination keyComb = _emu->GetSettings()->GetShortcutKey(shortcut, _keySetIndex);
@@ -70,6 +109,12 @@ bool ShortcutKeyHandler::IsKeyPressed(KeyCombination comb)
 
 bool ShortcutKeyHandler::IsKeyPressed(uint16_t keyCode, bool mergeCtrlAltShift)
 {
+	if(_emu && _emu->GetSettings()->GetPreferences().UseCommandKeyForShortcuts && IsControlKeyCode(keyCode)) {
+		if(IsCommandKeyPressed()) {
+			return true;
+		}
+	}
+
 	if(keyCode >= 116 && keyCode <= 121 && mergeCtrlAltShift) {
 		//Left/right ctrl/alt/shift
 		//Return true if either the left or right key is pressed
