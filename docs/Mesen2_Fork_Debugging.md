@@ -61,6 +61,7 @@ Core control:
 
 Memory & debugging:
 - `READ`, `READ16`, `READBLOCK`, `WRITE`, `WRITE16`, `WRITEBLOCK`.
+- `READBLOCK_BINARY` - bulk read with base64 encoding (50% smaller than hex).
 - `DISASM` - disassemble at address (CPU memory only).
 - `CPU` - compact CPU register snapshot.
 - `SNAPSHOT`, `DIFF` - memory diff workflow.
@@ -70,13 +71,58 @@ Memory & debugging:
 
 Files & tooling:
 - `SCREENSHOT` - PNG as base64.
-- `SAVESTATE`, `LOADSTATE`.
+- `SAVESTATE` (optional `label`), `LOADSTATE`.
+- `SAVESTATE_LABEL` - get/set/clear save state labels.
 - `LOADSCRIPT` - load script by path or inline content.
 - `CHEAT` - add/list/clear cheats.
 - `INPUT` - set input overrides.
 - `STATEINSPECT` - compact system/CPU/PPU summary + watch HUD text.
 - `STATEINSPECT` also includes `cpus` (per-CPU state) and `watchEntries` (structured watch data by CPU).
 - `BATCH` - execute multiple commands in a single request.
+- `HELP` - API discovery; lists all commands or gives details on a specific command.
+
+Save state slots:
+- Default slot count is 20.
+- Override with `MESEN2_SAVE_STATE_SLOTS` or `OOS_SAVE_STATE_SLOTS` environment variables.
+
+### READBLOCK_BINARY Command
+The `READBLOCK_BINARY` command reads a block of memory and returns it as base64-encoded data, reducing transfer size by 50% compared to hex string encoding.
+
+Request format:
+```json
+{"type":"READBLOCK_BINARY","addr":"0x7E0000","size":"8192"}
+```
+
+Response format:
+```json
+{"success":true,"data":{"bytes":"<base64-encoded-data>","size":8192,"addr":"0x7E0000"}}
+```
+
+Parameters:
+- `addr` - Start address (hex string)
+- `size` or `len` - Number of bytes to read (up to 1MB)
+- `memtype` - Optional memory type (default: SnesMemory)
+
+### HELP Command
+The `HELP` command provides API discovery, listing all available commands or giving details on a specific command.
+
+List all commands:
+```json
+{"type":"HELP"}
+```
+Response:
+```json
+{"success":true,"data":{"version":"1.0.0","commands":["PING","STATE",...],"count":45,"usage":"..."}}
+```
+
+Get help for a specific command:
+```json
+{"type":"HELP","command":"BREAKPOINT"}
+```
+Response:
+```json
+{"success":true,"data":{"command":"BREAKPOINT","description":"Manage breakpoints","params":"action, addr, bptype, condition","example":{...}}}
+```
 
 ### BATCH Command
 The `BATCH` command allows executing multiple commands in a single socket request, reducing round-trip latency for multi-read scenarios.
@@ -166,11 +212,64 @@ ALTTP collision maps:
 - COLMAPB: `$7F6000` - Secondary collision map
 - Water tiles: 0x09, 0x0A, 0x1A
 
+### ALTTP Game State Inspection
+Real-time game state inspection for ALTTP/Oracle debugging.
+
+- `GAMESTATE` - Get comprehensive game state snapshot.
+  - Returns: Link position/direction/state, health/magic/items, game mode, room/area info
+
+```json
+{"type":"GAMESTATE"}
+```
+Response includes:
+- `link`: x, y, layer, direction, state, pose
+- `health`: current, max, hearts, max_hearts
+- `items`: magic, rupees, bombs, arrows
+- `game`: mode, submode, indoors, room_id/overworld_area
+
+- `SPRITES` - Inspect active sprites.
+  - `slot`: Optional, inspect single slot (0-15)
+  - `all`: If true, include inactive sprites
+
+```json
+{"type":"SPRITES"}
+{"type":"SPRITES","slot":"5"}
+{"type":"SPRITES","all":"true"}
+```
+Response: `{count, sprites: [{slot, type, state, x, y, health, subtype}]}`
+
+### Event Subscription System
+Subscribe to real-time event notifications with filtering by event type.
+
+- `SUBSCRIBE` - Manage event subscriptions.
+  - `action`: `subscribe` | `unsubscribe` | `list`
+  - `events`: Comma-separated or JSON array of event types
+
+Available event types:
+- `breakpoint_hit` - Breakpoint triggered
+- `frame_complete` - Frame finished rendering
+- `state_changed` - Pause/resume state changed
+- `logpoint` - Logpoint hit
+- `memory_changed` - Watched memory modified
+- `p_changed` - P register changed
+- `all` - Subscribe to all events
+
+Examples:
+```json
+{"type":"SUBSCRIBE","events":"breakpoint_hit,frame_complete"}
+{"type":"SUBSCRIBE","action":"list"}
+{"type":"SUBSCRIBE","action":"unsubscribe"}
+```
+
+Events are pushed to subscribed clients:
+```json
+{"type":"EVENT","event":"breakpoint_hit","data":{...}}
+```
+
 ### Roadmap (planned additions)
-- Event subscription system for push notifications (breakpoint hits, frame completion).
-- Logpoints - log without halting execution.
-- Trace buffer - capture N instructions of execution history.
-- Optional binary/bulk memory read API for faster tooling.
+- Conditional watch triggers (notify on specific values).
+- ALTTP game state inspector (GAMESTATE command).
+- Execution profiling (hotspot analysis).
 
 ---
 
@@ -180,28 +279,27 @@ ALTTP collision maps:
 
 **macOS (use make, not CMake):**
 ```bash
-cd /Users/scawful/src/third_party/forks/Mesen2
+cd /Users/scawful/src/hobby/mesen2-oos
 make clean && make
 ```
 
 This builds:
 - `bin/osx-arm64/Release/MesenCore.dylib` - Core library with socket API
-- `bin/osx-arm64/Release/Mesen` - Executable
+- `bin/osx-arm64/Release/osx-arm64/publish/Mesen` - Executable
 
 ### Running the Built Version
 
 **Important:** The installed `/Applications/Mesen.app` extracts its own `MesenCore.dylib`
 from a bundled Dependencies.zip on startup, overwriting any manual replacements.
 
-**To use the fork's new features, run directly from the build folder:**
+**To use the fork's new features, use the wrapper script:**
 ```bash
-cd /Users/scawful/src/third_party/forks/Mesen2/bin/osx-arm64/Release
-./Mesen
+mesen-run
 ```
 
-Or create an alias:
+Or run directly from the build folder:
 ```bash
-alias mesen-oos='/Users/scawful/src/third_party/forks/Mesen2/bin/osx-arm64/Release/Mesen'
+/Users/scawful/src/hobby/mesen2-oos/bin/osx-arm64/Release/osx-arm64/publish/Mesen
 ```
 
 ### Socket Path
@@ -218,4 +316,3 @@ echo '{"type":"P_WATCH","action":"start","depth":"500"}' | nc -U $sock
 # Test MEM_WATCH_WRITES
 echo '{"type":"MEM_WATCH_WRITES","action":"add","addr":"0x7E0116","size":"2"}' | nc -U $sock
 ```
-
