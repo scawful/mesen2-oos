@@ -13,7 +13,7 @@ namespace Mesen.Config
         {
         }
         
-        public override void ApplyConfig()
+        public void ApplyConfig()
         {
             // Nothing to apply to core specifically for these UI-only settings right now
         }

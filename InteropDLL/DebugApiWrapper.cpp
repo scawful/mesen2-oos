@@ -151,7 +151,16 @@ extern "C"
 	DllExport AddressInfo __stdcall GetRelativeAddress(AddressInfo absAddress, CpuType cpuType) { return WithDebugger(AddressInfo, GetRelativeAddress(absAddress, cpuType)); }
 
 	DllExport void __stdcall SetLabel(uint32_t address, MemoryType memType, char* label, char* comment) { WithDebugger(void, GetLabelManager()->SetLabel(address, memType, label, comment)); }
-	DllExport void __stdcall ClearLabels() { WithDebugger(void, GetLabelManager()->ClearLabels()); }
+	DllExport void __stdcall ClearLabels()
+	{
+		if(!_emu) {
+			return;
+		}
+		DebuggerRequest dbgRequest = _emu->GetDebugger(false);
+		if(dbgRequest.GetDebugger()) {
+			dbgRequest.GetDebugger()->GetLabelManager()->ClearLabels();
+		}
+	}
 
 	DllExport void __stdcall ResetMemoryAccessCounts() { WithDebugger(void, GetMemoryAccessCounter()->ResetCounts()); }
 	DllExport void __stdcall GetMemoryAccessCounts(uint32_t offset, uint32_t length, MemoryType memoryType, AddressCounters* counts) { WithDebugger(void, GetMemoryAccessCounter()->GetAccessCounts(offset, length, memoryType, counts)); }
