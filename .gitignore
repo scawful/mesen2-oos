@@ -196,3 +196,5 @@ UI/Dependencies.zip
 
 __pycache__/*
 build-cmake/*
+build-codex/
+*.code-workspace

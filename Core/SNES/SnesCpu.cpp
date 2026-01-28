@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "Utilities/Serializer.h"
 #include "Shared/Emulator.h"
 #include "Shared/CheatManager.h"
@@ -155,6 +155,22 @@ void SnesCpu::Write(uint32_t addr, uint8_t value, MemoryOperationType type)
 {
 	_memoryManager->SetCpuSpeed(_memoryManager->GetCpuSpeed(addr));
 	ProcessCpuCycle();
+	if (_emu && addr >= 0x01F0 && addr <= 0x01F3) {
+		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
+		_emu->DebugLog(
+			"[STACK] write addr=" + HexUtilities::ToHex(addr) +
+			" val=" + HexUtilities::ToHex(value) +
+			" PC=" + HexUtilities::ToHex(pc) +
+			" SP=" + HexUtilities::ToHex(_state.SP) +
+			" A=" + HexUtilities::ToHex(_state.A) +
+			" X=" + HexUtilities::ToHex(_state.X) +
+			" Y=" + HexUtilities::ToHex(_state.Y) +
+			" D=" + HexUtilities::ToHex(_state.D) +
+			" K=" + HexUtilities::ToHex(_state.K) +
+			" DBR=" + HexUtilities::ToHex(_state.DBR) +
+			" P=" + HexUtilities::ToHex(_state.PS)
+		);
+	}
 	_memoryManager->Write(addr, value, type);
 	UpdateIrqNmiFlags();
 }

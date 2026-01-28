@@ -4,6 +4,8 @@ void SnesCpu::PowerOn()
 	_state.PC = GetResetVector();
 	_lastExecPc = GetProgramAddress(_state.PC);
 	_invalidPcLogged = false;
+	_invalidSpLogged = false;
+	_invalidRtiLogged = false;
 	_state.SP = 0x1FF;
 	_state.PS = ProcFlags::IrqDisable;
 	_state.EmulationMode = true;
@@ -32,6 +34,8 @@ void SnesCpu::Reset()
 	_state.PC = GetResetVector();
 	_lastExecPc = GetProgramAddress(_state.PC);
 	_invalidPcLogged = false;
+	_invalidSpLogged = false;
+	_invalidRtiLogged = false;
 	SetSP(_state.SP);
 
 	_state.NmiFlag = false;
@@ -373,6 +377,7 @@ uint8_t SnesCpu::GetOpCode()
 {
 	uint32_t pcFull = ((uint32_t)_state.K << 16) | _state.PC;
 	bool invalidPcRegion = (_state.K == 0x1D && _state.PC < 0x8000);
+	bool invalidSpRegion = _state.SP >= 0x2000;
 	if (_emu) {
 		if (invalidPcRegion && !_invalidPcLogged) {
 			_emu->DebugLog(
@@ -389,6 +394,26 @@ uint8_t SnesCpu::GetOpCode()
 			_invalidPcLogged = true;
 		} else if (!invalidPcRegion && _invalidPcLogged) {
 			_invalidPcLogged = false;
+		}
+		if (invalidSpRegion && !_invalidSpLogged) {
+			_emu->DebugLog(
+				"[SP] Invalid SP prev=" + HexUtilities::ToHex(_lastExecPc) +
+				" now=" + HexUtilities::ToHex(pcFull) +
+				" SP=" + HexUtilities::ToHex(_state.SP) +
+				" A=" + HexUtilities::ToHex(_state.A) +
+				" X=" + HexUtilities::ToHex(_state.X) +
+				" Y=" + HexUtilities::ToHex(_state.Y) +
+				" D=" + HexUtilities::ToHex(_state.D) +
+				" K=" + HexUtilities::ToHex(_state.K) +
+				" DBR=" + HexUtilities::ToHex(_state.DBR) +
+				" P=" + HexUtilities::ToHex(_state.PS)
+			);
+			_invalidSpLogged = true;
+		} else if (!invalidSpRegion && _invalidSpLogged) {
+			_invalidSpLogged = false;
+		}
+		if (!invalidSpRegion && _invalidRtiLogged) {
+			_invalidRtiLogged = false;
 		}
 	}
 	_lastExecPc = pcFull;
@@ -566,7 +591,8 @@ void SnesCpu::SetSP(uint16_t sp, bool allowEmulationMode)
 	} else {
 		_state.SP = sp;
 	}
-	if(_emu && ((prevSp ^ _state.SP) & 0xFF00) != 0) {
+	bool crossedToIo = (prevSp < 0x2000 && _state.SP >= 0x2000);
+	if(_emu && crossedToIo) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] SetSP PC=" + HexUtilities::ToHex(pc) +

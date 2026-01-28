@@ -430,7 +430,6 @@ void SnesCpu::JMP()
 void SnesCpu::JSL()
 {
 	uint8_t prevK = _state.K;
-	uint16_t prevPc = _state.PC;
 	uint8_t b1 = ReadOperandByte();
 	uint8_t b2 = ReadOperandByte();
 
@@ -511,7 +510,7 @@ void SnesCpu::RTI()
 		uint8_t newPs = PopByte() | ProcFlags::MemoryMode8 | ProcFlags::IndexMode8;
 		uint16_t newPc = PopWord();
 		bool invalidPc = newPc < 0x8000;
-		if (_emu && invalidPc) {
+		if (_emu && invalidPc && !_invalidRtiLogged) {
 			uint32_t from = ((uint32_t)_state.K << 16) | _state.PC;
 			uint32_t to = ((uint32_t)_state.K << 16) | newPc;
 			_emu->DebugLog(
@@ -521,6 +520,7 @@ void SnesCpu::RTI()
 				" SP=" + HexUtilities::ToHex(_state.SP) +
 				" P=" + HexUtilities::ToHex(newPs)
 			);
+			_invalidRtiLogged = true;
 		}
 		SetPS(newPs);
 		_state.PC = newPc;
@@ -530,7 +530,7 @@ void SnesCpu::RTI()
 		uint8_t newK = PopByte();
 		uint8_t prevK = _state.K;
 		bool invalidPc = newPc < 0x8000;
-		if (_emu && (newK != prevK || invalidPc)) {
+		if (_emu && (newK != prevK || invalidPc) && !_invalidRtiLogged) {
 			uint32_t from = ((uint32_t)prevK << 16) | _state.PC;
 			uint32_t to = ((uint32_t)newK << 16) | newPc;
 			_emu->DebugLog(
@@ -540,6 +540,7 @@ void SnesCpu::RTI()
 				" SP=" + HexUtilities::ToHex(_state.SP) +
 				" P=" + HexUtilities::ToHex(newPs)
 			);
+			_invalidRtiLogged = true;
 		}
 		SetPS(newPs);
 		_state.PC = newPc;
@@ -1164,7 +1165,7 @@ void SnesCpu::TCD()
 
 void SnesCpu::TCS()
 {
-	if(_emu) {
+	if(_emu && _state.SP < 0x2000 && _state.A >= 0x2000) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] TCS PC=" + HexUtilities::ToHex(pc) +
@@ -1200,7 +1201,7 @@ void SnesCpu::TXA()
 
 void SnesCpu::TXS()
 {
-	if(_emu) {
+	if(_emu && _state.SP < 0x2000 && _state.X >= 0x2000) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] TXS PC=" + HexUtilities::ToHex(pc) +
