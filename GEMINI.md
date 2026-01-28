@@ -35,6 +35,9 @@ To deploy the core library for Headless/MCP usage:
 Run the Python verification scripts in the root:
 
 ```bash
+# Verify Full Socket API (Control, Memory, Debug, Analysis, ALTTP)
+pytest test_socket_api_full.py -v
+
 # Verify P1 Handlers (State, Log, Watch)
 python3 test_p1_handlers.py
 
@@ -47,17 +50,42 @@ python3 test_p2_events.py
 To run Mesen with best practices (especially for agents or multiple sessions), use the `mesen-run` wrapper installed in `~/bin`.
 
 ```bash
-# Launch standard instance
+# Launch standard instance (GUI)
 mesen-run
 
-# Launch a separate isolated instance (random ID)
+# Launch a separate concurrent instance (GUI)
+# Note: Config and Save States are UNIFIED in ~/.config/Mesen2/
 mesen-run --multi
 
-# Launch a named isolated instance (persistent config for 'test1')
-mesen-run --name=test1
+# Launch a headless instance for agents
+mesen-run --headless --multi
 ```
 
-This ensures `MESEN2_HOME` is set correctly to avoid database locking collisions.
+**Key Behavior:**
+- **Unified Config**: All instances share the Mesen2 home folder (platform-specific; override via `MESEN2_HOME`).
+- **Separate Sockets**: Each instance creates a unique socket at `/tmp/mesen2-<PID>.sock`.
+- **Concurrent Execution**: Use `--multi` to run alongside your main playing session.
+
+## Agent Integration
+
+**DEPRECATION NOTICE**: The `mesen2-mcp` and `yaze-mcp` tools are deprecated.
+
+Agents should interact with Mesen2 directly via the **Unix Socket API**.
+
+1.  **Launch**: Start Mesen2 via `mesen-run --multi --headless`.
+2.  **Connect**: Find the socket in `/tmp/mesen2-*.sock`.
+3.  **Control**: Send JSON commands (see [Socket API Reference](docs/Socket_API_Reference.md)).
+
+### Save State Hygiene
+
+**CRITICAL RULE:** Agents must **NEVER** overwrite user save slots (0-9).
+
+*   **Allowed:** Use file-based saves (`path="/tmp/test.mss"`) whenever possible.
+*   **Allowed:** Use Slots 10-99 if file-based is not supported.
+*   **Forbidden:** Slots 0-9 (Reserved for manual user play).
+
+See [Agent Integration Guide](docs/Agent_Integration_Guide.md) for Python examples.
+
 
 ## Documentation
 

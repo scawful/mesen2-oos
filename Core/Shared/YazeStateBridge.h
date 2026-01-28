@@ -25,6 +25,8 @@ public:
 	static void NotifyStateSaved(const std::string& statePath, uint64_t frameCount);
 	static std::string GetLastSyncedState();
 	static uint64_t GetLastSyncedFrame();
+	static std::string GetLastError();
+	static uint64_t GetLastErrorTimeMs();
 
 private:
 	Emulator* _emu;
@@ -38,6 +40,8 @@ private:
 	// Last synced state info
 	static std::string _lastSyncedState;
 	static uint64_t _lastSyncedFrame;
+	static std::string _lastError;
+	static uint64_t _lastErrorTimeMs;
 	static SimpleLock _syncLock;
 
 	void WatchLoop();

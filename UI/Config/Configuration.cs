@@ -42,6 +42,7 @@ namespace Mesen.Config
 		[Reactive] public CheatWindowConfig Cheats { get; set; } = new();
 		[Reactive] public NetplayConfig Netplay { get; set; } = new();
 		[Reactive] public HistoryViewerConfig HistoryViewer { get; set; } = new();
+		[Reactive] public OracleConfig Oracle { get; set; } = new();
 		[Reactive] public MainWindowConfig MainWindow { get; set; } = new();
 		
 		public DefaultKeyMappingType DefaultKeyMappings { get; set; } = DefaultKeyMappingType.Xbox | DefaultKeyMappingType.ArrowKeys;
@@ -87,6 +88,7 @@ namespace Mesen.Config
 			Snes.ApplyConfig();
 			Sms.ApplyConfig();
 			Preferences.ApplyConfig();
+			Oracle.ApplyConfig();
 			AudioPlayer.ApplyConfig();
 			Debug.ApplyConfig();
 		}

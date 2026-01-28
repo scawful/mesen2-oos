@@ -530,6 +530,8 @@ void Debugger::ProcessEvent(EventType type, std::optional<CpuType> cpuTypeOpt)
 		default: break;
 
 		case EventType::InputPolled:
+		{
+			auto lock = _inputOverrideLock.AcquireSafe();
 			_debuggers[(int)evtCpuType].Debugger->ProcessInputOverrides(_inputOverrides);
 			// Decrement frame counters and clear expired overrides
 			for(int i = 0; i < 8; i++) {
@@ -541,6 +543,7 @@ void Debugger::ProcessEvent(EventType type, std::optional<CpuType> cpuTypeOpt)
 				}
 			}
 			break;
+		}
 
 		case EventType::StartFrame: {
 			_emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::EventViewerRefresh, (void*)evtCpuType);
@@ -947,6 +950,7 @@ void Debugger::SetBreakpoints(Breakpoint breakpoints[], uint32_t length)
 
 void Debugger::SetInputOverrides(uint32_t index, DebugControllerState state, uint32_t frames)
 {
+	auto lock = _inputOverrideLock.AcquireSafe();
 	_inputOverrides[index] = state;
 	_inputOverrideFrames[index] = frames;  // 0 = indefinite (legacy behavior)
 }

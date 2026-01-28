@@ -16,7 +16,7 @@
 | Symbols | SYMBOLS_LOAD, SYMBOLS_RESOLVE |
 | ALTTP | GAMESTATE, SPRITES, COLLISION_OVERLAY, COLLISION_DUMP |
 | Events | SUBSCRIBE, LOGPOINT |
-| Utility | HELP, BATCH, ROMINFO, SPEED, REWIND, CHEAT, INPUT |
+| Utility | HELP, BATCH, ROMINFO, SPEED, REWIND, CHEAT, INPUT, DEBUG_LOG |
 
 ---
 
@@ -243,6 +243,13 @@ Get recent P register changes.
 ```json
 {"type":"P_LOG","count":"50"}
 → {"entries":[{"pc":"0x008000","old_p":"0x30","new_p":"0x32","flags_changed":"NZ",...}],"total":150}
+```
+
+### DEBUG_LOG
+Get recent debug log lines (optional filter).
+```json
+{"type":"DEBUG_LOG","count":"50","contains":"[SP]"}
+→ {"lines":["[SP] SetSP PC=..."],"count":1,"total":128}
 ```
 
 ### P_ASSERT

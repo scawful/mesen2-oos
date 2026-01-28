@@ -180,6 +180,15 @@ struct CommandHistoryEntry {
 	uint64_t latencyUs;  // Latency in microseconds
 };
 
+struct SaveLoadResult {
+	bool valid = false;
+	bool success = false;
+	string path;
+	string error;
+	uint64_t frame = 0;
+	uint64_t timestampMs = 0;
+};
+
 class SocketServer {
 private:
 	Emulator* _emu;
@@ -238,6 +247,12 @@ private:
 	static uint32_t _commandHistoryMaxSize;
 	static SimpleLock _historyLock;
 
+	// Save/load serialization guards and status
+	static SimpleLock _saveLoadLock;
+	static SimpleLock _saveLoadStatusLock;
+	static SaveLoadResult _lastSaveResult;
+	static SaveLoadResult _lastLoadResult;
+
 	// Request validation rules per command type
 	static unordered_map<string, CommandValidation> _validationRules;
 	static SimpleLock _validationLock;
@@ -286,6 +301,7 @@ private:
 	static SocketResponse HandleSaveStateLabel(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadScript(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleExecLua(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleGetCpuState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleStateInspector(Emulator* emu, const SocketCommand& cmd);
@@ -356,6 +372,7 @@ private:
 	static SocketResponse HandleMetrics(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLogLevel(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleCommandHistory(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleDebugLog(Emulator* emu, const SocketCommand& cmd);
 
 	// YAZE state sync handlers
 	static SocketResponse HandleSaveStateSync(Emulator* emu, const SocketCommand& cmd);

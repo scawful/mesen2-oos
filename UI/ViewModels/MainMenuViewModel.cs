@@ -1111,7 +1111,7 @@ namespace Mesen.ViewModels
 				ActionType = ActionType.Custom,
 				CustomText = label,
 				IsEnabled = isEnabled,
-				OnClick = () => OracleAgentLauncher.RunGatewayAction(action)
+				OnClick = () => AgentLauncher.RunGatewayAction(action)
 			};
 		}
 
@@ -1121,7 +1121,7 @@ namespace Mesen.ViewModels
 				ActionType = ActionType.Custom,
 				CustomText = label,
 				IsEnabled = isEnabled,
-				OnClick = () => OracleAgentLauncher.RunGatewayActionWithOutput(action, label)
+				OnClick = () => AgentLauncher.RunGatewayActionWithOutput(action, label)
 			};
 		}
 
@@ -1222,7 +1222,7 @@ namespace Mesen.ViewModels
 				},
 				new ContextMenuSeparator(),
 				CreateOracleActionWithOutput("Capture State + Screenshot", "capture_state", () => IsGameRunning),
-				CreateOracleCommand("Health Check (Output)", () => OracleAgentLauncher.RunGatewayActionWithOutput("health", "Oracle Health Check")),
+				CreateOracleCommand("Health Check (Output)", () => AgentLauncher.RunGatewayActionWithOutput("health", "Oracle Health Check")),
 			};
 		}
 

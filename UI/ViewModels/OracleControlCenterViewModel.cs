@@ -24,6 +24,8 @@ namespace Mesen.ViewModels
 		[Reactive] public string SaveStateFolder { get; private set; } = "";
 		[Reactive] public UInt32 SaveStateSlotCount { get; set; }
 		[Reactive] public bool SeparateSaveStatesByPatch { get; set; }
+		[Reactive] public bool AutoStartGateway { get; set; }
+		[Reactive] public bool AutoStartYaze { get; set; }
 
 		public OracleControlCenterViewModel()
 		{
@@ -53,6 +55,10 @@ namespace Mesen.ViewModels
 			SaveStateSlotCount = prefs.SaveStateSlotCount == 0 ? 20 : prefs.SaveStateSlotCount;
 			SeparateSaveStatesByPatch = prefs.SeparateSaveStatesByPatch;
 			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;
+
+			AutoStartGateway = ConfigManager.Config.Oracle.AutoStartGateway;
+			AutoStartYaze = ConfigManager.Config.Oracle.AutoStartYaze;
+
 			UpdateSaveStateSummary();
 		}
 
@@ -68,6 +74,10 @@ namespace Mesen.ViewModels
 			prefs.SaveStateSlotCount = SaveStateSlotCount;
 			prefs.SeparateSaveStatesByPatch = SeparateSaveStatesByPatch;
 			prefs.ApplyConfig();
+
+			ConfigManager.Config.Oracle.AutoStartGateway = AutoStartGateway;
+			ConfigManager.Config.Oracle.AutoStartYaze = AutoStartYaze;
+
 			ConfigManager.Config.Save();
 
 			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;

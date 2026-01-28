@@ -95,3 +95,38 @@ After the fork starts, a socket is created at `/tmp/mesen2-<pid>.sock`.
 - **Status File:** JSON status file for service discovery
 
 See [Agent Integration Guide](docs/Agent_Integration_Guide.md) for usage examples.
+
+## Debugging Tools Ecosystem
+
+This emulator is part of a larger debugging toolchain for Oracle of Secrets:
+
+### Client Libraries
+
+| Location | Purpose |
+|----------|---------|
+| `~/src/hobby/oracle-of-secrets/scripts/mesen2_client_lib/` | Canonical Python client library |
+| `~/src/hobby/oracle-of-secrets/scripts/mesen2_client.py` | CLI interface (50+ commands) |
+
+### Real-Time Tools (`~/src/hobby/yaze/scripts/ai/`)
+
+| Tool | Purpose |
+|------|---------|
+| `sentinel.py` | Autonomous soft lock detection (B007, B009, INIDISP) |
+| `crash_dump.py` | Post-mortem trace capture and symbol resolution |
+| `profiler.py` | CPU hotspot analysis (lag detection) |
+| `fuzzer.py` | Chaos Monkey automated stress testing |
+| `state_query.py` | Semantic game state queries |
+| `code_graph.py` | Static ASM call graph analysis |
+| `memory_cartographer.py` | RAM search (Cheat Engine-style) |
+
+### Unified Platform
+
+| Location | Purpose |
+|----------|---------|
+| `~/.claude/skills/oracle-debugger/` | Claude skill with regression testing, bug reproduction |
+
+### Comprehensive Documentation
+
+- **Tools Index:** `~/src/hobby/oracle-of-secrets/Docs/Tooling/Debugging_Tools_Index.md`
+- **Socket API:** `docs/Socket_API_Reference.md`
+- **Agent Guide:** `docs/Agent_Integration_Guide.md`

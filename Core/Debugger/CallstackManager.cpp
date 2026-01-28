@@ -73,10 +73,18 @@ void CallstackManager::Pop(AddressInfo& dest, uint32_t destAddress)
 void CallstackManager::GetCallstack(StackFrameInfo* callstackArray, uint32_t &callstackSize)
 {
 	DebugBreakHelper helper(_debugger);
-	int i = 0;
-	for(StackFrameInfo &info : _callstack) {
-		callstackArray[i] = info;
-		i++;
+	uint32_t capacity = callstackSize;
+	uint32_t i = 0;
+	if(callstackArray) {
+		for(StackFrameInfo &info : _callstack) {
+			if(capacity && i >= capacity) {
+				break;
+			}
+			callstackArray[i] = info;
+			i++;
+		}
+	} else {
+		i = (uint32_t)_callstack.size();
 	}
 	callstackSize = i;
 }

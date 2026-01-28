@@ -123,7 +123,9 @@ namespace Mesen.Utilities
 
 		private static int ResolveGatewayPort()
 		{
-			string? envPort = Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PORT");
+			string? envPort = Environment.GetEnvironmentVariable("MESEN2_AGENT_GATEWAY_PORT") ??
+				Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PORT");
+
 			if(int.TryParse(envPort, out int port)) {
 				return port;
 			}
@@ -132,6 +134,12 @@ namespace Mesen.Utilities
 
 		private static string? GetLocalSocketPath()
 		{
+			// Check for explicit override
+			string? envPath = Environment.GetEnvironmentVariable("MESEN2_SOCKET_PATH");
+			if(!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath)) {
+				return envPath;
+			}
+
 			if(OperatingSystem.IsWindows()) {
 				return null;
 			}

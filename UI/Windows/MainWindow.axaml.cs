@@ -305,6 +305,7 @@ namespace Mesen.Windows
 					});
 
 					GameConfig.LoadGameConfig(romInfo).ApplyConfig();
+					OracleAgentManager.CheckAutoStart();
 
 					GameLoadedEventParams evtParams = new();
 					if(e.Parameter != IntPtr.Zero) {

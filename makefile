@@ -201,6 +201,9 @@ ui: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 	#Called twice because the first call copies native libraries to the bin folder which need to be included in Dependencies.zip
 	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
 	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
+ifeq ($(MESENOS),osx)
+	codesign --force --deep --sign - $(OUTFOLDER)/$(MESENPLATFORM)/publish/*.app
+endif
 
 core: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 

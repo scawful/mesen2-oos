@@ -78,6 +78,8 @@ private:
 	SimpleLock _logLock;
 	std::list<string> _debuggerLog;
 
+	SimpleLock _inputOverrideLock;
+
 	atomic<bool> _executionStopped;
 	atomic<uint32_t> _breakRequestCount;
 	atomic<uint32_t> _suspendRequestCount;

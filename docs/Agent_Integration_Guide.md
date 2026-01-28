@@ -6,19 +6,28 @@ This guide provides best practices for integrating AI agents and automation tool
 
 ### Finding the Socket
 
-The socket path is `/tmp/mesen2-<pid>.sock`. You can discover it via:
+**Method 1: Deterministic Path (Recommended for Agents)**
+
+Set the `MESEN2_SOCKET_PATH` environment variable when launching Mesen2. This guarantees the socket location.
+
+```bash
+# Launch Mesen2
+export MESEN2_SOCKET_PATH="/tmp/mesen2-agent.sock"
+./bin/mesen-run --headless --profile agent
+```
+
+Then simply connect to `/tmp/mesen2-agent.sock`.
+
+**Method 2: Discovery (Legacy/Default)**
+
+If no path is specified, the socket defaults to `/tmp/mesen2-<pid>.sock`. You can discover it via:
 
 1. **Status File** (recommended):
    ```bash
    cat /tmp/mesen2-*.status | jq .socketPath
    ```
 
-2. **Environment Variable**:
-   ```bash
-   export MESEN2_SOCKET=$(ls /tmp/mesen2-*.sock | head -1)
-   ```
-
-3. **Socket Discovery**:
+2. **Socket Discovery (Python)**:
    ```python
    import glob
    sockets = glob.glob("/tmp/mesen2-*.sock")
@@ -61,6 +70,15 @@ def send_command(sock, command_type, **params):
 sock = connect_mesen2()
 response = send_command(sock, "PING")
 print(response)  # {"success": true, "data": "PONG"}
+```
+
+### Debug Log Fetch (Optional)
+
+Retrieve recent emulator debug log lines (useful for SP/K corruption traces):
+
+```python
+response = send_command(sock, "DEBUG_LOG", count="50", contains="[SP]")
+print(response["data"]["lines"])
 ```
 
 ## Error Handling

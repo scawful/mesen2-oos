@@ -72,7 +72,7 @@ namespace Mesen.Windows
 
 		private void OnOpenStateLibraryFolderClick(object? sender, RoutedEventArgs e)
 		{
-			OracleAgentLauncher.OpenOracleSavestateLibrary();
+			AgentLauncher.OpenOracleSavestateLibrary();
 		}
 
 		private void OnApplySaveStateSettingsClick(object? sender, RoutedEventArgs e)
@@ -95,7 +95,7 @@ namespace Mesen.Windows
 		private void OnGatewayActionClick(object? sender, RoutedEventArgs e)
 		{
 			if(sender is Button button && button.Tag is string action) {
-				OracleAgentLauncher.RunGatewayAction(action);
+				AgentLauncher.RunGatewayAction(action);
 			}
 		}
 
@@ -103,23 +103,23 @@ namespace Mesen.Windows
 		{
 			if(sender is Button button && button.Tag is string action) {
 				string title = button.Content?.ToString() ?? "Oracle Output";
-				OracleAgentLauncher.RunGatewayActionWithOutput(action, title);
+				AgentLauncher.RunGatewayActionWithOutput(action, title);
 			}
 		}
 
 		private void OnGatewayStartClick(object? sender, RoutedEventArgs e)
 		{
-			OracleAgentLauncher.StartGateway();
+			AgentLauncher.StartGateway();
 		}
 
 		private void OnGatewayStopClick(object? sender, RoutedEventArgs e)
 		{
-			OracleAgentLauncher.StopGateway();
+			AgentLauncher.StopGateway();
 		}
 
 		private void OnGatewayStatusClick(object? sender, RoutedEventArgs e)
 		{
-			OracleAgentLauncher.GatewayStatus();
+			AgentLauncher.GatewayStatus();
 		}
 
 		private void OnCopySocketClick(object? sender, RoutedEventArgs e)
@@ -137,52 +137,52 @@ namespace Mesen.Windows
 
 			switch(action) {
 				case "oracle_root":
-					OracleAgentLauncher.OpenOracleRoot();
+					AgentLauncher.OpenOracleRoot();
 					break;
 				case "oracle_roms":
-					OracleAgentLauncher.OpenOracleRoms();
+					AgentLauncher.OpenOracleRoms();
 					break;
 				case "oracle_savestates":
-					OracleAgentLauncher.OpenOracleSavestateLibrary();
+					AgentLauncher.OpenOracleSavestateLibrary();
 					break;
 				case "oracle_docs":
-					OracleAgentLauncher.OpenOracleDocs();
+					AgentLauncher.OpenOracleDocs();
 					break;
 				case "mesen_root":
-					OracleAgentLauncher.OpenMesen2Root();
+					AgentLauncher.OpenMesen2Root();
 					break;
 				case "mesen_socket_doc":
-					OracleAgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Socket_API_Reference.md"));
+					AgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Socket_API_Reference.md"));
 					break;
 				case "mesen_agent_doc":
-					OracleAgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Agent_Integration_Guide.md"));
+					AgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Agent_Integration_Guide.md"));
 					break;
 				case "mesen_debug_doc":
-					OracleAgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Mesen2_Fork_Debugging.md"));
+					AgentLauncher.OpenMesen2Doc(System.IO.Path.Combine("docs", "Mesen2_Fork_Debugging.md"));
 					break;
 				case "mesen_savestate_folder":
-					OracleAgentLauncher.OpenPath(ConfigManager.SaveStateFolder);
+					AgentLauncher.OpenPath(ConfigManager.SaveStateFolder);
 					break;
 				case "model_catalog":
-					OracleAgentLauncher.OpenPath("~/src/docs/MODEL_CATALOG.md");
+					AgentLauncher.OpenPath("~/src/docs/MODEL_CATALOG.md");
 					break;
 				case "integration_plan":
-					OracleAgentLauncher.OpenPath("~/src/docs/zelda-model-integration-plan.md");
+					AgentLauncher.OpenPath("~/src/docs/zelda-model-integration-plan.md");
 					break;
 				case "vscode_models":
-					OracleAgentLauncher.OpenPath("~/src/docs/vscode-local-models.md");
+					AgentLauncher.OpenPath("~/src/docs/vscode-local-models.md");
 					break;
 				case "models_dir":
-					OracleAgentLauncher.OpenPath("~/models");
+					AgentLauncher.OpenPath("~/models");
 					break;
 				case "afs_repo":
-					OracleAgentLauncher.OpenPath("~/src/lab/afs");
+					AgentLauncher.OpenPath("~/src/lab/afs");
 					break;
 				case "afs_scawful_repo":
-					OracleAgentLauncher.OpenPath("~/src/lab/afs-scawful");
+					AgentLauncher.OpenPath("~/src/lab/afs-scawful");
 					break;
 				case "chat_registry":
-					OracleAgentLauncher.OpenPath("~/src/lab/afs-scawful/config/chat_registry.toml");
+					AgentLauncher.OpenPath("~/src/lab/afs-scawful/config/chat_registry.toml");
 					break;
 			}
 		}

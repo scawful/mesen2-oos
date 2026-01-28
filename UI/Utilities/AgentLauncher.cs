@@ -9,9 +9,9 @@ using System.Threading.Tasks;
 
 namespace Mesen.Utilities
 {
-	public static class OracleAgentLauncher
+	public static class AgentLauncher
 	{
-		private const string GatewayScriptName = "oracle_agent_gateway.py";
+		private const string GatewayScriptName = "agent_gateway.py";
 
 		public static void RunGatewayAction(string action)
 		{
@@ -35,59 +35,49 @@ namespace Mesen.Utilities
 
 		public static void GatewayStatus()
 		{
-			RunGatewayCommandWithOutput(new[] { "status" }, "Oracle Agent Gateway Status");
+			RunGatewayCommandWithOutput(new[] { "status" }, "Agent Gateway Status");
 		}
 
 		public static void OpenMesen2Root()
 		{
 			if(!TryGetMesen2Root(out string root, out string? error)) {
-				ShowError(error ?? "Mesen2 OOS root not found.");
+				ShowError(error ?? "Mesen2 root not found.");
 				return;
 			}
 
 			OpenPath(root);
 		}
 
-		public static void OpenOracleRoot()
+		public static void OpenProjectRoot()
 		{
-			if(!TryGetOracleRoot(out string root, out string? error)) {
-				ShowError(error ?? "Oracle-of-Secrets root not found.");
+			if(!TryGetProjectRoot(out string root, out string? error)) {
+				ShowError(error ?? "Project root not found.");
 				return;
 			}
 
 			OpenPath(root);
 		}
+		
+		// Legacy alias for compatibility
+		public static void OpenOracleRoot() => OpenProjectRoot();
 
-		public static void OpenOracleRoms()
+		public static void OpenProjectConfig(string subPath)
 		{
-			OpenOraclePath("Roms");
+			if(!TryGetProjectRoot(out string root, out string? error)) {
+				ShowError(error ?? "Project root not found.");
+				return;
+			}
+			OpenPath(Path.Combine(root, subPath));
 		}
 
-		public static void OpenOracleDocs()
-		{
-			OpenOraclePath("Docs");
-		}
-
-		public static void OpenOracleSavestateLibrary()
-		{
-			OpenOraclePath(Path.Combine("Roms", "savestates"));
-		}
+		public static void OpenOracleRoms() => OpenProjectConfig("Roms");
+		public static void OpenOracleDocs() => OpenProjectConfig("Docs");
+		public static void OpenOracleSavestateLibrary() => OpenProjectConfig(Path.Combine("Roms", "savestates"));
 
 		public static void OpenMesen2Doc(string relativePath)
 		{
 			if(!TryGetMesen2Root(out string root, out string? error)) {
-				ShowError(error ?? "Mesen2 OOS root not found.");
-				return;
-			}
-
-			string path = Path.Combine(root, relativePath);
-			OpenPath(path);
-		}
-
-		private static void OpenOraclePath(string relativePath)
-		{
-			if(!TryGetOracleRoot(out string root, out string? error)) {
-				ShowError(error ?? "Oracle-of-Secrets root not found.");
+				ShowError(error ?? "Mesen2 root not found.");
 				return;
 			}
 
@@ -121,8 +111,8 @@ namespace Mesen.Utilities
 
 		private static void RunGatewayCommand(string[] args)
 		{
-			if(!TryGetGatewayPath(out string gatewayPath, out string? oracleRoot, out string? error)) {
-				ShowError(error ?? "Oracle Agent Gateway not found.");
+			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
+				ShowError(error ?? "Agent Gateway not found.");
 				return;
 			}
 
@@ -134,20 +124,20 @@ namespace Mesen.Utilities
 				Arguments = arguments,
 				UseShellExecute = false,
 				CreateNoWindow = true,
-				WorkingDirectory = oracleRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
+				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
 			};
 
 			try {
 				Process.Start(psi);
 			} catch(Exception ex) {
-				ShowError($"Failed to run Oracle Agent Gateway: {ex.Message}");
+				ShowError($"Failed to run Agent Gateway: {ex.Message}");
 			}
 		}
 
 		private static void RunGatewayCommandWithOutput(string[] args, string title)
 		{
-			if(!TryGetGatewayPath(out string gatewayPath, out string? oracleRoot, out string? error)) {
-				ShowError(error ?? "Oracle Agent Gateway not found.");
+			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
+				ShowError(error ?? "Agent Gateway not found.");
 				return;
 			}
 
@@ -161,14 +151,14 @@ namespace Mesen.Utilities
 				CreateNoWindow = true,
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
-				WorkingDirectory = oracleRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
+				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
 			};
 
 			Task.Run(async () => {
 				try {
 					using Process? proc = Process.Start(psi);
 					if(proc == null) {
-						ShowError("Failed to start Oracle Agent Gateway.");
+						ShowError("Failed to start Agent Gateway.");
 						return;
 					}
 
@@ -197,14 +187,16 @@ namespace Mesen.Utilities
 						wnd.Output = message;
 					});
 				} catch(Exception ex) {
-					ShowError($"Failed to run Oracle Agent Gateway: {ex.Message}");
+					ShowError($"Failed to run Agent Gateway: {ex.Message}");
 				}
 			});
 		}
 
 		private static string GetPythonExecutable()
 		{
-			string? envPython = Environment.GetEnvironmentVariable("OOS_PYTHON");
+			string? envPython = Environment.GetEnvironmentVariable("MESEN2_PYTHON") 
+				?? Environment.GetEnvironmentVariable("OOS_PYTHON");
+				
 			if(!string.IsNullOrWhiteSpace(envPython)) {
 				return ExpandHome(envPython);
 			}
@@ -212,44 +204,57 @@ namespace Mesen.Utilities
 			return OperatingSystem.IsWindows() ? "python" : "python3";
 		}
 
-		private static bool TryGetGatewayPath(out string gatewayPath, out string? oracleRoot, out string? error)
+		private static bool TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)
 		{
 			gatewayPath = string.Empty;
-			oracleRoot = null;
+			projectRoot = null;
 			error = null;
 
-			string? envGateway = Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PATH")
-				?? Environment.GetEnvironmentVariable("ORACLE_AGENT_GATEWAY_PATH");
+			// 1. Explicit override
+			string? envGateway = Environment.GetEnvironmentVariable("MESEN2_AGENT_GATEWAY_PATH")
+				?? Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PATH");
 
 			if(!string.IsNullOrWhiteSpace(envGateway)) {
 				string expanded = ExpandHome(envGateway);
 				if(File.Exists(expanded)) {
 					gatewayPath = expanded;
-					oracleRoot = Path.GetDirectoryName(Path.GetDirectoryName(expanded));
+					projectRoot = Path.GetDirectoryName(Path.GetDirectoryName(expanded));
 					return true;
 				}
 			}
 
-			string? root = ResolveOracleRoot();
+			// 2. Discover from Project Root
+			string? root = ResolveProjectRoot();
 			if(root == null) {
-				error = "Oracle-of-Secrets root not found. Set ORACLE_OF_SECRETS_ROOT or OOS_ROOT.";
+				error = "Project root not found. Set MESEN2_PROJECT_ROOT.";
 				return false;
 			}
 
-			string candidate = Path.Combine(root, "scripts", GatewayScriptName);
-			if(!File.Exists(candidate)) {
-				error = $"Gateway script not found: {candidate}";
-				return false;
-			}
+			// Check common script locations
+			string[] candidates = {
+				Path.Combine(root, "scripts", GatewayScriptName),
+				Path.Combine(root, GatewayScriptName),
+				// Fallback for Oracle (legacy)
+				Path.Combine(root, "scripts", "oracle_agent_gateway.py") 
+			};
 
-			gatewayPath = candidate;
-			oracleRoot = root;
-			return true;
+			foreach(var candidate in candidates) {
+				if(File.Exists(candidate)) {
+					gatewayPath = candidate;
+					projectRoot = root;
+					return true;
+				}
+			}
+			
+			error = $"Gateway script not found in project root: {root}";
+			return false;
 		}
 
-		private static string? ResolveOracleRoot()
+		public static string? ResolveProjectRoot()
 		{
-			string? envRoot = Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
+			// 1. Env Var
+			string? envRoot = Environment.GetEnvironmentVariable("MESEN2_PROJECT_ROOT")
+				?? Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
 				?? Environment.GetEnvironmentVariable("OOS_ROOT");
 
 			if(!string.IsNullOrWhiteSpace(envRoot)) {
@@ -259,9 +264,23 @@ namespace Mesen.Utilities
 				}
 			}
 
+			// 2. Oracle Default Fallback
 			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 			string defaultRoot = Path.Combine(home, "src", "hobby", "oracle-of-secrets");
 			return Directory.Exists(defaultRoot) ? defaultRoot : null;
+		}
+
+		private static bool TryGetProjectRoot(out string root, out string? error)
+		{
+			string? resolved = ResolveProjectRoot();
+			if (resolved != null) {
+				root = resolved;
+				error = null;
+				return true;
+			}
+			root = string.Empty;
+			error = "Project root not found. Set MESEN2_PROJECT_ROOT.";
+			return false;
 		}
 
 		private static bool TryGetMesen2Root(out string root, out string? error)
@@ -287,36 +306,10 @@ namespace Mesen.Utilities
 				return true;
 			}
 
-			error = "Mesen2 OOS root not found. Set MESEN2_OOS_ROOT or MESEN2_ROOT.";
+			error = "Mesen2/OOS root not found. Set MESEN2_ROOT.";
 			return false;
 		}
 
-		private static bool TryGetOracleRoot(out string root, out string? error)
-		{
-			root = string.Empty;
-			error = null;
-
-			string? envRoot = Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
-				?? Environment.GetEnvironmentVariable("OOS_ROOT");
-
-			if(!string.IsNullOrWhiteSpace(envRoot)) {
-				string expanded = ExpandHome(envRoot);
-				if(Directory.Exists(expanded)) {
-					root = expanded;
-					return true;
-				}
-			}
-
-			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-			string defaultRoot = Path.Combine(home, "src", "hobby", "oracle-of-secrets");
-			if(Directory.Exists(defaultRoot)) {
-				root = defaultRoot;
-				return true;
-			}
-
-			error = "Oracle-of-Secrets root not found. Set ORACLE_OF_SECRETS_ROOT or OOS_ROOT.";
-			return false;
-		}
 
 		private static string ExpandHome(string path)
 		{
@@ -345,7 +338,7 @@ namespace Mesen.Utilities
 		private static void ShowError(string message)
 		{
 			Dispatcher.UIThread.Post(() => {
-				MessageBox.Show(ApplicationHelper.GetActiveOrMainWindow(), message, "Oracle", MessageBoxButtons.OK, MessageBoxIcon.Error);
+				MessageBox.Show(ApplicationHelper.GetActiveOrMainWindow(), message, "Agent Launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
 			});
 		}
 

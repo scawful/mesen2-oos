@@ -322,6 +322,7 @@ public:
 	void LoadSpcFile(SpcFileData* spcData);
 
 	void Serialize(Serializer &s) override;
+	void AfterStateLoad(); // reapply timers/ports after savestate load
 
 #ifdef DUMMYSPC
 private:

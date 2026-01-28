@@ -42,6 +42,8 @@ private:
 
 	SnesCpuState _state = {};
 	uint32_t _operand = 0;
+	uint32_t _lastExecPc = 0;
+	bool _invalidPcLogged = false;
 
 	uint32_t GetProgramAddress(uint16_t addr);
 	uint32_t GetDataAddress(uint16_t addr);
