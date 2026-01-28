@@ -54,7 +54,7 @@ class Debugger
 {
 private:
 	Emulator* _emu = nullptr;
-	IConsole* _console = nullptr;
+	shared_ptr<IConsole> _console;
 
 	EmuSettings* _settings = nullptr;
 
@@ -103,7 +103,7 @@ private:
 	template<CpuType type> void SleepOnBreakRequest();
 
 public:
-	Debugger(Emulator* emu, IConsole* console);
+	Debugger(Emulator* emu, shared_ptr<IConsole> console);
 	~Debugger();
 	void Release();
 
@@ -190,7 +190,7 @@ public:
 	LabelManager* GetLabelManager() { return _labelManager.get(); }
 	CdlManager* GetCdlManager() { return _cdlManager.get(); }
 	ScriptManager* GetScriptManager() { return _scriptManager.get(); }
-	IConsole* GetConsole() { return _console; }
+	IConsole* GetConsole() { return _console.get(); }
 	Emulator* GetEmulator() { return _emu; }
 
 	FrozenAddressManager* GetFrozenAddressManager(CpuType cpuType);

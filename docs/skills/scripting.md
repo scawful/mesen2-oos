@@ -32,5 +32,5 @@ Control the emulator from external tools (Python/Node/etc).
 Use `mesen2ctl` or `mesen-agent` to interact comfortably.
 ```bash
 mesen-agent session list
-mesen-agent --socket /tmp/mesen2-1234.sock read 7E0010
+python3 tools/mesen2ctl --socket /tmp/mesen2-1234.sock read 0x7E0010
 ```

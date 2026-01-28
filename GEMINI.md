@@ -13,11 +13,14 @@ Build and test instructions for the Mesen2-OoS fork.
 ### macOS (Apple Silicon)
 
 ```bash
-# Full Rebuild
+# Recommended: Use mesen-agent for unified workflow
+mesen-agent build
+
+# Legacy: Full Rebuild
 cd ~/src/hobby/mesen2-oos
 make clean && make
 
-# Incremental (Fast)
+# Legacy: Incremental (Fast)
 make
 ```
 
@@ -50,14 +53,16 @@ python3 test_p2_events.py
 To run Mesen with best practices (especially for agents or multiple sessions), use the `mesen-run` wrapper installed in `~/bin`.
 
 ```bash
-# Launch standard instance (GUI)
+# Recommended: Use mesen-agent for unified session management
+mesen-agent launch [session-name] [--headless] [--rom path/to/rom]
+
+# Legacy: Launch standard instance (GUI)
 mesen-run
 
-# Launch a separate concurrent instance (GUI)
-# Note: Config and Save States are UNIFIED in ~/.config/Mesen2/
+# Legacy: Launch a separate concurrent instance (GUI)
 mesen-run --multi
 
-# Launch a headless instance for agents
+# Legacy: Launch a headless instance for agents
 mesen-run --headless --multi
 ```
 

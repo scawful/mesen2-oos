@@ -1,212 +1,406 @@
 #!/usr/bin/env python3
+"""
+mesen-agent - Integrated Zelda Dev Environment Tool
+Consolidates Mesen2-OOS, YAZE, and OOS build/test workflows.
+"""
+
 import argparse
 import sys
 import os
 import subprocess
 import shutil
-import glob
+import json
+import time
+import socket
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional, Dict, List
 
-# Configuration
-MESEN_RUN_CMD = "mesen-run" # Assumed to be in PATH or linked
+# --- Configuration & Paths ---
+MESEN_RUN_CMD = "mesen-run"
 SKILLS_DIR = os.path.expanduser("~/src/hobby/mesen2-oos/docs/skills")
+
+def _get_repo_root() -> Path:
+    # Try to find repo root from CWD or script location
+    candidates = [Path.cwd(), Path(__file__).resolve().parent]
+    markers = [
+        ("Core", "Shared", "Emulator.cpp"),
+        ("UI", "Program.cs"),
+        ("Oracle_main.asm",),
+        ("CMakePresets.json",),
+    ]
+    for base in candidates:
+        for path in [base] + list(base.parents):
+            for marker in markers:
+                if (path / Path(*marker)).exists():
+                    return path
+    return Path.cwd()
 
 def _default_instances_dir():
     override = os.environ.get("MESEN2_INSTANCES_DIR")
     if override:
         return os.path.expanduser(override)
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Application Support/Mesen2-instances")
     if os.name == "nt":
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
-        return os.path.join(base, "Mesen2-instances")
-    return os.path.expanduser("~/.config/Mesen2-instances")
+        return os.path.join(base, "Mesen2", "profiles")
+    return os.path.expanduser("~/.config/Mesen2/profiles")
 
-# Default location for instances created by mesen-run (override with MESEN2_INSTANCES_DIR)
 INSTANCES_DIR = _default_instances_dir()
 
-def get_instance_path(name):
-    return os.path.join(INSTANCES_DIR, name)
+def _registry_dir() -> Path:
+    return Path(os.path.expanduser("~/.config/Mesen2/registry"))
 
-def get_running_sessions():
-    """Returns a list of dictionaries with info about running Mesen processes."""
-    sessions = []
+# --- Registry Utils (Ported from mesen2_registry.py) ---
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+def _load_record(path: Path) -> dict:
+    if not path.exists(): return {}
     try:
-        tmp_path = Path("/tmp")
-        for p in tmp_path.glob("mesen2-*.sock"):
-            try:
-                # Format: mesen2-<PID>.sock
-                pid = p.stem.split("-")[1]
-                # Check if process is still running
-                try:
-                    os.kill(int(pid), 0)
-                except OSError:
-                    continue # Stale socket
-                
-                sessions.append({
-                   "pid": pid,
-                   "socket": str(p),
-                   "name": "unknown" 
-                })
-            except (ValueError, IndexError):
+        return json.loads(path.read_text())
+    except:
+        return {}
+
+def _save_record(path: Path, record: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+
+def _prune_registry():
+    """Checks all registry entries and marks dead processes as not alive."""
+    reg_dir = _registry_dir()
+    if not reg_dir.exists(): return
+
+    for p in reg_dir.glob("*.json"):
+        rec = _load_record(p)
+        if not rec.get("alive", False):
+            continue
+        
+        pid = int(rec.get("pid", 0))
+        mesen_pid = int(rec.get("mesen_pid", 0))
+        if pid == 0 and mesen_pid == 0:
+            continue
+
+        is_running = False
+        for candidate in (pid, mesen_pid):
+            if candidate <= 0:
                 continue
-    except Exception as e:
-        print(f"Error listing sessions: {e}", file=sys.stderr)
+            try:
+                os.kill(candidate, 0)
+                is_running = True
+                break
+            except OSError:
+                continue
+        
+        if not is_running:
+            print(f"  [Registry] Pruning stale session '{rec.get('instance')}' (PID {pid} not found)")
+            rec["alive"] = False
+            rec["updated_at"] = _now_iso()
+            _save_record(p, rec)
+
+# --- Socket Utils (Ported from mesen2ctl) ---
+
+def send_command(socket_path: str, command: dict, timeout: float = 5.0) -> dict:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(socket_path)
+        request = json.dumps(command) + "\n"
+        sock.sendall(request.encode())
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk: break
+            response += chunk
+            if b"\n" in response: break
+        return json.loads(response.decode().strip())
+    finally:
+        sock.close()
+
+# --- Instance Management ---
+
+def get_running_sessions() -> List[Dict]:
+    sessions = []
+    tmp_path = Path("/tmp")
+    for p in tmp_path.glob("mesen2-*.sock"):
+        try:
+            pid = p.stem.split("-")[1]
+            os.kill(int(pid), 0)
+            sessions.append({"pid": pid, "socket": str(p)})
+        except (ValueError, IndexError, OSError):
+            continue
     return sessions
 
+def _get_child_pid(parent_pid: int) -> Optional[int]:
+    """Finds the child PID of the given parent PID (likely the Mesen binary)."""
+    try:
+        # Use pgrep to find child of parent
+        result = subprocess.check_output(["pgrep", "-P", str(parent_pid)])
+        # There might be multiple (e.g. sleep, etc), but usually Mesen is the main one.
+        # If multiple, take the first one?
+        pids = [int(p) for p in result.decode().strip().split()]
+        if pids: return pids[0]
+    except (subprocess.CalledProcessError, ValueError):
+        pass
+    return None
+
+def cmd_launch(args):
+    name = args.name or f"session-{int(time.time())}"
+    profile = args.profile or name
+    print(f"Launching instance '{name}'...")
+    print(f"  Profile: {profile} ({INSTANCES_DIR}/{profile})")
+    
+    # Environment Setup
+    profile_dir = os.path.join(INSTANCES_DIR, profile)
+
+    os.makedirs(profile_dir, exist_ok=True)
+    
+    # Inject Configs
+    if args.settings:
+        if os.path.exists(args.settings):
+            print(f"  Injecting settings: {args.settings}")
+            shutil.copy2(args.settings, os.path.join(profile_dir, Path(args.settings).name))
+        else:
+            print(f"  Warning: Settings file not found: {args.settings}")
+    
+    if args.input:
+        if os.path.exists(args.input):
+            print(f"  Injecting input config: {args.input}")
+            shutil.copy2(args.input, os.path.join(profile_dir, Path(args.input).name))
+        else:
+            print(f"  Warning: Input file not found: {args.input}")
+    
+    env = os.environ.copy()
+    env["MESEN2_HOME"] = profile_dir
+    env["MESEN2_INSTANCE"] = name
+    
+    cmd = [MESEN_RUN_CMD, "--multi", f"--name={name}", f"--profile={profile}"]
+    if args.headless: cmd.append("--headless")
+    if args.rom: cmd.append(args.rom)
+    
+    # Launch
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"  PID (Wrapper): {proc.pid}")
+    
+    # Wait for socket
+    # We need to find the REAL Mesen PID (child of wrapper)
+    mesen_pid = None
+    socket_path = None
+    socket_ready = False
+    
+    print("  Waiting for socket (and child process)...")
+    start_time = time.time()
+    
+    # Wait up to 15 seconds
+    while time.time() - start_time < 15.0:
+        # 1. Check if wrapper process is still running
+        if proc.poll() is not None:
+            print(f"  Error: Process exited early with code {proc.returncode}")
+            return
+
+        # 2. Try to resolve child PID if not found yet
+        if not mesen_pid:
+            child = _get_child_pid(proc.pid)
+            if child:
+                mesen_pid = child
+                socket_path = f"/tmp/mesen2-{mesen_pid}.sock"
+                print(f"  Detected Mesen PID: {mesen_pid}")
+
+        # 3. Check for socket file (if we have a PID)
+        if socket_path and os.path.exists(socket_path):
+            # 4. Verify connectivity
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                sock.connect(socket_path)
+                sock.close()
+                socket_ready = True
+                break
+            except (ConnectionRefusedError, socket.timeout, OSError):
+                pass
+        
+        time.sleep(0.5)
+    
+    if socket_ready and socket_path:
+        print(f"  Socket verified: {socket_path}")
+        # Registry record
+        record = {
+            "instance": name,
+            "pid": proc.pid,      # Keep wrapper PID for lifecycle management
+            "mesen_pid": mesen_pid, # Store actual binary PID for reference
+            "socket": socket_path,
+            "profile": profile,
+            "home": profile_dir,
+            "created_at": _now_iso(),
+            "owner": os.environ.get("USER", "agent"),
+            "alive": True
+        }
+        _save_record(_registry_dir() / f"{name}.json", record)
+    else:
+        print("  Warning: Socket initialization timed out.")
+        if proc.poll() is None:
+             print("           Process is running but socket is unresponsive.")
+
+def cmd_build(args):
+    repo_root = _get_repo_root()
+    print(f"Detecting build system in {repo_root}...")
+    
+    if os.path.exists(repo_root / "Oracle_main.asm"):
+        print("Detected Oracle of Secrets project.")
+        build_script = repo_root / "scripts" / "build_rom.sh"
+        if os.path.exists(build_script):
+            cmd = [str(build_script), "168"] # Default version
+            subprocess.run(cmd, check=True)
+        else:
+            print("Error: build_rom.sh not found.")
+    elif os.path.exists(repo_root / "CMakePresets.json"):
+        print("Detected YAZE/CMake project.")
+        build_script = repo_root / "scripts" / "agent_build.sh"
+        if os.path.exists(build_script):
+            subprocess.run([str(build_script)], check=True)
+        else:
+            print("Error: agent_build.sh not found.")
+    elif os.path.exists(repo_root / "makefile"):
+         print("Detected Make project (likely Mesen2-OOS).")
+         subprocess.run(["make"], check=True)
+    else:
+        print("Error: Unknown project type.")
+
+def cmd_test(args):
+    repo_root = _get_repo_root()
+    print(f"Detecting test system in {repo_root}...")
+    
+    if os.path.exists(repo_root / "scripts" / "test_runner.py"):
+        print("Running OOS test runner...")
+        subprocess.run(["python3", str(repo_root / "scripts" / "test_runner.py")] + args.extra_args, check=True)
+    elif os.path.exists(repo_root / "scripts" / "agent_test_suite.sh"):
+        print("Running YAZE test suite...")
+        subprocess.run([str(repo_root / "scripts" / "agent_test_suite.sh")] + args.extra_args, check=True)
+    elif os.path.exists(repo_root / "test_socket_api_full.py"):
+        print("Running Mesen2 Socket API tests...")
+        subprocess.run(["pytest", "test_socket_api_full.py", "-v"] + args.extra_args, check=True)
+    else:
+        print("Error: No test system detected.")
+
+
+
+def cmd_sync(args):
+    src_dir = os.path.join(INSTANCES_DIR, args.src)
+    dest_dir = os.path.join(INSTANCES_DIR, args.dest)
+    
+    if not os.path.exists(src_dir):
+        print(f"Error: Source instance '{args.src}' not found at {src_dir}")
+        return
+    if not os.path.exists(dest_dir):
+        print(f"Error: Destination instance '{args.dest}' not found at {dest_dir}")
+        return
+        
+    print(f"Syncing from '{args.src}' to '{args.dest}'...")
+    
+    # helper to copy glob
+    def sync_files(pattern, desc):
+        count = 0
+        for p in Path(src_dir).rglob(pattern):
+            rel = p.relative_to(src_dir)
+            target = Path(dest_dir) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+            count += 1
+        print(f"  Synced {count} {desc} ({pattern})")
+
+    sync_files("*.mlb", "Symbol files")
+    sync_files("*.wch", "Watch files")
+    sync_files("*.mss", "Save states")
+
+# --- Original features ---
+
 def cmd_session_list(args):
+    # 1. Prune dead entries first
+    _prune_registry()
+
     print("Active Mesen2 Sessions (Socket Check):")
     sessions = get_running_sessions()
-    if not sessions:
-        print("  No active sessions found.")
+    active_pids = set()
     for s in sessions:
         print(f"  PID: {s['pid']} | Socket: {s['socket']}")
+        active_pids.add(s['pid'])
     
-    print("\nKnown Instance Directories:")
-    if os.path.isdir(INSTANCES_DIR):
-        for name in os.listdir(INSTANCES_DIR):
-            path = os.path.join(INSTANCES_DIR, name)
-            if os.path.isdir(path):
-                print(f"  Name: {name}")
-                print(f"    Path: {path}")
-    else:
-        print(f"  {INSTANCES_DIR} does not exist.")
+    print("\nRegistry Entries:")
+    reg_dir = _registry_dir()
+    if reg_dir.exists():
+        for p in reg_dir.glob("*.json"):
+            rec = _load_record(p)
+            name = rec.get('instance')
+            owner = rec.get('owner')
+            alive = rec.get('alive')
+            pid = str(rec.get('pid'))
+            mesen_pid = str(rec.get('mesen_pid', "")) if rec.get("mesen_pid") else ""
+            
+            status = "Alive" if alive else "Stopped"
+            active_pid = mesen_pid or pid
+            if alive and active_pid not in active_pids:
+                 # Edge case: Registry thinks alive, but no socket found (maybe initializing or zombie)
+                 status = "Unknown/No-Socket"
 
-def cmd_session_start(args):
-    name = args.name
-    print(f"Starting session '{name}'...")
-    # We call mesen-run directly
-    cmd = [MESEN_RUN_CMD, f"--name={name}"]
-    if args.headless:
-        cmd.append("--headless")
+            pid_display = f"{pid}/{mesen_pid}" if mesen_pid else pid
+            print(f"  Name: {name:<20} | Status: {status:<16} | PID: {pid_display:<12} | Owner: {owner}")
     
-    # Launch detached
-    # Use Popen to launch in background
-    try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"Session '{name}' launched in background.")
-    except FileNotFoundError:
-        print(f"Error: '{MESEN_RUN_CMD}' not found in PATH.")
-
-def cmd_session_stop(args):
-    print(f"To stop session '{args.name}', find its PID via 'session list' and use 'kill <PID>'")
-
-def cmd_share_config(args):
-    src = get_instance_path(args.src)
-    dest = get_instance_path(args.dest)
-    
-    if not os.path.exists(src):
-        print(f"Source instance '{args.src}' not found at {src}")
-        return
-    
-    if not os.path.exists(dest):
-        print(f"Destination instance '{args.dest}' does not exist. Creating...")
-        os.makedirs(dest, exist_ok=True)
-
-    # Files to copy
-    files = ["settings.xml", "input.xml"]
-    for f in files:
-        s_file = os.path.join(src, f)
-        d_file = os.path.join(dest, f)
-        if os.path.exists(s_file):
-            shutil.copy2(s_file, d_file)
-            print(f"Copied {f} from {args.src} to {args.dest}")
-        else:
-            print(f"Warning: {f} not found in {args.src}")
-
-def cmd_share_state(args):
-    src = get_instance_path(args.src)
-    dest = get_instance_path(args.dest)
-    
-    src_saves = os.path.join(src, "Mesen2", "SaveStates")
-    # If not there, try root
-    if not os.path.exists(src_saves):
-         src_saves = os.path.join(src, "SaveStates")
-         
-    dest_saves = os.path.join(dest, "SaveStates") # Normalize to root for destination if simple
-    
-    if os.path.exists(src_saves):
-        # We need to copy contents
-        if not os.path.exists(dest_saves):
-             os.makedirs(dest_saves)
-
-        # Copy all files
-        for item in os.listdir(src_saves):
-            s = os.path.join(src_saves, item)
-            d = os.path.join(dest_saves, item)
-            if os.path.isfile(s):
-                shutil.copy2(s, d)
-                print(f"Copied {item}")
-            elif os.path.isdir(s):
-                # Recursive copy
-                shutil.copytree(s, d, dirs_exist_ok=True)
-                print(f"Copied directory {item}")
-    else:
-         print(f"No SaveStates directory found in {src}")
-
 def cmd_skill_list(args):
-    if not os.path.isdir(SKILLS_DIR):
-        print(f"Skills directory not found: {SKILLS_DIR}")
-        return
-    
+    if not os.path.isdir(SKILLS_DIR): return
     print("Available Skills:")
     for f in sorted(os.listdir(SKILLS_DIR)):
-        if f.endswith(".md"):
-            print(f"  {f[:-3]}")
+        if f.endswith(".md"): print(f"  {f[:-3]}")
 
 def cmd_skill_read(args):
     path = os.path.join(SKILLS_DIR, f"{args.name}.md")
-    if not os.path.exists(path):
-        print(f"Skill '{args.name}' not found.")
-        return
-    
-    with open(path, 'r') as f:
-        print(f.read())
+    if os.path.exists(path):
+        with open(path, 'r') as f: print(f.read())
+    else: print(f"Skill '{args.name}' not found.")
 
 def main():
     parser = argparse.ArgumentParser(description="Mesen Agentic Interface")
     subparsers = parser.add_subparsers(dest="command")
     
+    # Launch
+    p_launch = subparsers.add_parser("launch", help="Launch an instance")
+    p_launch.add_argument("name", nargs="?", help="Instance name")
+    p_launch.add_argument("--profile", help="Profile name (defaults to instance name)")
+    p_launch.add_argument("--rom", help="ROM path")
+    p_launch.add_argument("--headless", action="store_true")
+    p_launch.add_argument("--settings", help="Path to Settings.xml to inject")
+    p_launch.add_argument("--input", help="Path to Input.xml to inject")
+    p_launch.set_defaults(func=cmd_launch)
+    
+    # Build
+    p_build = subparsers.add_parser("build", help="Build current project")
+    p_build.set_defaults(func=cmd_build)
+    
+    # Test
+    p_test = subparsers.add_parser("test", help="Run tests for current project")
+    p_test.add_argument("extra_args", nargs="*", help="Extra args for test runner")
+    p_test.set_defaults(func=cmd_test)
+    
     # Session
     p_session = subparsers.add_parser("session", help="Manage sessions")
     sp_session = p_session.add_subparsers(dest="subcommand")
-    
     sp_sess_list = sp_session.add_parser("list", help="List sessions")
     sp_sess_list.set_defaults(func=cmd_session_list)
-    
-    sp_sess_start = sp_session.add_parser("start", help="Start session")
-    sp_sess_start.add_argument("name", help="Session name")
-    sp_sess_start.add_argument("--headless", action="store_true", help="Start headless")
-    sp_sess_start.set_defaults(func=cmd_session_start)
-    
-    sp_sess_stop = sp_session.add_parser("stop", help="Stop session")
-    sp_sess_stop.add_argument("name", help="Session name")
-    sp_sess_stop.set_defaults(func=cmd_session_stop)
-    
-    # Share
-    p_share = subparsers.add_parser("share", help="Share resources")
-    sp_share = p_share.add_subparsers(dest="subcommand")
-    
-    sp_share_cfg = sp_share.add_parser("config", help="Share config")
-    sp_share_cfg.add_argument("src", help="Source instance name")
-    sp_share_cfg.add_argument("dest", help="Destination instance name")
-    sp_share_cfg.set_defaults(func=cmd_share_config)
-    
-    sp_share_state = sp_share.add_parser("state", help="Share save states")
-    sp_share_state.add_argument("src", help="Source instance name")
-    sp_share_state.add_argument("dest", help="Destination instance name")
-    sp_share_state.set_defaults(func=cmd_share_state)
     
     # Skill
     p_skill = subparsers.add_parser("skill", help="Documentation/Skills")
     sp_skill = p_skill.add_subparsers(dest="subcommand")
-    
     sp_skill_list = sp_skill.add_parser("list", help="List skills")
     sp_skill_list.set_defaults(func=cmd_skill_list)
-    
     sp_skill_read = sp_skill.add_parser("read", help="Read skill")
     sp_skill_read.add_argument("name", help="Skill name")
     sp_skill_read.set_defaults(func=cmd_skill_read)
+
+    
+    # Sync
+    p_sync = subparsers.add_parser("sync", help="Sync data between instances")
+    p_sync.add_argument("--from", dest="src", required=True, help="Source instance name")
+    p_sync.add_argument("--to", dest="dest", required=True, help="Destination instance name")
+    p_sync.set_defaults(func=cmd_sync)
     
     args = parser.parse_args()
     if hasattr(args, 'func'):

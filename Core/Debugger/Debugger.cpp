@@ -56,7 +56,7 @@
 
 uint64_t ITraceLogger::NextRowId = 0;
 
-Debugger::Debugger(Emulator* emu, IConsole* console)
+Debugger::Debugger(Emulator* emu, shared_ptr<IConsole> console)
 {
 	_executionStopped = true;
 
@@ -72,7 +72,7 @@ Debugger::Debugger(Emulator* emu, IConsole* console)
 
 	_labelManager.reset(new LabelManager(this));
 	_memoryDumper.reset(new MemoryDumper(this));
-	_disassembler.reset(new Disassembler(console, this));
+	_disassembler.reset(new Disassembler(console.get(), this));
 	_disassemblySearch.reset(new DisassemblySearch(_disassembler.get(), _labelManager.get()));
 	_memoryAccessCounter.reset(new MemoryAccessCounter(this));
 	_scriptManager.reset(new ScriptManager(this));

@@ -1035,11 +1035,11 @@ void Emulator::ResetDebugger(bool startDebugger)
 	}
 
 	if(_emulationThreadId == std::this_thread::get_id()) {
-		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+		_debugger.reset(startDebugger ? new Debugger(this, _console.lock()) : nullptr);
 	} else {
 		//Need to pause emulator to change _debugger (when not called from the emulation thread)
 		auto emuLock = AcquireLock();
-		_debugger.reset(startDebugger ? new Debugger(this, _console.get()) : nullptr);
+		_debugger.reset(startDebugger ? new Debugger(this, _console.lock()) : nullptr);
 	}
 }
 
