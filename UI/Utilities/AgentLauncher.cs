@@ -2,9 +2,11 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Mesen.Windows;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace Mesen.Utilities
@@ -12,15 +14,73 @@ namespace Mesen.Utilities
 	public static class AgentLauncher
 	{
 		private const string GatewayScriptName = "agent_gateway.py";
+		private static readonly TimeSpan GatewayOutputTimeout = TimeSpan.FromSeconds(10);
 
 		public static void RunGatewayAction(string action)
 		{
-			RunGatewayCommand(new[] { "action", action });
+			RunGatewayCommand(BuildGatewayActionArgs(action, null));
 		}
 
 		public static void RunGatewayActionWithOutput(string action, string title)
 		{
-			RunGatewayCommandWithOutput(new[] { "action", action }, title);
+			RunGatewayCommandWithOutput(BuildGatewayActionArgs(action, null), title);
+		}
+
+		/// <summary>Run a gateway action and return stdout/stderr as a single string (for use in diagnostics window). Returns null on failure.</summary>
+		public static async Task<string?> RunGatewayActionWithOutputAsync(string action)
+		{
+			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
+				ShowError(error ?? "Agent Gateway not found.");
+				return null;
+			}
+
+			string pythonExe = GetPythonExecutable();
+			string[] args = BuildGatewayActionArgs(action, null);
+			string arguments = BuildArguments(gatewayPath, args);
+
+			ProcessStartInfo psi = new ProcessStartInfo() {
+				FileName = pythonExe,
+				Arguments = arguments,
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
+			};
+
+			try {
+				using Process? proc = Process.Start(psi);
+				if(proc == null) {
+					ShowError("Failed to start Agent Gateway.");
+					return null;
+				}
+
+				Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
+				Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+				Task waitTask = proc.WaitForExitAsync();
+				Task finished = await Task.WhenAny(waitTask, Task.Delay(5000)).ConfigureAwait(false);
+				if(finished != waitTask && !proc.HasExited) {
+					try { proc.Kill(); } catch { }
+					await waitTask.ConfigureAwait(false);
+				}
+
+				string stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
+				string stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+				return BuildOutputMessage(stdout, stderr);
+			} catch(Exception ex) {
+				ShowError($"Failed to run Agent Gateway: {ex.Message}");
+				return null;
+			}
+		}
+
+		public static void RunGatewayActionWithArgs(string action, IReadOnlyDictionary<string, string> args)
+		{
+			RunGatewayCommand(BuildGatewayActionArgs(action, args));
+		}
+
+		public static void RunGatewayActionWithArgsAndOutput(string action, IReadOnlyDictionary<string, string> args, string title)
+		{
+			RunGatewayCommandWithOutput(BuildGatewayActionArgs(action, args), title);
 		}
 
 		public static void StartGateway()
@@ -166,7 +226,7 @@ namespace Mesen.Utilities
 					Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
 
 					Task waitTask = proc.WaitForExitAsync();
-					Task finished = await Task.WhenAny(waitTask, Task.Delay(2000)).ConfigureAwait(false);
+					Task finished = await Task.WhenAny(waitTask, Task.Delay(GatewayOutputTimeout)).ConfigureAwait(false);
 					if(finished != waitTask && !proc.HasExited) {
 						try {
 							proc.Kill();
@@ -178,6 +238,9 @@ namespace Mesen.Utilities
 
 					string stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
 					string stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+					if(finished != waitTask && string.IsNullOrWhiteSpace(stderr)) {
+						stderr = $"Command timed out after {GatewayOutputTimeout.TotalSeconds:0} seconds.";
+					}
 					string message = BuildOutputMessage(stdout, stderr);
 
 					Dispatcher.UIThread.Post(() => {
@@ -255,7 +318,8 @@ namespace Mesen.Utilities
 			// 1. Env Var
 			string? envRoot = Environment.GetEnvironmentVariable("MESEN2_PROJECT_ROOT")
 				?? Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
-				?? Environment.GetEnvironmentVariable("OOS_ROOT");
+				?? Environment.GetEnvironmentVariable("OOS_ROOT")
+				?? Environment.GetEnvironmentVariable("MESEN2_ORACLE_ROOT");
 
 			if(!string.IsNullOrWhiteSpace(envRoot)) {
 				string expanded = ExpandHome(envRoot);
@@ -264,7 +328,18 @@ namespace Mesen.Utilities
 				}
 			}
 
-			// 2. Oracle Default Fallback
+			// 2. Infer from Mesen2 root (common sibling-repo layout)
+			if(TryGetMesen2Root(out string mesenRoot, out _)) {
+				string? hobbyRoot = Directory.GetParent(mesenRoot)?.FullName;
+				if(!string.IsNullOrWhiteSpace(hobbyRoot)) {
+					string sibling = Path.Combine(hobbyRoot, "oracle-of-secrets");
+					if(Directory.Exists(sibling)) {
+						return sibling;
+					}
+				}
+			}
+
+			// 3. Oracle Default Fallback
 			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 			string defaultRoot = Path.Combine(home, "src", "hobby", "oracle-of-secrets");
 			return Directory.Exists(defaultRoot) ? defaultRoot : null;
@@ -324,7 +399,15 @@ namespace Mesen.Utilities
 		{
 			string Quote(string value)
 			{
-				return value.Contains(' ') ? $"\"{value}\"" : value;
+				if(string.IsNullOrEmpty(value)) {
+					return "\"\"";
+				}
+				bool needsQuotes = value.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"' }) >= 0;
+				if(!needsQuotes) {
+					return value;
+				}
+				string escaped = value.Replace("\"", "\\\"");
+				return $"\"{escaped}\"";
 			}
 
 			string arguments = Quote(gatewayPath);
@@ -333,6 +416,16 @@ namespace Mesen.Utilities
 			}
 
 			return arguments;
+		}
+
+		private static string[] BuildGatewayActionArgs(string action, IReadOnlyDictionary<string, string>? args)
+		{
+			if(args == null || args.Count == 0) {
+				return new[] { "action", action };
+			}
+
+			string payload = JsonSerializer.Serialize(args);
+			return new[] { "action", action, "--args-json", payload };
 		}
 
 		private static void ShowError(string message)

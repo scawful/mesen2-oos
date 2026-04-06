@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -134,18 +136,53 @@ namespace Mesen.Utilities
 
 		private static string? GetLocalSocketPath()
 		{
-			// Check for explicit override
-			string? envPath = Environment.GetEnvironmentVariable("MESEN2_SOCKET_PATH");
-			if(!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath)) {
-				return envPath;
-			}
-
 			if(OperatingSystem.IsWindows()) {
 				return null;
 			}
 
-			string candidate = $"/tmp/mesen2-{Environment.ProcessId}.sock";
-			return File.Exists(candidate) ? candidate : null;
+			// 1) Explicit overrides (canonical priority)
+			foreach(string? envPath in new[] {
+				Environment.GetEnvironmentVariable("MESEN2_SOCKET_PATH"),
+				Environment.GetEnvironmentVariable("MESEN2_SOCKET")
+			}) {
+				if(!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath)) {
+					return envPath;
+				}
+			}
+
+			// 2) Status files by mtime (newest first)
+			string[] statusFiles = Directory.GetFiles("/tmp", "mesen2-*.status")
+				.OrderByDescending(p => File.GetLastWriteTimeUtc(p))
+				.ToArray();
+
+			HashSet<string> seen = new(StringComparer.Ordinal);
+			List<string> candidates = new();
+
+			foreach(string statusPath in statusFiles) {
+				try {
+					using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(statusPath));
+					if(doc.RootElement.TryGetProperty("socketPath", out JsonElement socketElem)) {
+						string? socketPath = socketElem.GetString();
+						if(!string.IsNullOrWhiteSpace(socketPath) && File.Exists(socketPath) && seen.Add(socketPath)) {
+							candidates.Add(socketPath);
+						}
+					}
+				} catch {
+					// Ignore malformed status files
+				}
+			}
+
+			// 3) Fallback raw socket scan by mtime (newest first)
+			string[] sockets = Directory.GetFiles("/tmp", "mesen2-*.sock")
+				.OrderByDescending(p => File.GetLastWriteTimeUtc(p))
+				.ToArray();
+			foreach(string socketPath in sockets) {
+				if(seen.Add(socketPath)) {
+					candidates.Add(socketPath);
+				}
+			}
+
+			return candidates.Count > 0 ? candidates[0] : null;
 		}
 
 		private static bool? GetYazeRunningFromPid()

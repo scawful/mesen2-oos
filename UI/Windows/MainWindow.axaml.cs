@@ -22,6 +22,7 @@ using Avalonia.Input.Platform;
 using System.Collections.Generic;
 using Mesen.Controls;
 using Mesen.Localization;
+using System.Diagnostics;
 
 namespace Mesen.Windows
 {
@@ -162,19 +163,46 @@ namespace Mesen.Windows
 					return;
 				}
 
+				Stopwatch shutdownTimer = Stopwatch.StartNew();
+				bool traceShutdown = ShouldTraceShutdown();
+				void Trace(string message)
+				{
+					if(traceShutdown) {
+						EmuApi.WriteLogEntry("[Shutdown] " + message);
+					}
+				}
+
+				void TraceStep(string label, Action action)
+				{
+					Stopwatch stepTimer = Stopwatch.StartNew();
+					Trace("BEGIN " + label);
+					action();
+					stepTimer.Stop();
+					Trace("END   " + label + " (" + stepTimer.ElapsedMilliseconds + "ms)");
+				}
+
+				Trace("Main window shutdown started");
 				_shutdownStarted = true;
-				_shutdownCts.Cancel();
-				_timerBackgroundFlag.Stop();
-				NotificationListener.SuppressCallbacks = true;
-				WatchHudService.Shutdown();
-				DebugApi.ReleaseDebugger();
-				SingleInstance.Instance.ArgumentsReceived -= Instance_ArgumentsReceived;
-				_listener?.Dispose();
-				EmuApi.Stop();
-				EmuApi.Release();
-				ConfigManager.Config.MainWindow.SaveWindowSettings(this);
-				ConfigManager.Config.Save();
+				TraceStep("_shutdownCts.Cancel", () => _shutdownCts.Cancel());
+				TraceStep("_timerBackgroundFlag.Stop", () => _timerBackgroundFlag.Stop());
+				TraceStep("NotificationListener.SuppressCallbacks=true", () => NotificationListener.SuppressCallbacks = true);
+				TraceStep("WatchHudService.Shutdown", () => WatchHudService.Shutdown());
+				TraceStep("DebugApi.ReleaseDebugger", () => DebugApi.ReleaseDebugger());
+				TraceStep("SingleInstance unsubscribe", () => SingleInstance.Instance.ArgumentsReceived -= Instance_ArgumentsReceived);
+				TraceStep("_listener.Dispose", () => _listener?.Dispose());
+				TraceStep("EmuApi.Stop", () => EmuApi.Stop());
+				TraceStep("EmuApi.Release", () => EmuApi.Release());
+				TraceStep("SaveWindowSettings", () => ConfigManager.Config.MainWindow.SaveWindowSettings(this));
+				TraceStep("Config.Save", () => ConfigManager.Config.Save());
+				shutdownTimer.Stop();
+				Trace("Main window shutdown finished in " + shutdownTimer.ElapsedMilliseconds + "ms");
 			}
+		}
+
+		private static bool ShouldTraceShutdown()
+		{
+			string? value = Environment.GetEnvironmentVariable("MESEN2_SHUTDOWN_TRACE");
+			return !string.IsNullOrWhiteSpace(value) && value != "0" && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
 		}
 
 		private async void ValidateExit()

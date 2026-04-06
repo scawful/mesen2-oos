@@ -18,36 +18,119 @@ export MESEN2_SOCKET_PATH="/tmp/mesen2-agent.sock"
 
 Then simply connect to `/tmp/mesen2-agent.sock`.
 
-**Method 2: Discovery (Legacy/Default)**
+**Method 2: Canonical discovery (when env is not set)**
 
-If no path is specified, the socket defaults to `/tmp/mesen2-<pid>.sock`. You can discover it via:
+Use this order; do **not** assume socket names contain a PID (e.g. `mesen2-isolation.sock` is valid):
 
-1. **Status File** (recommended):
-   ```bash
-   cat /tmp/mesen2-*.status | jq .socketPath
-   ```
+1. **Env:** `MESEN2_SOCKET_PATH` (then deprecated `MESEN2_SOCKET`); use if set and path exists.
+2. **Status files:** Glob `/tmp/mesen2-*.status`, read JSON `socketPath`, optionally verify with PING; sort by status file mtime (newest first) if multiple.
+3. **Fallback:** Glob `/tmp/mesen2-*.sock`, sort by **socket file mtime** (most recent first).
 
-2. **Socket Discovery (Python)**:
-   ```python
-   import glob
-   sockets = glob.glob("/tmp/mesen2-*.sock")
-   # Test each socket with PING command
-   ```
+Copy-pasteable Python (canonical order):
+
+```python
+import glob
+import json
+import os
+
+def discover_socket_path():
+    """Return Mesen2 socket path or None."""
+    for env_var in ("MESEN2_SOCKET_PATH", "MESEN2_SOCKET"):
+        path = os.environ.get(env_var)
+        if path and os.path.exists(path):
+            return path
+    for sf in sorted(glob.glob("/tmp/mesen2-*.status"), key=lambda p: -os.path.getmtime(p)):
+        try:
+            with open(sf) as f:
+                sp = json.load(f).get("socketPath")
+            if sp and os.path.exists(sp):
+                return sp
+        except (OSError, json.JSONDecodeError, KeyError):
+            continue
+    socks = glob.glob("/tmp/mesen2-*.sock")
+    return sorted(socks, key=lambda p: -os.path.getmtime(p))[0] if socks else None
+```
+
+### Status file schema
+
+When the socket server is running, it writes a JSON status file next to the socket (same path with `.sock` replaced by `.status`). Use it for discovery and instance metadata.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pid` | number | Process ID of the Mesen2 instance |
+| `socketPath` | string | Unix socket path (e.g. `/tmp/mesen2-12345.sock` or `/tmp/mesen2-isolation.sock`) |
+| `statusPath` | string | Path to this status file |
+| `emulatorRunning` | boolean | Whether a ROM is loaded |
+| `romHash` | string | SHA-1 of loaded ROM (empty if none) |
+| `paused` | boolean | Whether emulation is paused |
+| `frameCount` | number | Current frame count |
+| `scriptRunning` | boolean | Whether a Lua script is active |
+| `registeredAgents` | number | Count of agents registered via AGENT_REGISTER |
+| `lastSave` | object | Result of last SAVESTATE (slot/path, success) |
+| `lastLoad` | object | Result of last LOADSTATE |
+
+Custom socket paths (e.g. set via `MESEN2_SOCKET_PATH`) have a matching status file (e.g. `mesen2-isolation.status`).
+
+### Timeouts and limits
+
+- **Server:** The socket server closes the connection after about **5 seconds** without a complete request. Maximum request size is **1 MB** (2 MB for READBLOCK/READBLOCK_BINARY). Long BATCH or large TRACE fetches may approach these limits.
+- **Clients:** Use a socket timeout of **at least 5 seconds** for normal commands. For long-running or bulk operations, use a larger timeout or split work into smaller requests.
 
 ### Basic Connection (Python)
 
 ```python
+import glob
 import socket
 import json
+import os
+
+def _send_ping(path, timeout=1.0):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(path)
+            s.sendall(b'{"type":"PING"}\n')
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+        if not buf:
+            return False
+        resp = json.loads(buf.decode().strip())
+        return resp.get("success") is True and resp.get("data") == "PONG"
+    except Exception:
+        return False
+
+def discover_socket_path():
+    for env_var in ("MESEN2_SOCKET_PATH", "MESEN2_SOCKET"):
+        path = os.environ.get(env_var)
+        if path and os.path.exists(path):
+            return path
+
+    status_files = sorted(glob.glob("/tmp/mesen2-*.status"), key=lambda p: -os.path.getmtime(p))
+    for sf in status_files:
+        try:
+            with open(sf) as f:
+                sp = json.load(f).get("socketPath")
+            if sp and os.path.exists(sp):
+                return sp
+        except Exception:
+            pass
+
+    sockets = glob.glob("/tmp/mesen2-*.sock")
+    return sorted(sockets, key=lambda p: -os.path.getmtime(p))[0] if sockets else None
 
 def connect_mesen2():
-    """Connect to Mesen2 socket."""
-    sockets = glob.glob("/tmp/mesen2-*.sock")
-    if not sockets:
+    socket_path = discover_socket_path()
+    if not socket_path:
         raise RuntimeError("No Mesen2 instance found")
-    
+    if not _send_ping(socket_path):
+        raise RuntimeError(f"Mesen2 socket not responsive: {socket_path}")
+
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(sockets[0])
+    sock.connect(socket_path)
     return sock
 
 def send_command(sock, command_type, **params):
@@ -252,6 +335,15 @@ export MESEN2_SAVE_STATE_SLOTS=30
 export OOS_SAVE_STATE_SLOTS=30
 ```
 
+## z3dk Integration
+
+When using z3dk (z3lsp, z3disasm) with Mesen2:
+
+- **Socket targeting:** Set `MESEN2_SOCKET_PATH` so z3lsp and other tools connect to the same Mesen2 instance when multiple sockets exist.
+- **Symbols:** Use `SYMBOLS_LOAD` with `file` or `path`; supported formats are **JSON** (object of name → `{addr, size, type}`) or **Mesen .mlb** (line-based). Load the same `.mlb` that the GUI uses for consistent labels.
+- **Blame / disasm:** Use `SYMBOLS_RESOLVE` with `addr` (e.g. `{"type":"SYMBOLS_RESOLVE","addr":"0x008000"}`) to resolve an address to the most specific symbol name; use with MEM_BLAME or DISASM output for annotation.
+- **Labels refresh:** When z3dk indexes or symbol files change, reload symbols via `SYMBOLS_LOAD` (and optionally `labels-refresh` in the Oracle client) so the socket symbol table stays in sync.
+
 ## Performance Best Practices
 
 1. **Use BATCH for multiple reads**: Reduces latency significantly
@@ -365,7 +457,7 @@ python3 test_new_commands.py
 
 ### Socket Not Found
 - Ensure Mesen2 is running
-- Check `/tmp/mesen2-*.sock` exists
+- Check `MESEN2_SOCKET_PATH` first (if set), then `/tmp/mesen2-*.status`, then `/tmp/mesen2-*.sock`
 - Verify permissions (socket should be readable)
 
 ### Connection Refused
@@ -382,6 +474,10 @@ python3 test_new_commands.py
 - Use BATCH commands
 - Reduce command frequency
 - Check system load
+
+### Stale socket cleanup
+
+The Oracle client provides `mesen2_client.py socket-cleanup` (or `cleanup_stale_sockets()` in code) to remove dead sockets. **Only PID-named sockets** (`mesen2-<pid>.sock`) are considered: the routine parses the middle segment as a PID and unlinks the socket (and matching `.status` file) only if that process is no longer running. Custom-named sockets (e.g. `mesen2-isolation.sock` from `MESEN2_SOCKET_PATH`) are **never** removed by this routine. If a custom-named socket’s process has exited, remove the socket and status file manually.
 
 ## Advanced Features
 

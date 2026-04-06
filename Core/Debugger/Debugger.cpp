@@ -19,6 +19,7 @@
 #include "Debugger/TraceLogFileSaver.h"
 #include "Debugger/CdlManager.h"
 #include "Debugger/ITraceLogger.h"
+#include "Shared/MessageManager.h"
 #include "Shared/SocketServer.h"
 #include "SNES/SnesCpuTypes.h"
 #include "SNES/SpcTypes.h"
@@ -55,6 +56,17 @@
 #include "Shared/EventType.h"
 
 uint64_t ITraceLogger::NextRowId = 0;
+
+static bool TraceShutdownEnabled()
+{
+	const char* value = std::getenv("MESEN2_SHUTDOWN_TRACE");
+	if(!value || !*value) {
+		return false;
+	}
+	string raw(value);
+	std::transform(raw.begin(), raw.end(), raw.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+	return raw != "0" && raw != "false" && raw != "off";
+}
 
 Debugger::Debugger(Emulator* emu, shared_ptr<IConsole> console)
 {
@@ -132,8 +144,27 @@ Debugger::~Debugger()
 
 void Debugger::Release()
 {
+	bool traceShutdown = TraceShutdownEnabled();
+	auto start = std::chrono::steady_clock::now();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Debugger::Release BEGIN");
+	}
+
+	uint64_t lastReportMs = 0;
 	while(_executionStopped) {
 		Run();
+		if(traceShutdown) {
+			uint64_t elapsedMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+			if(elapsedMs >= lastReportMs + 1000) {
+				lastReportMs = elapsedMs;
+				MessageManager::Log("[Shutdown] Debugger::Release waiting (" + std::to_string(elapsedMs) + "ms)");
+			}
+		}
+	}
+
+	if(traceShutdown) {
+		uint64_t elapsedMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		MessageManager::Log("[Shutdown] Debugger::Release END (" + std::to_string(elapsedMs) + "ms)");
 	}
 }
 
@@ -906,6 +937,18 @@ void Debugger::SetProgramCounter(CpuType cpuType, uint32_t addr)
 	}
 }
 
+void Debugger::ForceSetProgramCounter(CpuType cpuType, uint32_t addr)
+{
+	IDebugger* debugger = _debuggers[(int)cpuType].Debugger.get();
+	if(!debugger) {
+		return;
+	}
+	bool prev = debugger->AllowChangeProgramCounter;
+	debugger->AllowChangeProgramCounter = true;
+	debugger->SetProgramCounter(addr);
+	debugger->AllowChangeProgramCounter = prev;
+}
+
 uint32_t Debugger::GetProgramCounter(CpuType cpuType, bool getInstPc)
 {
 	return _debuggers[(int)cpuType].Debugger->GetProgramCounter(getInstPc);
@@ -940,10 +983,40 @@ bool Debugger::HasCpuType(CpuType cpuType)
 
 void Debugger::SetBreakpoints(Breakpoint breakpoints[], uint32_t length)
 {
+	{
+		auto lock = _breakpointLock.AcquireSafe();
+		_userBreakpoints.assign(breakpoints, breakpoints + length);
+	}
+
+	ApplyMergedBreakpoints();
+}
+
+void Debugger::SetExternalBreakpoints(Breakpoint breakpoints[], uint32_t length)
+{
+	{
+		auto lock = _breakpointLock.AcquireSafe();
+		_externalBreakpoints.assign(breakpoints, breakpoints + length);
+	}
+
+	ApplyMergedBreakpoints();
+}
+
+void Debugger::ApplyMergedBreakpoints()
+{
+	vector<Breakpoint> merged;
+	{
+		auto lock = _breakpointLock.AcquireSafe();
+		merged = _userBreakpoints;
+		merged.insert(merged.end(), _externalBreakpoints.begin(), _externalBreakpoints.end());
+	}
+
 	DebugBreakHelper helper(this);
 	for(int i = 0; i <= (int)DebugUtilities::GetLastCpuType(); i++) {
 		if(_debuggers[i].Debugger) {
-			_debuggers[i].Debugger->GetBreakpointManager()->SetBreakpoints(breakpoints, length);
+			_debuggers[i].Debugger->GetBreakpointManager()->SetBreakpoints(
+				merged.data(),
+				static_cast<uint32_t>(merged.size())
+			);
 		}
 	}
 }

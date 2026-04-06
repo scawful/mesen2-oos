@@ -60,16 +60,44 @@ namespace Mesen.Utilities
 	{
 		private static string GetLibraryRoot()
 		{
-			// Prefer the Oracle-of-Secrets save state library if it exists.
-			// Fallback to the standard Mesen SaveStates folder otherwise.
-			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-			string path = Path.Combine(home, "src", "hobby", "oracle-of-secrets", "Roms", "savestates");
-			
-			if (!Directory.Exists(path)) {
-				// Fallback to standard Mesen SaveStates folder if library doesn't exist
-				path = ConfigManager.SaveStateFolder;
+			// 1) Explicit overrides for custom project/worktree layouts.
+			string? envRoot = Environment.GetEnvironmentVariable("MESEN2_STATE_LIBRARY_ROOT")
+				?? Environment.GetEnvironmentVariable("OOS_STATE_LIBRARY_ROOT");
+			if(!string.IsNullOrWhiteSpace(envRoot)) {
+				string expanded = ExpandHome(envRoot);
+				if(Directory.Exists(expanded)) {
+					return expanded;
+				}
 			}
-			
+
+			// 2) Project-root derived save-state library (Oracle project).
+			string? projectRoot = AgentLauncher.ResolveProjectRoot();
+			if(!string.IsNullOrWhiteSpace(projectRoot) && Directory.Exists(projectRoot)) {
+				string[] candidates = {
+					Path.Combine(projectRoot, "Roms", "savestates"),
+					Path.Combine(projectRoot, "roms", "savestates"),
+					Path.Combine(projectRoot, "Savestates")
+				};
+				foreach(string candidate in candidates) {
+					if(Directory.Exists(candidate)) {
+						return candidate;
+					}
+				}
+
+				// Create the default Oracle location under the detected root.
+				return candidates[0];
+			}
+
+			// 3) Fallback to standard Mesen SaveStates folder.
+			return ConfigManager.SaveStateFolder;
+		}
+
+		private static string ExpandHome(string path)
+		{
+			if(path.StartsWith("~")) {
+				string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+				return Path.Combine(home, path.TrimStart('~').TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+			}
 			return path;
 		}
 

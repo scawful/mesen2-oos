@@ -51,6 +51,17 @@
 #include "Shared/MemoryOperationType.h"
 #include "Shared/EventType.h"
 
+static bool TraceShutdownEnabled()
+{
+	const char* value = std::getenv("MESEN2_SHUTDOWN_TRACE");
+	if(!value || !*value) {
+		return false;
+	}
+	string raw(value);
+	std::transform(raw.begin(), raw.end(), raw.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+	return raw != "0" && raw != "false" && raw != "off";
+}
+
 Emulator::Emulator() :
 	_settings(new EmuSettings(this)),
 	_debugHud(new DebugHud()),
@@ -103,20 +114,42 @@ void Emulator::Initialize(bool enableShortcuts)
 
 void Emulator::Release()
 {
+	bool traceShutdown = TraceShutdownEnabled();
+	auto releaseStart = std::chrono::steady_clock::now();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Release BEGIN");
+	}
+
 	Stop(true);
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Release after Stop()");
+	}
 
 	// Stop socket server
 	if(_socketServer) {
+		if(traceShutdown) {
+			MessageManager::Log("[Shutdown] Emulator::Release stopping socket server");
+		}
 		_socketServer->Stop();
 		_socketServer.reset();
+		if(traceShutdown) {
+			MessageManager::Log("[Shutdown] Emulator::Release socket server stopped");
+		}
 	}
 
 	_gameClient->Disconnect();
 	_gameServer->StopServer();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Release netplay stopped");
+	}
 
 	_videoDecoder->StopThread();
 	_videoRenderer->StopThread();
 	_shortcutKeyHandler.reset();
+	if(traceShutdown) {
+		auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - releaseStart).count();
+		MessageManager::Log("[Shutdown] Emulator::Release END (" + std::to_string(elapsedMs) + "ms)");
+	}
 }
 
 void Emulator::Run()
@@ -290,17 +323,37 @@ void Emulator::ProcessEndOfFrame()
 
 void Emulator::Stop(bool sendNotification, bool preventRecentGameSave, bool saveBattery)
 {
+	bool traceShutdown = TraceShutdownEnabled();
+	auto stopStart = std::chrono::steady_clock::now();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Stop BEGIN sendNotification=" + std::to_string(sendNotification ? 1 : 0)
+			+ " preventRecentGameSave=" + std::to_string(preventRecentGameSave ? 1 : 0)
+			+ " saveBattery=" + std::to_string(saveBattery ? 1 : 0));
+	}
+
 	BlockDebuggerRequests();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Stop BlockDebuggerRequests done");
+	}
 
 	_stopFlag = true;
 
 	_notificationManager->SendNotification(ConsoleNotificationType::BeforeGameUnload);
 
 	ResetDebugger();
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Stop ResetDebugger done");
+	}
 
 	if(_emuThread) {
+		if(traceShutdown) {
+			MessageManager::Log("[Shutdown] Emulator::Stop waiting for emulation thread join");
+		}
 		_emuThread->join();
 		_emuThread.release();
+		if(traceShutdown) {
+			MessageManager::Log("[Shutdown] Emulator::Stop emulation thread joined");
+		}
 	}
 
 	if(!preventRecentGameSave && _console && !_settings->GetPreferences().DisableGameSelectionScreen && !_audioPlayerHud) {
@@ -325,12 +378,19 @@ void Emulator::Stop(bool sendNotification, bool preventRecentGameSave, bool save
 	}
 
 	_soundMixer->StopAudio(true);
+	if(traceShutdown) {
+		MessageManager::Log("[Shutdown] Emulator::Stop audio stopped");
+	}
 
 	if(sendNotification) {
 		_notificationManager->SendNotification(ConsoleNotificationType::EmulationStopped);
 	}
 
 	_blockDebuggerRequestCount--;
+	if(traceShutdown) {
+		auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stopStart).count();
+		MessageManager::Log("[Shutdown] Emulator::Stop END (" + std::to_string(elapsedMs) + "ms)");
+	}
 }
 
 void Emulator::Reset()
