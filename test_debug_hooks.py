@@ -1,111 +1,95 @@
-#!/usr/bin/env python3
-"""Test script for Mesen2 debugger hooks (P register and memory write tracking)."""
+"""Tests for Mesen2 debugger hooks (P register and memory write tracking)."""
 
-import socket
 import json
-import sys
 import time
-import glob
 
-def find_socket():
-    """Find the active Mesen2 socket."""
-    sockets = glob.glob("/tmp/mesen2-*.sock")
-    if not sockets:
-        print("Error: No Mesen2 socket found. Is Mesen running?")
-        sys.exit(1)
-    return sorted(sockets, key=lambda x: -int(x.split('-')[1].split('.')[0]))[0]
+import pytest
 
-def send_command(sock_path, cmd):
-    """Send a command and receive response."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(sock_path)
-    s.sendall((json.dumps(cmd) + "\n").encode())
-    s.settimeout(2.0)
-    response = b""
-    try:
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-            if b"\n" in response:
-                break
-    except socket.timeout:
-        pass
-    s.close()
-    return json.loads(response.decode().strip())
 
-def main():
-    sock = find_socket()
-    print(f"Using socket: {sock}\n")
+def send_command(sock, cmd):
+    """Send a command dict over a connected socket and return the parsed response."""
+    sock.sendall((json.dumps(cmd) + "\n").encode())
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+    return json.loads(buf.decode().strip())
 
-    # Check state
+
+def test_state_reports_frame(sock):
+    """Emulator state is reachable and contains a frame counter."""
     state = send_command(sock, {"type": "STATE"})
-    if not state.get("success") or "No ROM" in state.get("error", ""):
-        print("Error: No ROM loaded. Please load a ROM first.")
-        sys.exit(1)
+    assert state.get("success"), f"STATE failed: {state.get('error')}"
+    assert "frame" in state["data"], "Missing frame in STATE response"
+    assert "fps" in state["data"], "Missing fps in STATE response"
 
-    print(f"Emulation: frame={state['data']['frame']}, fps={state['data']['fps']:.1f}")
-    print()
 
-    # Enable P_WATCH
-    print("=== Enabling P register tracking ===")
+def test_p_watch_start(sock):
+    """P_WATCH start action acknowledges without error."""
     result = send_command(sock, {"type": "P_WATCH", "action": "start", "depth": "500"})
-    print(f"  {result['data']}")
+    assert result.get("success"), f"P_WATCH start failed: {result.get('error')}"
+    assert result.get("data") is not None
 
-    # Add memory watches
-    print("\n=== Adding memory watches ===")
+
+def test_mem_watch_writes_add(sock):
+    """MEM_WATCH_WRITES add returns a watch_id for each registered address."""
     watches = [
-        ("0x7E0022", 2, "Link X Position"),
-        ("0x7E0020", 2, "Link Y Position"),
-        ("0x7E0116", 2, "VRAM Upload Index"),
+        ("0x7E0022", 2),
+        ("0x7E0020", 2),
+        ("0x7E0116", 2),
     ]
-    for addr, size, desc in watches:
+    for addr, size in watches:
         result = send_command(sock, {
             "type": "MEM_WATCH_WRITES",
             "action": "add",
             "addr": addr,
             "size": str(size),
-            "depth": "50"
+            "depth": "50",
         })
-        if result.get("success"):
-            print(f"  Watch {result['data']['watch_id']}: {desc} ({addr})")
-        else:
-            print(f"  Failed to add watch for {desc}: {result.get('error')}")
+        assert result.get("success"), f"MEM_WATCH_WRITES add {addr} failed: {result.get('error')}"
+        assert "watch_id" in result["data"], f"Missing watch_id for {addr}"
 
-    # Wait for execution
-    print("\n=== Waiting 3 seconds for execution... ===")
-    time.sleep(3)
 
-    # Get P register log
-    print("\n=== P Register Changes ===")
+def test_p_log_returns_entries(sock):
+    """P_LOG returns a log structure with total and entries fields."""
+    # Start the watcher so there is something to query even if count is 0.
+    send_command(sock, {"type": "P_WATCH", "action": "start", "depth": "500"})
+
     result = send_command(sock, {"type": "P_LOG", "count": "20"})
-    if result.get("success"):
-        total = result["data"].get("total", 0)
-        entries = result["data"].get("entries", [])
-        print(f"Total changes captured: {total}")
-        if entries:
-            print("Recent changes:")
-            for e in entries[:10]:
-                print(f"  PC=${e['pc']:>8} | P: 0x{e['old_p']:>2} -> 0x{e['new_p']:>2} | {e['flags_changed']:>4} | opcode=0x{e['opcode']}")
+    assert result.get("success"), f"P_LOG failed: {result.get('error')}"
+    assert "total" in result["data"], "Missing total in P_LOG response"
+    assert "entries" in result["data"], "Missing entries in P_LOG response"
 
-    # Get memory blame for each watch
-    print("\n=== Memory Write Attribution ===")
+
+def test_mem_watch_writes_list(sock):
+    """MEM_WATCH_WRITES list returns a watches array."""
+    # Add at least one watch so the list is non-trivial.
+    send_command(sock, {
+        "type": "MEM_WATCH_WRITES",
+        "action": "add",
+        "addr": "0x7E0022",
+        "size": "2",
+        "depth": "50",
+    })
+
     result = send_command(sock, {"type": "MEM_WATCH_WRITES", "action": "list"})
-    if result.get("success"):
-        for watch in result["data"]["watches"]:
-            addr = watch["addr"]
-            blame = send_command(sock, {"type": "MEM_BLAME", "addr": addr})
-            if blame.get("success"):
-                writes = blame["data"].get("writes", [])
-                print(f"\n{addr} ({watch['log_count']} writes logged):")
-                if writes:
-                    for w in writes[:5]:
-                        print(f"  PC=${w['pc']} wrote 0x{w['value']:04X} at cycle {w['cycle']}")
-                else:
-                    print("  No writes captured yet")
+    assert result.get("success"), f"MEM_WATCH_WRITES list failed: {result.get('error')}"
+    assert "watches" in result["data"], "Missing watches in list response"
+    assert isinstance(result["data"]["watches"], list)
 
-    print("\n=== Done ===")
 
-if __name__ == "__main__":
-    main()
+def test_mem_blame_returns_writes(sock):
+    """MEM_BLAME returns writes/count fields for a watched address."""
+    send_command(sock, {
+        "type": "MEM_WATCH_WRITES",
+        "action": "add",
+        "addr": "0x7E0022",
+        "size": "2",
+        "depth": "50",
+    })
+
+    blame = send_command(sock, {"type": "MEM_BLAME", "addr": "0x7E0022"})
+    assert blame.get("success"), f"MEM_BLAME failed: {blame.get('error')}"
+    assert "writes" in blame["data"], "Missing writes in MEM_BLAME response"

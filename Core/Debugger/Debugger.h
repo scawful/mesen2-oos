@@ -79,6 +79,10 @@ private:
 	std::list<string> _debuggerLog;
 
 	SimpleLock _inputOverrideLock;
+	SimpleLock _breakpointLock;
+
+	vector<Breakpoint> _userBreakpoints;
+	vector<Breakpoint> _externalBreakpoints;
 
 	atomic<bool> _executionStopped;
 	atomic<uint32_t> _breakRequestCount;
@@ -101,6 +105,8 @@ private:
 	bool IsDebugWindowOpened(CpuType cpuType);
 	bool IsBreakOptionEnabled(BreakSource src);
 	template<CpuType type> void SleepOnBreakRequest();
+
+	void ApplyMergedBreakpoints();
 
 public:
 	Debugger(Emulator* emu, shared_ptr<IConsole> console);
@@ -161,6 +167,7 @@ public:
 	uint8_t GetCpuFlags(CpuType cpuType);
 	CpuInstructionProgress GetInstructionProgress(CpuType cpuType);
 	void SetProgramCounter(CpuType cpuType, uint32_t addr);
+	void ForceSetProgramCounter(CpuType cpuType, uint32_t addr);
 
 	AddressInfo GetAbsoluteAddress(AddressInfo relAddress);
 	AddressInfo GetRelativeAddress(AddressInfo absAddress, CpuType cpuType);
@@ -168,6 +175,7 @@ public:
 	bool HasCpuType(CpuType cpuType);
 
 	void SetBreakpoints(Breakpoint breakpoints[], uint32_t length);
+	void SetExternalBreakpoints(Breakpoint breakpoints[], uint32_t length);
 
 	void SetInputOverrides(uint32_t index, DebugControllerState state, uint32_t frames = 0);
 	void GetAvailableInputOverrides(uint8_t* availableIndexes);

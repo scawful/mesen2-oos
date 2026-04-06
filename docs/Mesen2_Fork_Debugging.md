@@ -62,7 +62,7 @@ Core control:
 - `PING` - simple connectivity check.
 - `HEALTH` - running/paused/debugging + a disasm sanity check sample.
 - `STATE` - basic emulation state.
-- `PAUSE`, `RESUME`, `RESET`, `FRAME`, `STEP`.
+- `PAUSE`, `RESUME`, `RESET`, `FRAME`, `STEP` (supports `mode`: `into`, `over`, `out`, `cycle`, `ppu`, `scanline`, `frame`, `nmi`, `irq`, `back`).
 - `ROMINFO`, `SPEED`, `REWIND`.
 
 Memory & debugging:
@@ -183,6 +183,15 @@ Tracks writes to watched memory regions with PC attribution.
 - `MEM_BLAME` - Get write history for watched address.
   - `watch_id` or `addr`: Target to query
   - Returns: `[{pc, addr, value, size, cycle, stack_pointer}]`
+
+### Stack Return Decoder (new)
+Decode return addresses sitting on the CPU stack.
+
+- `STACK_RETADDR` - Decode stack return addresses.
+  - `mode`: `rtl` (3-byte) or `rts` (2-byte)
+  - `count`: Number of entries to decode (default 4)
+  - `sp`: Override stack pointer (hex, optional)
+  - Returns: `[{index, stack_addr, bytes, raw, next, region}]` (`region`: rom/wram/wram_mirror/io/sram/open_bus)
 
 ### Symbol Table (new)
 Load and resolve Oracle symbol tables.
@@ -321,4 +330,7 @@ echo '{"type":"P_WATCH","action":"start","depth":"500"}' | nc -U $sock
 
 # Test MEM_WATCH_WRITES
 echo '{"type":"MEM_WATCH_WRITES","action":"add","addr":"0x7E0116","size":"2"}' | nc -U $sock
+
+# Test STACK_RETADDR
+echo '{"type":"STACK_RETADDR","mode":"rtl","count":"4"}' | nc -U $sock
 ```

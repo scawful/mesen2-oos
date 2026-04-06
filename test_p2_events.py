@@ -1,107 +1,123 @@
-import socket
+"""Integration tests for Mesen2 Socket API - P2 Events.
+
+Tests SUBSCRIBE and the status file written alongside the socket.
+
+Requires the ``socket_path`` and ``sock`` fixtures from conftest.py.
+"""
+
 import json
-import time
 import os
-import sys
+import time
 
-SOCKET_PATH_PATTERN = "/tmp/mesen2-*.sock"
+import pytest
 
-def find_socket_path():
-    import glob
-    paths = glob.glob(SOCKET_PATH_PATTERN)
-    if not paths:
-        return None
-    # return the most recently accessed one
-    return max(paths, key=os.path.getatime)
 
-def test_events():
-    socket_path = find_socket_path()
-    if not socket_path:
-        print("Mesen2 socket not found. Is it running?")
-        sys.exit(1)
-        
-    print(f"Connecting to {socket_path}...")
-    
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.connect(socket_path)
-        
-        # Helper to send command
-        def send_cmd(cmd):
-            print(f"> {cmd}")
-            s.sendall((json.dumps(cmd) + "\n").encode('utf-8'))
-            
-        # Helper to read response
-        def read_response():
-            data = b""
-            while b"\n" not in data:
-                chunk = s.recv(4096)
-                if not chunk: break
-                data += chunk
-            line = data.decode('utf-8').strip()
-            print(f"< {line}")
-            return json.loads(line)
+def send_command(sock, cmd):
+    """Send a command dict over a connected socket and return the parsed response."""
+    sock.sendall((json.dumps(cmd) + "\n").encode())
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+    return json.loads(buf.decode().strip())
 
-        # 1. Subscribe
-        send_cmd({"type": "SUBSCRIBE", "events": "breakpoint_hit,frame_complete"})
-        resp = read_response() # Subscription response
-        
-        if not resp.get("success"):
-            print("FAILED to subscribe")
-            return
 
-        print("\nListening for events (Press Ctrl+C to stop)...")
-        print("1. Please unpause the emulator to get 'frame_complete'")
-        print("2. Please trigger a breakpoint to get 'breakpoint_hit'")
-        
-        frame_event_received = False
-        break_event_received = False
-        
-        start_time = time.time()
-        while not (frame_event_received and break_event_received):
-            if time.time() - start_time > 30:
-                print("Timeout waiting for events")
-                break
-                
-            resp = read_response()
-            if resp.get("type") == "EVENT":
-                evt_type = resp.get("event")
-                print(f"EVENT RECEIVED: {evt_type}")
-                
-                if evt_type == "frame_complete":
-                    frame_event_received = True
-                elif evt_type == "breakpoint_hit":
-                    break_event_received = True
-                    
-        if frame_event_received and break_event_received:
-            print("\nSUCCESS: Both events received!")
-        else:
-            print(f"\nPARTIAL: Frame: {frame_event_received}, Break: {break_event_received}")
+def test_subscribe_acknowledges(sock):
+    """SUBSCRIBE to known events returns a success response."""
+    resp = send_command(sock, {
+        "type": "SUBSCRIBE",
+        "events": "breakpoint_hit,frame_complete",
+    })
+    assert resp.get("success"), f"SUBSCRIBE failed: {resp.get('error')}"
 
-def test_status_file():
-    socket_path = find_socket_path()
-    if not socket_path:
-        return
-        
+
+def test_status_file_has_required_fields(socket_path):
+    """Status file written next to the socket contains romHash and paused fields."""
     status_path = socket_path.replace(".sock", ".status")
-    print(f"\nChecking status file: {status_path}")
-    
-    if os.path.exists(status_path):
-        with open(status_path, 'r') as f:
-            try:
-                data = json.load(f)
-                print(json.dumps(data, indent=2))
-                
-                if "romHash" in data and "paused" in data:
-                    print("SUCCESS: romHash and paused fields found")
-                else:
-                    print("FAIL: Missing expected fields")
-            except Exception as e:
-                print(f"Error reading status file: {e}")
-    else:
-        print("Status file not found")
+    if not os.path.exists(status_path):
+        pytest.skip(f"Status file not found: {status_path}")
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "status":
-        test_status_file()
-    else:
-        test_events()
+    with open(status_path, "r") as f:
+        try:
+            data = json.load(f)
+        except Exception as exc:
+            pytest.fail(f"Could not parse status file: {exc}")
+
+    assert "romHash" in data, "Status file missing 'romHash' field"
+    assert "paused" in data, "Status file missing 'paused' field"
+
+
+def test_frame_complete_event_received(socket_path):
+    """frame_complete event is delivered within 5 seconds when emulator is running.
+
+    This test opens its own short-lived socket so it can receive push events
+    without racing against the shared ``sock`` fixture.  It is skipped if no
+    status file indicates the emulator is currently running.
+    """
+    import socket as _socket
+
+    # Check status file to determine whether the emulator is actually running.
+    status_path = socket_path.replace(".sock", ".status")
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r") as f:
+                status = json.load(f)
+            if status.get("paused", True):
+                pytest.skip("Emulator is paused; frame_complete events will not fire")
+        except Exception:
+            pass  # Proceed anyway; worst case the test times out.
+
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(5.0)
+    try:
+        s.connect(socket_path)
+
+        # Subscribe
+        s.sendall((json.dumps({"type": "SUBSCRIBE", "events": "frame_complete"}) + "\n").encode())
+
+        # Read subscription acknowledgement
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+
+        resp = json.loads(buf.decode().split("\n")[0].strip())
+        assert resp.get("success"), f"SUBSCRIBE failed: {resp.get('error')}"
+
+        # Wait for a frame_complete event
+        deadline = time.time() + 5.0
+        received = False
+        leftover = b"\n".join(buf.split(b"\n")[1:])  # bytes after the first newline
+        event_buf = leftover
+
+        while time.time() < deadline:
+            try:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                event_buf += chunk
+            except _socket.timeout:
+                break
+
+            while b"\n" in event_buf:
+                line, event_buf = event_buf.split(b"\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode())
+                    if msg.get("type") == "EVENT" and msg.get("event") == "frame_complete":
+                        received = True
+                        break
+                except Exception:
+                    continue
+            if received:
+                break
+
+        assert received, "Did not receive frame_complete event within 5 seconds"
+    finally:
+        s.close()

@@ -15,6 +15,8 @@ Options:
   --no-backup        Replace without backing up existing bundle(s)
   --force            Alias for --no-backup
   --dry-run          Print actions without copying
+  --no-core          Skip deploying MesenCore.dylib into the app bundle
+  --core PATH        Override core library path (default: InteropDLL/obj.osx-arm64/MesenCore.dylib)
   --symlink          Create/refresh Mesen.app -> installed app in DEST
   --symlink-force    Replace existing Mesen.app if needed
   -h, --help         Show this help
@@ -22,11 +24,14 @@ Options:
 Notes:
   - This only moves/copies app bundles; it does not touch ROMs, saves, or config.
   - Config stays in ~/Library/Application Support/Mesen2.
+  - If /usr/local/sbin/agent-root exists and DEST needs privilege, it is used instead of sudo.
+    Grant with: ws root grant --local --ttl 30m --allow "ditto,mkdir,mv,rm"
 
 Env:
   MESEN_APP_SRC      Override source app bundle
   MESEN_APP_DEST     Override destination directory or .app path
   MESEN_APP_NAME     Override destination app name
+  MESEN_CORE_SRC     Override MesenCore.dylib path for --core
 EOF
 }
 
@@ -42,6 +47,9 @@ PRUNE_ALL=0
 DRY_RUN=0
 DO_SYMLINK=0
 SYMLINK_FORCE=0
+DEPLOY_CORE=1
+CORE_SRC=""
+AGENT_ROOT="/usr/local/sbin/agent-root"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,6 +90,14 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --no-core)
+      DEPLOY_CORE=0
+      shift
+      ;;
+    --core)
+      CORE_SRC="$2"
+      shift 2
+      ;;
     --symlink)
       DO_SYMLINK=1
       shift
@@ -115,6 +131,10 @@ if [[ -n "${MESEN_APP_NAME:-}" ]]; then
   DEST_NAME="${MESEN_APP_NAME}"
 fi
 
+if [[ -z "$CORE_SRC" && -n "${MESEN_CORE_SRC:-}" ]]; then
+  CORE_SRC="${MESEN_CORE_SRC}"
+fi
+
 if [[ "$DEST_DIR" == *.app ]]; then
   DEST_NAME="$(basename "$DEST_DIR")"
   DEST_DIR="$(dirname "$DEST_DIR")"
@@ -138,15 +158,37 @@ if [[ ! -d "$SRC_APP" ]]; then
 fi
 
 DEST_APP="${DEST_DIR}/${DEST_NAME}"
+CORE_DEST="${DEST_APP}/Contents/MacOS/MesenCore.dylib"
+DEFAULT_CORE_SRC="${ROOT_DIR}/InteropDLL/obj.osx-arm64/MesenCore.dylib"
+if [[ -z "$CORE_SRC" ]]; then
+  CORE_SRC="$DEFAULT_CORE_SRC"
+fi
 
-SUDO=""
+NEED_PRIV=0
 if [[ -d "$DEST_DIR" ]]; then
   if [[ ! -w "$DEST_DIR" ]]; then
-    SUDO="sudo"
+    NEED_PRIV=1
   fi
 else
   PARENT_DIR="$(dirname "$DEST_DIR")"
   if [[ ! -w "$PARENT_DIR" ]]; then
+    NEED_PRIV=1
+  fi
+fi
+
+if [[ -d "$DEST_APP" && ! -w "$DEST_APP" ]]; then
+  NEED_PRIV=1
+fi
+
+SUDO=""
+if [[ "$NEED_PRIV" -eq 1 ]]; then
+  if [[ -x "$AGENT_ROOT" ]]; then
+    SUDO="sudo $AGENT_ROOT"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      echo "Using agent-root for privileged operations."
+      echo "If this fails, run: ws root grant --local --ttl 30m --allow \"ditto,mkdir,mv,rm\""
+    fi
+  else
     SUDO="sudo"
   fi
 fi
@@ -212,6 +254,20 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   $SUDO /usr/bin/ditto "$SRC_APP" "$DEST_APP"
   echo "Installed: $DEST_APP"
+fi
+
+if [[ "$DEPLOY_CORE" -eq 1 ]]; then
+  if [[ -f "$CORE_SRC" ]]; then
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "Would deploy core: $CORE_SRC -> $CORE_DEST"
+    else
+      $SUDO cp "$CORE_SRC" "$CORE_DEST"
+      echo "Deployed core: $CORE_DEST"
+    fi
+  else
+    echo "Warning: core library not found: $CORE_SRC" >&2
+    echo "         Run 'make' to build MesenCore.dylib or pass --no-core." >&2
+  fi
 fi
 
 if [[ "$DO_SYMLINK" -eq 1 ]]; then

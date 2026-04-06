@@ -8,12 +8,12 @@
 |----------|----------|
 | Control | PING, STATE, HEALTH, PAUSE, RESUME, RESET, FRAME, STEP |
 | Memory | READ, READ16, READBLOCK, READBLOCK_BINARY, WRITE, WRITE16, WRITEBLOCK |
-| Debugging | CPU, DISASM, BREAKPOINT, TRACE, STEP |
+| Debugging | CPU, DISASM, BREAKPOINT, TRACE, STEP, STACK_RETADDR |
 | Analysis | SNAPSHOT, DIFF, SEARCH, LABELS |
 | State | SAVESTATE, LOADSTATE, SAVESTATE_LABEL, SCREENSHOT |
 | P-Register | P_WATCH, P_LOG, P_ASSERT |
 | Memory Watch | MEM_WATCH_WRITES, MEM_BLAME |
-| Symbols | SYMBOLS_LOAD, SYMBOLS_RESOLVE |
+| Symbols | SYMBOLS_LOAD, SYMBOLS_RELOAD, SYMBOLS_RESOLVE |
 | ALTTP | GAMESTATE, SPRITES, COLLISION_OVERLAY, COLLISION_DUMP |
 | Events | SUBSCRIBE, LOGPOINT |
 | Utility | HELP, BATCH, ROMINFO, SPEED, REWIND, CHEAT, INPUT, DEBUG_LOG |
@@ -92,9 +92,25 @@ Run exactly one frame.
 ```
 
 ### STEP
-Step N instructions (default 1).
+Step CPU execution. **count** (optional, default 1): number of steps. **mode** (optional, default `into`): step type.
+
+| mode | Description |
+|------|-------------|
+| `into` | Step one instruction (into calls) |
+| `over` | Step over (execute one instruction, do not step into JSR/BSR) |
+| `out` | Step out (run until return from current call) |
+| `cycle` | Step one CPU cycle |
+| `ppu` | Step one PPU cycle |
+| `scanline` | Step one scanline |
+| `frame` | Step one frame |
+| `nmi` | Run until NMI |
+| `irq` | Run until IRQ |
+| `back` | Step back (rewind one step) |
+
 ```json
-{"type":"STEP","count":"10"}
+{"type":"STEP","count":"1"}
+{"type":"STEP","count":"10","mode":"over"}
+{"type":"STEP","mode":"out"}
 ```
 
 ---
@@ -263,20 +279,74 @@ Break when P doesn't match expected value.
 ## Memory Write Attribution
 
 ### MEM_WATCH_WRITES
-Track writes to memory regions.
+Track writes to memory regions. **condition** (optional): debugger expression; log only when it evaluates to non-zero (e.g. `0x7E0010==0x07` for GameMode, or `0x7E0010==0x07 && 0x7E001A==0x80` for Mode + INIDISP).
 ```json
 {"type":"MEM_WATCH_WRITES","action":"add","addr":"0x7E0022","size":"2","depth":"100"}
+{"type":"MEM_WATCH_WRITES","action":"add","addr":"0x7E001A","size":"1","condition":"0x7E0010==0x07"}
 {"type":"MEM_WATCH_WRITES","action":"list"}
 {"type":"MEM_WATCH_WRITES","action":"remove","watch_id":"1"}
 {"type":"MEM_WATCH_WRITES","action":"clear"}
 ```
 
 ### MEM_BLAME
-Get write attribution for watched address.
+Get write attribution for watched address. Each entry includes the opcode that performed the write.
 ```json
 {"type":"MEM_BLAME","watch_id":"1"}
 {"type":"MEM_BLAME","addr":"0x7E0022"}
-→ {"writes":[{"pc":"0x00ABCD","addr":"0x7E0022","value":"0x42","size":1,"sp":"0x01FF","cycle":12345},...]}
+→ {"writes":[{"pc":"0x00ABCD","addr":"0x7E0022","value":"0x42","size":1,"opcode":"0x8D","sp":"0x01FF","cycle":12345},...]}
+```
+
+**Response fields per write entry:**
+| Field | Description |
+|-------|-------------|
+| `pc` | Program counter that executed the write |
+| `addr` | Address written to |
+| `value` | Value written (hex) |
+| `size` | Write size in bytes (1 or 2) |
+| `opcode` | 65816 opcode that performed the write (e.g., `0x8D` = STA abs) |
+| `sp` | Stack pointer at time of write |
+| `cycle` | CPU cycle count for timeline correlation |
+
+---
+
+## Stack Return Decoder
+
+### STACK_RETADDR
+Decode return addresses currently on the CPU stack.
+```json
+{"type":"STACK_RETADDR","mode":"rtl","count":"4"}
+{"type":"STACK_RETADDR","mode":"rts","count":"4","sp":"0x01F0"}
+→ {"sp":"0x01FF","mode":"rtl","count":4,"bank":"0x00","entries":[{"index":0,"stack_addr":"0x0001F0","bytes":"FF00A0","raw":"0xA000FF","next":"0xA00100","region":"rom"}]}
+```
+`region` is a coarse mapper: `rom`, `wram`, `wram_mirror`, `io`, `sram`, or `open_bus`.
+
+---
+
+## Symbols
+
+### SYMBOLS_LOAD
+Load symbol table from a file. Accepts **JSON** (object of symbol name to `{addr, size, type}`) or **Mesen .mlb** (line-based: `MemoryType:Address[:Range]:Label[:Comment]`). Use `file` or `path`; `clear=true` clears existing symbols first.
+```json
+{"type":"SYMBOLS_LOAD","file":"/path/to/symbols.json","clear":"true"}
+{"type":"SYMBOLS_LOAD","path":"/path/to/rom.mlb"}
+→ {"loaded":150,"total":150}
+```
+
+### SYMBOLS_RELOAD
+Hot reload the symbol table without restarting the emulator. With no parameters, reloads from the last file used by `SYMBOLS_LOAD`. With `file` or `path`, reloads from that file (clears existing symbols first). Use after rebuilding the ROM or updating `.mlb`/`.sym`.
+```json
+{"type":"SYMBOLS_RELOAD"}
+{"type":"SYMBOLS_RELOAD","file":"/path/to/rom.mlb"}
+→ {"loaded":150,"total":150}
+```
+
+### SYMBOLS_RESOLVE
+Resolve **symbol name to address** (param `symbol`) or **address to symbol** (param `addr`). For `addr`, returns the most specific label containing that address (smallest range). Response includes `name`, `addr`, `size`, `type`.
+```json
+{"type":"SYMBOLS_RESOLVE","symbol":"Reset"}
+→ {"name":"Reset","addr":"0x008000","size":1,"type":"code"}
+{"type":"SYMBOLS_RESOLVE","addr":"0x008000"}
+→ {"name":"Reset","addr":"0x008000","size":1,"type":"code"}
 ```
 
 ---

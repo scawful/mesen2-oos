@@ -115,6 +115,7 @@ namespace Mesen.Windows
 		private void UpdateKeyDisplay()
 		{
 			if(!_allowKeyboardOnly) {
+				InputApi.RefreshKeyState();
 				SystemMouseState mouseState = InputApi.GetSystemMouseState(IntPtr.Zero);
 				PixelPoint mousePos = new PixelPoint(mouseState.XPosition, mouseState.YPosition);
 				PixelRect clientBounds = new PixelRect(this.PointToScreen(new Point(0, 0)), PixelSize.FromSize(Bounds.Size, LayoutHelper.GetLayoutScale(this) / InputApi.GetPixelScale()));

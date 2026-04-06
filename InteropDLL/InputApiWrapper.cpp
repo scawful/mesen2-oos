@@ -29,6 +29,11 @@ extern "C"
 		} 
 	}
 
+	DllExport void __stdcall RefreshKeyState()
+	{
+		KeyManager::RefreshKeyState();
+	}
+
 	DllExport void __stdcall GetPressedKeys(uint16_t* keyBuffer)
 	{
 		vector<uint16_t> pressedKeys = KeyManager::GetPressedKeys();

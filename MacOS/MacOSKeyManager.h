@@ -1,6 +1,7 @@
 #pragma once
 #include <unordered_map>
 #include <vector>
+#include <SDL.h>
 #include "Shared/Interfaces/IKeyManager.h"
 #include "Shared/KeyDefinitions.h"
 
@@ -20,8 +21,13 @@ private:
 	std::unordered_map<string, uint16_t> _keyCodes;
 
 	bool _disableAllKeys;
+	
+	vector<SDL_GameController*> _controllers;
+	vector<SDL_Joystick*> _joysticks;  // Fallback for devices SDL doesn't recognize as Game Controllers
 
 	void* _eventMonitor;
+
+	bool IsJoystickButtonPressed(int port, int button);
 
 	//Mapping of MacOS keycodes to Avalonia keycodes
 	uint16_t _keyCodeMap[128] = {

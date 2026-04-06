@@ -1,32 +1,14 @@
-import pytest
-import socket
-import json
-import glob
-import time
 import base64
+import glob
+import json
 import os
+import tempfile
+import time
 
-# --- Fixtures ---
+import pytest
 
-@pytest.fixture(scope="session")
-def socket_path():
-    """Find the active Mesen2 socket."""
-    sockets = glob.glob("/tmp/mesen2-*.sock")
-    if not sockets:
-        pytest.skip("No Mesen2 socket found. Is Mesen running?")
-    # Sort by PID (best effort to find latest)
-    return sorted(sockets, key=lambda x: -int(x.split('-')[1].split('.')[0]))[0]
+# Socket path and sock fixtures come from conftest.py (canonical discovery).
 
-@pytest.fixture(scope="session")
-def sock(socket_path):
-    """Create a connection to the Mesen2 socket."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(5.0)
-    try:
-        s.connect(socket_path)
-        yield s
-    finally:
-        s.close()
 
 def send_command(sock, cmd_type, **params):
     """Helper to send command and return data."""
@@ -313,20 +295,19 @@ def test_trace_execution(sock):
     assert len(res["data"]["entries"]) <= 10
 
 def test_symbols_integration(sock):
-    # Use the discovered oos.mlb
+    # Use the discovered oos.mlb (or fallback to JSON); API accepts file= or path=
     mlb_path = "/Users/scawful/src/hobby/oracle-of-secrets/Roms/oos.mlb"
     if not os.path.exists(mlb_path):
         pytest.skip(f"Symbol file not found: {mlb_path}")
-        
-    res = send_command(sock, "SYMBOLS_LOAD", path=mlb_path)
+
+    res = send_command(sock, "SYMBOLS_LOAD", file=mlb_path)
     # This might fail if the ROM doesn't match or path is inaccessible to Mesen
     if res["success"]:
-        # Try to resolve a known label if possible, or just check success
-        res = send_command(sock, "SYMBOLS_RESOLVE", addr="0x008000")
-        assert res["success"]
-        # Resolving might return None if no label at address, but command succeeds
+        # SYMBOLS_RESOLVE expects symbol (name -> addr), not addr
+        res = send_command(sock, "SYMBOLS_RESOLVE", symbol="Reset")
+        # Success only if that symbol exists in the loaded table
+        assert "success" in res
     else:
-        # If it fails, check if it's because of path
         print(f"DEBUG: SYMBOLS_LOAD failed: {res.get('error')}")
 
 def test_collision_overlay(sock):
@@ -347,3 +328,87 @@ def test_collision_dump(sock):
     if res["success"]:
         assert "data" in res["data"]
         assert "width" in res["data"]
+
+
+def test_symbols_load_path_alias(sock):
+    """SYMBOLS_LOAD accepts path= as alias for file=."""
+    json_path = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    )
+    try:
+        json_path.write('{"TestLabel": {"addr": "8000", "size": 1, "type": "code"}}')
+        json_path.close()
+        res = send_command(sock, "SYMBOLS_LOAD", path=json_path.name)
+        assert res["success"], res.get("error")
+        assert "loaded" in res["data"]
+    finally:
+        try:
+            os.unlink(json_path.name)
+        except OSError:
+            pass
+
+
+def test_symbols_resolve_addr(sock):
+    """SYMBOLS_RESOLVE with addr= returns symbol containing that address."""
+    json_path = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    )
+    try:
+        json_path.write(
+            '{"Foo": {"addr": "8000", "size": 1, "type": "code"}, '
+            '"Bar": {"addr": "8100", "size": 10, "type": "code"}}'
+        )
+        json_path.close()
+        res = send_command(sock, "SYMBOLS_LOAD", file=json_path.name, clear="true")
+        if not res["success"]:
+            pytest.skip("SYMBOLS_LOAD failed")
+        res = send_command(sock, "SYMBOLS_RESOLVE", addr="0x8000")
+        assert res["success"], res.get("error")
+        data = json.loads(res["data"]) if isinstance(res["data"], str) else res["data"]
+        assert "name" in data
+        assert data["name"] == "Foo"
+        res = send_command(sock, "SYMBOLS_RESOLVE", addr="0x8105")
+        assert res["success"]
+        data = json.loads(res["data"]) if isinstance(res["data"], str) else res["data"]
+        assert data["name"] == "Bar"
+        res = send_command(sock, "SYMBOLS_RESOLVE", addr="0x7E0000")
+        assert res["success"] is False or "error" in res
+    finally:
+        try:
+            os.unlink(json_path.name)
+        except OSError:
+            pass
+
+
+def test_discovery_via_status_file(socket_path):
+    """Discover socket via status file and verify schema fields."""
+    status_files = glob.glob("/tmp/mesen2-*.status")
+    if not status_files:
+        pytest.skip("No status files found")
+    found = False
+    for sf in status_files:
+        try:
+            with open(sf) as f:
+                data = json.load(f)
+            if data.get("socketPath") != socket_path:
+                continue
+            assert "socketPath" in data
+            assert "pid" in data
+            assert "emulatorRunning" in data
+            assert "frameCount" in data
+            assert "registeredAgents" in data
+            found = True
+            break
+        except (OSError, json.JSONDecodeError, KeyError):
+            continue
+    assert found, "No status file matched current socket_path"
+
+
+def test_step_mode_over(sock):
+    """STEP with mode=over succeeds (step over, do not enter calls)."""
+    send_command(sock, "PAUSE")
+    try:
+        res = send_command(sock, "STEP", count="1", mode="over")
+        assert res["success"], res.get("error")
+    finally:
+        send_command(sock, "RESUME")

@@ -5,7 +5,7 @@ set -e
 
 # Configuration
 SOURCE_LIB="InteropDLL/obj.osx-arm64/MesenCore.dylib"
-DEST_MCP="$HOME/src/tools/mesen2-mcp/MesenCore.dylib"
+LEGACY_CORE_DEST="${MESEN2_CORE_DEPLOY_PATH:-}"
 DEST_APP_SYSTEM="/Applications/Mesen2 OOS.app/Contents/MacOS/MesenCore.dylib"
 DEST_APP_USER="$HOME/Applications/Mesen2 OOS.app/Contents/MacOS/MesenCore.dylib"
 
@@ -32,7 +32,11 @@ deploy_to() {
     fi
 }
 
-deploy_to "$DEST_MCP"
+if [ -n "$LEGACY_CORE_DEST" ]; then
+    deploy_to "$LEGACY_CORE_DEST"
+else
+    echo "-> Skipping legacy core deploy (set MESEN2_CORE_DEPLOY_PATH to enable)"
+fi
 deploy_to "$DEST_APP_SYSTEM"
 deploy_to "$DEST_APP_USER"
 

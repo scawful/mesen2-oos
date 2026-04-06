@@ -1,4 +1,4 @@
-﻿using Mesen.Config;
+using Mesen.Config;
 using Mesen.Utilities;
 using System;
 using System.Collections.Generic;
@@ -17,6 +17,7 @@ namespace Mesen.Interop
 		[DllImport(DllPath)] public static extern void SetMousePosition(double x, double y);
 		[DllImport(DllPath)] public static extern void DisableAllKeys([MarshalAs(UnmanagedType.I1)]bool disabled);
 		[DllImport(DllPath)] public static extern void UpdateInputDevices();
+		[DllImport(DllPath)] public static extern void RefreshKeyState();
 
 		[DllImport(DllPath)] public static extern UInt16 GetKeyCode([MarshalAs(UnmanagedType.LPUTF8Str)]string keyName);
 		

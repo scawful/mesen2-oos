@@ -93,6 +93,7 @@ struct MemoryWriteRecord {
 	uint32_t addr;         // Address written to
 	uint16_t value;        // Value written (8 or 16 bit)
 	uint8_t size;          // 1 or 2 bytes
+	uint8_t opcode;        // Opcode that performed the write (STA, STX, STY, PHA, etc.)
 	uint64_t cycleCount;   // Timing
 	uint16_t stackPointer; // SP at time of write (for call stack depth)
 };
@@ -103,6 +104,7 @@ struct MemoryWatchRegion {
 	uint32_t startAddr;
 	uint32_t endAddr;
 	uint32_t maxDepth;
+	string condition;  // Optional expression; when non-empty, log only when expression evaluates to non-zero
 };
 
 // Watch trigger for conditional breakpoints/events
@@ -225,6 +227,7 @@ private:
 	// Symbol table (static for use in static handlers)
 	static unordered_map<string, SymbolEntry> _symbolTable;
 	static SimpleLock _symbolLock;
+	static string _lastSymbolFilePath;  // For SYMBOLS_RELOAD when no path given
 
 	// Logpoints (static for use in static handlers)
 	static vector<SocketLogpoint> _logpoints;
@@ -291,6 +294,7 @@ private:
 	static SocketResponse HandlePause(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleResume(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleReset(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleLoadRom(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRead(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRead16(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleWrite(Emulator* emu, const SocketCommand& cmd);
@@ -317,6 +321,10 @@ private:
 	static SocketResponse HandleRewind(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleCheat(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSpeed(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleEval(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleMemorySize(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleSetPc(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleDrawPath(Emulator* emu, const SocketCommand& cmd);
 
 	// Memory analysis handlers
 	static SocketResponse HandleSearch(Emulator* emu, const SocketCommand& cmd);
@@ -347,9 +355,11 @@ private:
 	// Memory write attribution handlers
 	static SocketResponse HandleMemWatchWrites(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleMemBlame(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleStackRetaddr(Emulator* emu, const SocketCommand& cmd);
 
 	// Symbol table handlers
 	static SocketResponse HandleSymbolsLoad(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleSymbolsReload(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSymbolsResolve(Emulator* emu, const SocketCommand& cmd);
 
 	// Collision overlay handlers
@@ -400,7 +410,7 @@ public:
 
 	// Debugger hook methods - called from SnesDebugger to log events
 	static void LogPRegisterChange(uint32_t pc, uint8_t oldP, uint8_t newP, uint8_t opcode, uint64_t cycleCount);
-	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer);
+	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer, uint8_t opcode = 0, Emulator* emu = nullptr);
 	static void CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu);
 	static void BroadcastEvent(string eventType, string data);
 	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled; }

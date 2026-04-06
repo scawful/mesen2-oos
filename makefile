@@ -19,6 +19,17 @@ else
 	PROFILE_USE_FLAG := -fprofile-instr-use=$(CURDIR)/PGOHelper/pgo.profdata
 endif
 
+# On macOS, prefer Homebrew LLVM to avoid Xcode SDK / libc++ header mismatches
+UNAME_S := $(shell uname -s)
+LLVM_CLANGXX := $(LLVM_PREFIX)/bin/clang++
+ifeq ($(UNAME_S),Darwin)
+	ifneq ($(wildcard $(LLVM_CLANGXX)),)
+		CXX := $(LLVM_CLANGXX)
+		CC := $(LLVM_PREFIX)/bin/clang
+		LLVM_USE := 1
+	endif
+endif
+
 SDL2LIB := $(shell sdl2-config --libs)
 SDL2INC := $(shell sdl2-config --cflags)
 
@@ -112,7 +123,12 @@ ifneq ($(findstring $(LLVM_PREFIX),$(CXX_PATH)),)
 	endif
 endif
 
-CXXFLAGS = -fPIC -Wall --std=c++17 $(MESENFLAGS) $(SDL2INC) -I $(realpath ./) -I $(realpath ./Core) -I $(realpath ./Utilities) -I $(realpath ./Sdl) -I $(realpath ./Linux) -I $(realpath ./MacOS)
+# Use Homebrew LLVM libc++ headers when LLVM compiler is selected (avoids Xcode SDK header mismatches)
+LLVM_CXXINC :=
+ifdef LLVM_USE
+	LLVM_CXXINC := -isystem $(LLVM_PREFIX)/include/c++/v1 -isystem $(LLVM_PREFIX)/include
+endif
+CXXFLAGS = -fPIC -Wall --std=c++17 $(MESENFLAGS) $(LLVM_CXXINC) $(SDL2INC) -I $(realpath ./) -I $(realpath ./Core) -I $(realpath ./Utilities) -I $(realpath ./Sdl) -I $(realpath ./Linux) -I $(realpath ./MacOS)
 OBJCXXFLAGS = $(CXXFLAGS) -framework Foundation -framework Cocoa
 CFLAGS = -fPIC -Wall $(MESENFLAGS)
 
@@ -131,8 +147,14 @@ endif
 ifeq ($(USE_AOT),true)
 	PUBLISHFLAGS ?=  -r $(MESENPLATFORM) -p:PublishSingleFile=false -p:PublishAot=true -p:SelfContained=true
 else
-	PUBLISHFLAGS ?=  -r $(MESENPLATFORM) --no-self-contained true -p:PublishSingleFile=true
+PUBLISHFLAGS ?=  -r $(MESENPLATFORM) --no-self-contained true -p:PublishSingleFile=true
 endif
+
+# Auto-install app bundle after publish (macOS only).
+# Disable via: AUTO_INSTALL=0 make
+# Override destination via: AUTO_INSTALL_ARGS="--dest /Applications" or "--user"
+AUTO_INSTALL ?= 1
+AUTO_INSTALL_ARGS ?= --dest /Applications
 
 
 CORESRC := $(shell find Core -name '*.cpp')
@@ -202,7 +224,19 @@ ui: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
 	cd UI && DOTNET_CLI_DISABLE_BUILD_SERVER=1 dotnet publish -c $(BUILD_TYPE) -p:OptimizeUi="true" -p:UseSharedCompilation=false $(PUBLISHFLAGS)
 ifeq ($(MESENOS),osx)
+	@if [ -d "$(OUTFOLDER)/$(MESENPLATFORM)/publish" ]; then \
+		cp $(OUTFOLDER)/$(SHAREDLIB) "$(OUTFOLDER)/$(MESENPLATFORM)/publish/"; \
+		for app in $(OUTFOLDER)/$(MESENPLATFORM)/publish/*.app; do \
+			if [ -d "$$app" ]; then \
+				cp $(OUTFOLDER)/$(SHAREDLIB) "$$app/Contents/MacOS/"; \
+			fi; \
+		done; \
+		echo "Deployed $(SHAREDLIB) to publish and .app bundle"; \
+	fi
 	codesign --force --deep --sign - $(OUTFOLDER)/$(MESENPLATFORM)/publish/*.app
+ifneq ($(AUTO_INSTALL),0)
+	tools/install_mesen2_oos.sh $(AUTO_INSTALL_ARGS)
+endif
 endif
 
 core: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)

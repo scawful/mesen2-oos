@@ -278,7 +278,7 @@ void SnesDebugger::ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationTyp
 	}
 	if (SocketServer::HasMemoryWatch(absoluteAddr)) {
 		SnesCpuState& state = GetCpuState();
-		SocketServer::LogMemoryWrite(_prevProgramCounter, absoluteAddr, value, 1, state.CycleCount, state.SP);
+		SocketServer::LogMemoryWrite(_prevProgramCounter, absoluteAddr, value, 1, state.CycleCount, state.SP, _prevOpCode, _emu);
 	}
 
 	if(addressInfo.Address >= 0 && (addressInfo.Type == MemoryType::SnesWorkRam || addressInfo.Type == MemoryType::SnesSaveRam)) {

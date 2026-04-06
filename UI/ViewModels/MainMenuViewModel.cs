@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Mesen.Config;
 using Mesen.Config.Shortcuts;
@@ -1135,6 +1135,204 @@ namespace Mesen.ViewModels
 			};
 		}
 
+		private static string[] SplitOracleInput(string input, int maxParts)
+		{
+			return input.Split(new[] { '|' }, maxParts, StringSplitOptions.None)
+				.Select(part => part.Trim())
+				.ToArray();
+		}
+
+		private async void PromptOracleDrawPath(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Enter points as x1,y1,x2,y2 (optional: | color | frames)",
+				"10,10,20,15,30,20 | 0x00FF00 | 60"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string[] parts = SplitOracleInput(input, 3);
+			string points = parts[0];
+			if(string.IsNullOrWhiteSpace(points)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() { ["points"] = points };
+			if(parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) {
+				args["color"] = parts[1];
+			}
+			if(parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])) {
+				args["frames"] = parts[2];
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("draw_path", args, "Draw Path");
+		}
+
+		private async void PromptOracleEval(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Expression (optional: | cpu)",
+				"A | snes"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string[] parts = SplitOracleInput(input, 2);
+			string expression = parts[0];
+			if(string.IsNullOrWhiteSpace(expression)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() { ["expression"] = expression };
+			if(parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) {
+				args["cpu"] = parts[1];
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("eval_expression", args, "Eval Expression");
+		}
+
+		private async void PromptOracleSetPc(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Address (hex) (optional: | cpu)",
+				"0x008000 | snes"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string[] parts = SplitOracleInput(input, 2);
+			string addr = parts[0];
+			if(string.IsNullOrWhiteSpace(addr)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() { ["addr"] = addr };
+			if(parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) {
+				args["cpu"] = parts[1];
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("set_pc", args, "Set PC");
+		}
+
+		private async void PromptOracleMemorySize(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Memory type (e.g., wram, sram, prgrom)",
+				"wram"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() { ["memtype"] = input.Trim() };
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("memory_size", args, "Memory Size");
+		}
+
+		private async void PromptOracleStackRetaddr(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"count | mode | sp (optional)",
+				"6 | rtl"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string[] parts = SplitOracleInput(input, 3);
+			Dictionary<string, string> args = new() { ["count"] = parts[0] };
+			if(parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) {
+				args["mode"] = parts[1];
+			}
+			if(parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])) {
+				args["sp"] = parts[2];
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("stack_retaddr", args, "Stack Return Addrs");
+		}
+
+		private async void PromptOracleMemWatchAdd(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"addr | size | depth (optional)",
+				"0x7E0010 | 1 | 100"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string[] parts = SplitOracleInput(input, 3);
+			string addr = parts[0];
+			if(string.IsNullOrWhiteSpace(addr)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() {
+				["action"] = "add",
+				["addr"] = addr
+			};
+			if(parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) {
+				args["size"] = parts[1];
+			}
+			if(parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])) {
+				args["depth"] = parts[2];
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_watch", args, "Mem Watch Add");
+		}
+
+		private async void PromptOracleMemWatchRemove(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Watch ID",
+				"1"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			Dictionary<string, string> args = new() {
+				["action"] = "remove",
+				["watch_id"] = input.Trim()
+			};
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_watch", args, "Mem Watch Remove");
+		}
+
+		private async void PromptOracleMemBlame(Window wnd)
+		{
+			string? input = await TextInputWindow.ShowDialog(
+				wnd,
+				"Address (hex) or #watch_id",
+				"0x7E0010"
+			);
+			if(string.IsNullOrWhiteSpace(input)) {
+				return;
+			}
+
+			string trimmed = input.Trim();
+			Dictionary<string, string> args = new();
+			if(trimmed.StartsWith("#")) {
+				string watchId = trimmed.Substring(1).Trim();
+				if(string.IsNullOrWhiteSpace(watchId)) {
+					return;
+				}
+				args["watch_id"] = watchId;
+			} else {
+				args["addr"] = trimmed;
+			}
+
+			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_blame", args, "Mem Blame");
+		}
+
 		private void OpenOracleControlCenter(Window wnd, OracleControlCenterTab? tab = null)
 		{
 			OracleControlCenterWindow center = ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleControlCenterWindow());
@@ -1218,6 +1416,43 @@ namespace Mesen.ViewModels
 						CreateOracleActionWithOutput("Run ZSCustomOverworld Status", "check_zsow_status"),
 						CreateOracleActionWithOutput("Run Day/Night Status", "check_day_night"),
 						CreateOracleCommand("Open Diagnostics Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Diagnostics)),
+						CreateOracleCommand("Open Diagnostics Window...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleDiagnosticsWindow())),
+					}
+				},
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Socket Tools",
+					SubActions = new List<object>() {
+						CreateOracleCommand("Draw Path...", () => PromptOracleDrawPath(wnd), () => IsGameRunning),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Eval Expression...", () => PromptOracleEval(wnd), () => IsGameRunning),
+						CreateOracleCommand("Set PC...", () => PromptOracleSetPc(wnd), () => IsGameRunning),
+						CreateOracleCommand("Memory Size...", () => PromptOracleMemorySize(wnd), () => IsGameRunning),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Stack Retaddr...", () => PromptOracleStackRetaddr(wnd), () => IsGameRunning),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Mem Watch Add...", () => PromptOracleMemWatchAdd(wnd), () => IsGameRunning),
+						CreateOracleCommand("Mem Watch Remove...", () => PromptOracleMemWatchRemove(wnd), () => IsGameRunning),
+						CreateOracleCommand(
+							"Mem Watch List",
+							() => AgentLauncher.RunGatewayActionWithArgsAndOutput(
+								"mem_watch",
+								new Dictionary<string, string> { ["action"] = "list" },
+								"Mem Watch List"
+							),
+							() => IsGameRunning
+						),
+						CreateOracleCommand(
+							"Mem Watch Clear",
+							() => AgentLauncher.RunGatewayActionWithArgsAndOutput(
+								"mem_watch",
+								new Dictionary<string, string> { ["action"] = "clear" },
+								"Mem Watch Clear"
+							),
+							() => IsGameRunning
+						),
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Mem Blame...", () => PromptOracleMemBlame(wnd), () => IsGameRunning),
 					}
 				},
 				new ContextMenuSeparator(),

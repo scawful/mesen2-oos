@@ -13,21 +13,23 @@ Run with Mesen2 running and ALTTP/Oracle ROM loaded:
     python3 test_agent_integration.py
 """
 
-import socket
-import json
-import sys
 import glob
+import json
+import socket
+import sys
 import time
 from pathlib import Path
 
+from socket_discovery import discover_socket_path
+
 
 def find_socket():
-    """Find the active Mesen2 socket."""
-    sockets = glob.glob("/tmp/mesen2-*.sock")
-    if not sockets:
+    """Find the active Mesen2 socket (path). Uses canonical discovery."""
+    path = discover_socket_path()
+    if path is None:
         print("Error: No Mesen2 socket found. Is Mesen running?")
         sys.exit(1)
-    return sorted(sockets, key=lambda x: -int(x.split('-')[1].split('.')[0]))[0]
+    return path
 
 
 def send_command(sock_path, cmd, timeout=5.0):
@@ -54,28 +56,28 @@ def send_command(sock_path, cmd, timeout=5.0):
         s.close()
 
 
-def test_error_codes(sock):
+def test_error_codes(socket_path):
     """Test error code handling."""
     print("Testing error codes... ", end="")
     
     # Test missing parameter
-    result = send_command(sock, {"type": "READ"})
+    result = send_command(socket_path, {"type": "READ"})
     assert not result.get("success"), "Should fail without addr"
     assert result.get("errorCode") == 2, f"Expected errorCode 2, got {result.get('errorCode')}"
     
     # Test invalid command
-    result = send_command(sock, {"type": "INVALID_COMMAND"})
+    result = send_command(socket_path, {"type": "INVALID_COMMAND"})
     assert not result.get("success"), "Should fail for invalid command"
     assert result.get("errorCode") == 4, f"Expected errorCode 4, got {result.get('errorCode')}"
     
     print("PASSED")
 
 
-def test_agent_registration(sock):
+def test_agent_registration(socket_path):
     """Test agent registration."""
     print("Testing AGENT_REGISTER... ", end="")
     
-    result = send_command(sock, {
+    result = send_command(socket_path, {
         "type": "AGENT_REGISTER",
         "agentId": "test_agent",
         "agentName": "Test Agent",
@@ -90,11 +92,11 @@ def test_agent_registration(sock):
     print("PASSED")
 
 
-def test_capabilities(sock):
+def test_capabilities(socket_path):
     """Test CAPABILITIES command."""
     print("Testing CAPABILITIES... ", end="")
     
-    result = send_command(sock, {"type": "CAPABILITIES"})
+    result = send_command(socket_path, {"type": "CAPABILITIES"})
     assert result.get("success"), "CAPABILITIES should succeed"
     
     data = json.loads(result["data"])
@@ -106,11 +108,11 @@ def test_capabilities(sock):
     print(f"PASSED (version={data['version']}, {data['commands']} commands)")
 
 
-def test_health_enhanced(sock):
+def test_health_enhanced(socket_path):
     """Test enhanced HEALTH command."""
     print("Testing HEALTH (enhanced)... ", end="")
     
-    result = send_command(sock, {"type": "HEALTH"})
+    result = send_command(socket_path, {"type": "HEALTH"})
     assert result.get("success"), "HEALTH should succeed"
     
     data = json.loads(result["data"])
@@ -122,11 +124,11 @@ def test_health_enhanced(sock):
     print("PASSED")
 
 
-def test_metrics(sock):
+def test_metrics(socket_path):
     """Test METRICS command."""
     print("Testing METRICS... ", end="")
     
-    result = send_command(sock, {"type": "METRICS"})
+    result = send_command(socket_path, {"type": "METRICS"})
     assert result.get("success"), "METRICS should succeed"
     
     data = json.loads(result["data"])
@@ -138,16 +140,16 @@ def test_metrics(sock):
     print(f"PASSED (commands={data['totalCommands']}, latency={data['avgLatencyUs']}μs)")
 
 
-def test_command_history(sock):
+def test_command_history(socket_path):
     """Test COMMAND_HISTORY command."""
     print("Testing COMMAND_HISTORY... ", end="")
     
     # Execute a few commands first
-    send_command(sock, {"type": "PING"})
-    send_command(sock, {"type": "STATE"})
+    send_command(socket_path, {"type": "PING"})
+    send_command(socket_path, {"type": "STATE"})
     time.sleep(0.1)  # Small delay
     
-    result = send_command(sock, {"type": "COMMAND_HISTORY", "count": "5"})
+    result = send_command(socket_path, {"type": "COMMAND_HISTORY", "count": "5"})
     assert result.get("success"), "COMMAND_HISTORY should succeed"
     
     history = json.loads(result["data"])
@@ -163,12 +165,12 @@ def test_command_history(sock):
     print(f"PASSED ({len(history)} entries)")
 
 
-def test_yaze_sync(sock):
+def test_yaze_sync(socket_path):
     """Test YAZE state sync commands."""
     print("Testing YAZE state sync... ", end="")
     
     # Test SAVESTATE_WATCH status
-    result = send_command(sock, {"type": "SAVESTATE_WATCH", "action": "status"})
+    result = send_command(socket_path, {"type": "SAVESTATE_WATCH", "action": "status"})
     assert result.get("success"), "SAVESTATE_WATCH should succeed"
     
     data = json.loads(result["data"])
@@ -176,7 +178,7 @@ def test_yaze_sync(sock):
     
     # Test SAVESTATE_SYNC (if we have a state file)
     # This would require an actual state file, so we'll just test the command exists
-    result = send_command(sock, {
+    result = send_command(socket_path, {
         "type": "SAVESTATE_SYNC",
         "path": "/tmp/test_state.mss"
     })
@@ -186,11 +188,11 @@ def test_yaze_sync(sock):
     print("PASSED")
 
 
-def test_state_diff(sock):
+def test_state_diff(socket_path):
     """Test STATE_DIFF command."""
     print("Testing STATE_DIFF... ", end="")
     
-    result = send_command(sock, {"type": "STATE_DIFF"})
+    result = send_command(socket_path, {"type": "STATE_DIFF"})
     assert result.get("success"), "STATE_DIFF should succeed"
     
     # Should return state data (even if not a true diff yet)
@@ -200,11 +202,11 @@ def test_state_diff(sock):
     print("PASSED")
 
 
-def test_watch_trigger(sock):
+def test_watch_trigger(socket_path):
     """Test WATCH_TRIGGER command."""
     print("Testing WATCH_TRIGGER... ", end="")
     
-    result = send_command(sock, {
+    result = send_command(socket_path, {
         "type": "WATCH_TRIGGER",
         "action": "list"
     })
@@ -226,29 +228,29 @@ def test_status_file():
         status = json.load(f)
     
     assert "socketPath" in status, "Missing socketPath"
-    assert "running" in status, "Missing running"
+    assert "emulatorRunning" in status, "Missing emulatorRunning"
     assert "registeredAgents" in status, "Missing registeredAgents"
     
     print(f"PASSED (socket={status['socketPath']})")
 
 
-def test_validation(sock):
+def test_validation(socket_path):
     """Test request validation."""
     print("Testing request validation... ", end="")
     
     # Test missing required parameter
-    result = send_command(sock, {"type": "WRITE"})
+    result = send_command(socket_path, {"type": "WRITE"})
     assert not result.get("success"), "Should fail without required params"
     assert result.get("errorCode") in [2, 3], f"Expected errorCode 2 or 3, got {result.get('errorCode')}"
     
     # Test valid command
-    result = send_command(sock, {"type": "PING"})
+    result = send_command(socket_path, {"type": "PING"})
     assert result.get("success"), "Valid command should succeed"
     
     print("PASSED")
 
 
-def test_batch_with_errors(sock):
+def test_batch_with_errors(socket_path):
     """Test BATCH command with error handling."""
     print("Testing BATCH with errors... ", end="")
     
@@ -258,7 +260,7 @@ def test_batch_with_errors(sock):
         {"type": "STATE"}
     ]
     
-    result = send_command(sock, {
+    result = send_command(socket_path, {
         "type": "BATCH",
         "commands": json.dumps(commands)
     })
@@ -274,11 +276,11 @@ def test_batch_with_errors(sock):
 
 
 def main():
-    sock = find_socket()
-    print(f"Using socket: {sock}\n")
+    socket_path = find_socket()
+    print(f"Using socket: {socket_path}\n")
     
     # Check if ROM is loaded
-    state = send_command(sock, {"type": "STATE"})
+    state = send_command(socket_path, {"type": "STATE"})
     if not state.get("success"):
         print("Error: Could not get state. Is emulation running?")
         sys.exit(1)
@@ -306,7 +308,7 @@ def main():
     failed = 0
     for test in tests:
         try:
-            test(sock)
+            test(socket_path)
             passed += 1
         except AssertionError as e:
             print(f"FAILED: {e}")
