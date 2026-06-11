@@ -302,6 +302,12 @@ void Emulator::ProcessEndOfFrame()
 	}
 
 	if(!_isRunAheadFrame) {
+		if(!_frameLimiter) {
+			_frameDelay = GetFrameDelay();
+			_frameLimiter.reset(new FrameLimiter(_frameDelay));
+			MessageManager::Log("[Timing] Recreated missing frame limiter during end-of-frame processing");
+		}
+
 		_frameLimiter->ProcessFrame();
 		while(_frameLimiter->WaitForNextFrame()) {
 			if(_stopFlag || _frameDelay != GetFrameDelay() || _paused || _pauseOnNextFrame || _lockCounter > 0) {
