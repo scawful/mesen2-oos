@@ -194,7 +194,7 @@ packages/*
 TestHelper/*
 UI/Dependencies.zip
 
-__pycache__/*
+__pycache__/
 build-cmake/*
 build-codex/
 *.code-workspace

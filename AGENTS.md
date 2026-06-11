@@ -1,132 +1,22 @@
-# Mesen2 Fork Usage
+# AGENTS.md (Compact)
 
-_Extends: [unified_agent_protocol.md](file:///Users/scawful/.context/memory/unified_agent_protocol.md)_
+Purpose: high-signal operating rules only.
 
-This repository is the active Mesen2 fork used for Oracle of Secrets debugging (~/src/hobby/mesen2-oos).
+Core Rules
+1. Clarify goals, constraints, and done criteria before major edits.
+2. Prefer the smallest working change over architecture churn.
+3. Read local `README.md` and nearby docs before coding.
+4. Touch only task-related files.
+5. Keep hygiene high: no dead code or commented-out leftovers.
+6. Run the fastest relevant verification command before finishing.
+7. If checks cannot run, report exactly why and residual risk.
+8. Ask before destructive actions (`rm`, force-push, history rewrite).
 
-- Use this repo for all Mesen2 changes: `/Users/scawful/src/hobby/mesen2-oos`.
-- Do not edit any other Mesen2 clone or upstream repo unless the user explicitly asks.
-- If multiple clones appear to be in use, verify the active one by comparing recent activity
-  (e.g., `git log -1 --stat` or file timestamps) and ask the user if it is ambiguous.
-- When a task mentions "Mesen2" or emulator debugging for Oracle of Secrets, default to this fork.
+Delivery Contract
+- Report what changed.
+- Report what was verified.
+- Report known gaps or follow-ups.
 
-## Critical Notes (2026-01-24)
-
-- **Socket Stability:** Improved with request validation and error handling. Monitor for any remaining issues.
-- **Save State Mirroring:** YAZE save state integration implemented via `SAVESTATE_SYNC` and `SAVESTATE_WATCH` commands. See [Agent Integration Guide](docs/Agent_Integration_Guide.md).
-
-## Building
-
-**IMPORTANT: Use `make`, not CMake:**
-```bash
-cd /Users/scawful/src/hobby/mesen2-oos
-make clean && make
-```
-
-CMake builds may have incompatible settings and cause crashes.
-
-## Running the Fork
-
-**Do NOT replace the library in ~/Documents/Mesen2/ or /Applications/Mesen.app.**
-The installed apps extract their own bundled library on startup.
-
-**Run using the wrapper (Recommended):**
-```bash
-mesen-run
-```
-
-**Or run the built version directly:**
-```bash
-/Users/scawful/src/hobby/mesen2-oos/bin/osx-arm64/Release/osx-arm64/publish/Mesen
-```
-
-## Socket API
-
-After the fork starts, a socket is created at `/tmp/mesen2-<pid>.sock`.
-
-**Golden Path Reference:**
-[`oracle-of-secrets/Docs/Tooling/Mesen2_Architecture.md`](../../../hobby/oracle-of-secrets/Docs/Tooling/Mesen2_Architecture.md)
-
-
-## Key Directories
-
-| Path | Purpose |
-|------|---------|
-| `Core/Shared/SocketServer.cpp` | Socket API handlers |
-| `Core/Shared/SocketServer.h` | Socket API structs and declarations |
-| `Core/Shared/YazeStateBridge.cpp` | YAZE save state synchronization |
-| `Core/Shared/Video/WatchHud.cpp` | Overlay rendering |
-| `bin/osx-arm64/Release/` | Built executable and library |
-| `docs/Mesen2_Fork_Debugging.md` | Full API documentation |
-| `docs/Agent_Integration_Guide.md` | Agent integration guide |
-| `docs/Socket_API_Reference.md` | Complete API reference |
-
-## New Agent Features (2026-01-24)
-
-### Error Handling
-- **Error Codes:** All responses include `errorCode` field (0-15)
-- **Retry Hints:** `retryable` field indicates if error is retryable
-- **Request Validation:**** Commands validated before processing
-
-### Agent Discovery
-- **Status File:** `/tmp/mesen2-<pid>.status` - JSON file with instance info
-- **CAPABILITIES:** List supported features and API version
-- **AGENT_REGISTER:** Register agent for tracking
-- **METRICS:** Performance statistics (latency, error rates, etc.)
-
-### YAZE Integration
-- **SAVESTATE_SYNC:** Notify YAZE of state saves and configure bridge path
-- **SAVESTATE_WATCH:** Monitor YAZE state file changes
-- **Bidirectional Sync:** Mesen2 ↔ YAZE state synchronization
-
-### Event Stream (P2.1)
-- **breakpoint_hit:** Fired when execution stops (breakpoint/pause)
-- **frame_complete:** Fired at the end of every frame
-
-### Enhanced Commands
-- **HEALTH:** Enhanced with diagnostics (agent count, YAZE sync status)
-- **COMMAND_HISTORY:** Recent command history for debugging
-- **STATE_DIFF:** Get state changes (requires caching)
-- **WATCH_TRIGGER:** Notify on watch value changes
-
-### Observability
-- **Command History:** Track recent commands with latency and error codes
-- **Metrics Collection:** Performance metrics via METRICS command
-- **Status File:** JSON status file for service discovery
-
-See [Agent Integration Guide](docs/Agent_Integration_Guide.md) for usage examples.
-
-## Debugging Tools Ecosystem
-
-This emulator is part of a larger debugging toolchain for Oracle of Secrets:
-
-### Client Libraries
-
-| Location | Purpose |
-|----------|---------|
-| `~/src/hobby/oracle-of-secrets/scripts/mesen2_client_lib/` | Canonical Python client library |
-| `~/src/hobby/oracle-of-secrets/scripts/mesen2_client.py` | CLI interface (50+ commands) |
-
-### Real-Time Tools (`~/src/hobby/yaze/scripts/ai/`)
-
-| Tool | Purpose |
-|------|---------|
-| `sentinel.py` | Autonomous soft lock detection (B007, B009, INIDISP) |
-| `crash_dump.py` | Post-mortem trace capture and symbol resolution |
-| `profiler.py` | CPU hotspot analysis (lag detection) |
-| `fuzzer.py` | Chaos Monkey automated stress testing |
-| `state_query.py` | Semantic game state queries |
-| `code_graph.py` | Static ASM call graph analysis |
-| `memory_cartographer.py` | RAM search (Cheat Engine-style) |
-
-### Unified Platform
-
-| Location | Purpose |
-|----------|---------|
-| `~/.claude/skills/oracle-debugger/` | Claude skill with regression testing, bug reproduction |
-
-### Comprehensive Documentation
-
-- **Tools Index:** `~/src/hobby/oracle-of-secrets/Docs/Tooling/Debugging_Tools_Index.md`
-- **Socket API:** `docs/Socket_API_Reference.md`
-- **Agent Guide:** `docs/Agent_Integration_Guide.md`
+Reference Material
+- Detailed historical guidance: `.context/knowledge/agent-reference.md`.
+- Project docs remain the source of truth for architecture and workflows.
