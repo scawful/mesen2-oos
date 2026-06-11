@@ -1,0 +1,115 @@
+<Window
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	mc:Ignorable="d"
+	x:Class="Mesen.Windows.OracleSaveDataEditorWindow"
+	x:DataType="vm:OracleSaveDataEditorViewModel"
+	Title="Oracle Save Data Editor"
+	Width="840" Height="620"
+	MinWidth="720" MinHeight="480"
+	WindowStartupLocation="CenterOwner"
+>
+	<Design.DataContext>
+		<vm:OracleSaveDataEditorViewModel />
+	</Design.DataContext>
+
+	<Window.DataTemplates>
+		<DataTemplate DataType="vm:OracleSaveDataToggleGroupViewModel">
+			<StackPanel Spacing="6" Margin="0,0,0,14">
+				<TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" />
+				<ItemsControl ItemsSource="{Binding Options}">
+					<ItemsControl.ItemsPanel>
+						<ItemsPanelTemplate>
+							<WrapPanel Orientation="Horizontal" />
+						</ItemsPanelTemplate>
+					</ItemsControl.ItemsPanel>
+					<ItemsControl.ItemTemplate>
+						<DataTemplate DataType="vm:OracleSaveDataToggleViewModel">
+							<CheckBox
+								Content="{Binding Label}"
+								IsChecked="{Binding IsChecked}"
+								Margin="0,0,14,10"
+								ToolTip.Tip="{Binding Description}"
+							/>
+						</DataTemplate>
+					</ItemsControl.ItemTemplate>
+				</ItemsControl>
+			</StackPanel>
+		</DataTemplate>
+		<DataTemplate DataType="vm:OracleSaveDataChoiceGroupViewModel">
+			<StackPanel Spacing="8" Margin="0,0,0,14">
+				<TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" />
+				<ItemsControl ItemsSource="{Binding Fields}">
+					<ItemsControl.ItemTemplate>
+						<DataTemplate DataType="vm:OracleSaveDataChoiceViewModel">
+							<Grid ColumnDefinitions="180,*" Margin="0,0,0,8">
+								<TextBlock Grid.Column="0" Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Description}" />
+								<ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
+									<ComboBox.ItemTemplate>
+										<DataTemplate DataType="vm:OracleSaveDataChoiceValueViewModel">
+											<TextBlock Text="{Binding Label}" />
+										</DataTemplate>
+									</ComboBox.ItemTemplate>
+								</ComboBox>
+							</Grid>
+						</DataTemplate>
+					</ItemsControl.ItemTemplate>
+				</ItemsControl>
+			</StackPanel>
+		</DataTemplate>
+	</Window.DataTemplates>
+
+	<DockPanel Margin="12">
+		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10" Margin="0,12,0,0">
+			<Button Content="Refresh" Click="OnRefreshClick" />
+			<Button Content="Apply" Click="OnApplyClick" />
+			<Button Content="Close" Click="OnCloseClick" Width="90" HorizontalContentAlignment="Center" />
+		</StackPanel>
+
+		<StackPanel Spacing="8">
+			<TextBlock Text="{Binding LocationSummary}" FontWeight="Bold" TextWrapping="Wrap" />
+			<TextBlock Text="{Binding StatsSummary}" TextWrapping="Wrap" />
+			<StackPanel Spacing="4">
+				<TextBlock Text="Presets" FontWeight="Bold" />
+				<ItemsControl ItemsSource="{Binding Presets}">
+					<ItemsControl.ItemsPanel>
+						<ItemsPanelTemplate>
+							<WrapPanel Orientation="Horizontal" />
+						</ItemsPanelTemplate>
+					</ItemsControl.ItemsPanel>
+					<ItemsControl.ItemTemplate>
+						<DataTemplate DataType="vm:OracleSaveDataPresetViewModel">
+							<Button Content="{Binding Label}" Tag="{Binding Id}" Margin="0,0,10,8" Click="OnPresetClick" ToolTip.Tip="{Binding Description}" />
+						</DataTemplate>
+					</ItemsControl.ItemTemplate>
+				</ItemsControl>
+			</StackPanel>
+			<CheckBox Content="Sync WRAMSAVE -> SRAM after apply" IsChecked="{Binding SyncToSramAfterApply}" />
+			<TextBlock Text="{Binding StatusText}" Foreground="Gray" TextWrapping="Wrap" />
+
+			<TabControl>
+				<TabItem Header="Items">
+					<ScrollViewer VerticalScrollBarVisibility="Auto">
+						<ItemsControl ItemsSource="{Binding ItemGroups}" Margin="0,8,0,0" />
+					</ScrollViewer>
+				</TabItem>
+				<TabItem Header="Flags">
+					<ScrollViewer VerticalScrollBarVisibility="Auto">
+						<ItemsControl ItemsSource="{Binding FlagGroups}" Margin="0,8,0,0" />
+					</ScrollViewer>
+				</TabItem>
+				<TabItem Header="Advanced">
+					<ScrollViewer VerticalScrollBarVisibility="Auto">
+						<StackPanel Spacing="10" Margin="0,8,0,0">
+							<ItemsControl ItemsSource="{Binding ItemChoiceGroups}" />
+							<ItemsControl ItemsSource="{Binding FlagChoiceGroups}" />
+						</StackPanel>
+					</ScrollViewer>
+				</TabItem>
+			</TabControl>
+		</StackPanel>
+	</DockPanel>
+</Window>

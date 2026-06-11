@@ -36,6 +36,7 @@ namespace Mesen.ViewModels
 		[Reactive] public bool IsSoftwareRendererVisible { get; set; }
 
 		public SoftwareRendererViewModel SoftwareRenderer { get; } = new();
+		public OracleDebugPanelViewModel OracleDebugPanel { get; } = new();
 
 		public Configuration Config { get; }
 
@@ -55,6 +56,7 @@ namespace Mesen.ViewModels
 		{
 			MainMenu.Initialize(wnd);
 			RecentGames.Init(GameScreenMode.RecentGames);
+			OracleDebugPanel.RequestRefresh(true);
 
 			this.WhenAnyValue(x => x.RecentGames.Visible, x => x.SoftwareRenderer.FrameSurface).Subscribe(x => {
 				IsNativeRendererVisible = !RecentGames.Visible && SoftwareRenderer.FrameSurface == null;

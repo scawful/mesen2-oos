@@ -37,6 +37,7 @@ namespace Mesen.Windows
 		private MouseManager _mouseManager;
 		private ContentControl _audioPlayer;
 		private MainMenuView _mainMenu;
+		private Control _oracleDebugPanel;
 		private CommandLineHelper? _cmdLine;
 
 		private bool _testModeEnabled;
@@ -61,6 +62,8 @@ namespace Mesen.Windows
 		//Used to suppress key-repeat keyup events on Linux
 		private Dictionary<Key, IDisposable> _pendingKeyUpEvents = new();
 		private bool _isLinux = false;
+		private DateTime _lastOraclePanelRefresh = DateTime.MinValue;
+		private bool _oraclePanelRefreshEnabled;
 
 		static MainWindow()
 		{
@@ -106,6 +109,7 @@ namespace Mesen.Windows
 			_softwareRenderer = this.GetControl<SoftwareRendererView>("SoftwareRenderer");
 			_audioPlayer = this.GetControl<ContentControl>("AudioPlayer");
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
+			_oracleDebugPanel = this.GetControl<Control>("OracleDebugPanel");
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
@@ -262,6 +266,7 @@ namespace Mesen.Windows
 					cmdLine.NoVideo,
 					cmdLine.NoInput
 				);
+				_oraclePanelRefreshEnabled = true;
 
 				ConfigManager.Config.RemoveObsoleteConfig();
 				
@@ -494,10 +499,11 @@ namespace Mesen.Windows
 
 				//When menu is set to auto-hide, don't count its height when calculating the window's final size
 				double menuHeight = ConfigManager.Config.Preferences.AutoHideMenu ? 0 : _mainMenu.Bounds.Height;
+				double oraclePanelHeight = _oracleDebugPanel.Bounds.Height;
 
 				double width = Math.Max(MinWidth, Math.Round(screenSize.Height * aspectRatio) * scale);
 				double height = Math.Max(MinHeight, screenSize.Height * scale);
-				ClientSize = new Size(width, height + menuHeight + _audioPlayer.Bounds.Height);
+				ClientSize = new Size(width, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight);
 				ResizeRenderer();
 			} else if(WindowState == WindowState.Maximized || WindowState == WindowState.FullScreen) {
 				_rendererSize = new Size(Math.Floor(screenSize.Width * scale), Math.Floor(screenSize.Height * scale));
@@ -650,6 +656,10 @@ namespace Mesen.Windows
 				return;
 			}
 
+			if(ProcessOracleDebugPanelShortcuts(e)) {
+				return;
+			}
+
 			if(OperatingSystem.IsMacOS()) {
 				//Keyhandler handles key internally on macOS
 				return;
@@ -669,6 +679,48 @@ namespace Mesen.Windows
 				//Prevent menu/window from handling these keys to avoid issue with custom shortcuts
 				e.Handled = true;
 			}
+		}
+
+		private bool ProcessOracleDebugPanelShortcuts(KeyEventArgs e)
+		{
+			bool toggleExpanded = e.Key == Key.O;
+			bool toggleVisibility = e.Key == Key.H;
+			if(!toggleExpanded && !toggleVisibility) {
+				return false;
+			}
+
+			KeyModifiers expectedModifiers = OperatingSystem.IsMacOS()
+				? KeyModifiers.Meta | KeyModifiers.Shift
+				: KeyModifiers.Control | KeyModifiers.Shift;
+			if(e.KeyModifiers != expectedModifiers) {
+				return false;
+			}
+
+			bool textInputFocused = IsTextInputFocused();
+			_model.OracleDebugPanel.IsTextInputFocused = textInputFocused;
+			if(textInputFocused) {
+				return false;
+			}
+
+			if(toggleVisibility) {
+				_model.OracleDebugPanel.ToggleHiddenCollapsed();
+				e.Handled = true;
+				return true;
+			}
+
+			if(toggleExpanded) {
+				_model.OracleDebugPanel.ToggleCollapsedExpanded();
+				e.Handled = true;
+				return true;
+			}
+
+			return false;
+		}
+
+		private bool IsTextInputFocused()
+		{
+			IInputElement? focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+			return focused is TextBox;
 		}
 
 		private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
@@ -726,6 +778,11 @@ namespace Mesen.Windows
 					EmuApi.Resume();
 					_needResume = false;
 				}
+			}
+
+			if(_oraclePanelRefreshEnabled && (DateTime.UtcNow - _lastOraclePanelRefresh) >= TimeSpan.FromSeconds(1)) {
+				_model.OracleDebugPanel.RequestRefresh();
+				_lastOraclePanelRefresh = DateTime.UtcNow;
 			}
 		}
 	}

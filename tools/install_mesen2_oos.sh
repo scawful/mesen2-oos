@@ -222,6 +222,20 @@ backup_or_remove() {
   fi
 }
 
+resign_app_if_needed() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "Would codesign: $DEST_APP"
+    return 0
+  fi
+
+  if [[ "$(uname)" != "Darwin" ]]; then
+    return 0
+  fi
+
+  /usr/bin/codesign --force --deep --sign - "$DEST_APP"
+  echo "Codesigned: $DEST_APP"
+}
+
 prune_dir() {
   local dir="$1"
   local backup_root="$2"
@@ -269,6 +283,8 @@ if [[ "$DEPLOY_CORE" -eq 1 ]]; then
     echo "         Run 'make' to build MesenCore.dylib or pass --no-core." >&2
   fi
 fi
+
+resign_app_if_needed
 
 if [[ "$DO_SYMLINK" -eq 1 ]]; then
   link_path="${DEST_DIR}/Mesen.app"

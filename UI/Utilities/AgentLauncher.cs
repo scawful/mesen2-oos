@@ -29,14 +29,20 @@ namespace Mesen.Utilities
 		/// <summary>Run a gateway action and return stdout/stderr as a single string (for use in diagnostics window). Returns null on failure.</summary>
 		public static async Task<string?> RunGatewayActionWithOutputAsync(string action)
 		{
+			return await RunGatewayActionWithOutputAsync(action, null).ConfigureAwait(false);
+		}
+
+		/// <summary>Run a gateway action with optional args and return stdout/stderr as a single string. Returns null on failure.</summary>
+		public static async Task<string?> RunGatewayActionWithOutputAsync(string action, IReadOnlyDictionary<string, string>? args)
+		{
 			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
 				ShowError(error ?? "Agent Gateway not found.");
 				return null;
 			}
 
 			string pythonExe = GetPythonExecutable();
-			string[] args = BuildGatewayActionArgs(action, null);
-			string arguments = BuildArguments(gatewayPath, args);
+			string[] commandArgs = BuildGatewayActionArgs(action, args);
+			string arguments = BuildArguments(gatewayPath, commandArgs);
 
 			ProcessStartInfo psi = new ProcessStartInfo() {
 				FileName = pythonExe,

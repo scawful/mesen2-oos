@@ -1,0 +1,158 @@
+<UserControl
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	mc:Ignorable="d"
+	x:Class="Mesen.Views.OracleDebugPanelView"
+	x:DataType="vm:OracleDebugPanelViewModel"
+>
+	<Design.DataContext>
+		<vm:OracleDebugPanelViewModel />
+	</Design.DataContext>
+
+	<Border
+		IsVisible="{Binding IsPanelVisible}"
+		DockPanel.Dock="Top"
+		Background="#282828"
+		BorderBrush="#545454"
+		BorderThickness="0,0,0,1"
+		Padding="12,10"
+	>
+		<StackPanel Spacing="8">
+			<Grid ColumnDefinitions="*,Auto,Auto">
+				<StackPanel Grid.Column="0" Spacing="3">
+					<TextBlock Text="Oracle Debug Panel" FontSize="15" FontWeight="Bold" VerticalAlignment="Center" />
+					<TextBlock Text="{Binding CollapsedSummary}" FontSize="13" TextWrapping="Wrap" />
+					<TextBlock Text="{Binding ModeSummary}" FontSize="12" Opacity="0.9" TextWrapping="Wrap" />
+					<TextBlock Text="{Binding PlayerSummary}" FontSize="12" Opacity="0.9" TextWrapping="Wrap" />
+					<TextBlock Text="{Binding ProgressSummary}" FontSize="12" Opacity="0.9" TextWrapping="Wrap" />
+					<TextBlock Text="{Binding LastRefreshSummary}" FontSize="12" Opacity="0.8" />
+					<TextBlock Text="{Binding StatusLine}" FontSize="12" Opacity="0.8" TextWrapping="Wrap" />
+				</StackPanel>
+				<Button Grid.Column="1" Content="{Binding DetailsButtonText}" Margin="8,0,0,0" Click="OnToggleExpandedClick" />
+				<Button Grid.Column="2" Content="{Binding VisibilityButtonText}" Margin="8,0,0,0" Click="OnToggleVisibilityClick" />
+			</Grid>
+
+			<Border BorderBrush="#4A4A4A" BorderThickness="1" Padding="8" IsVisible="{Binding IsHidden}">
+				<TextBlock Text="Panel minimized. Click Show to keep the compact bar, or Expand for full controls." FontSize="12" />
+			</Border>
+
+			<StackPanel IsVisible="{Binding IsExpanded}" Spacing="8">
+				<WrapPanel Orientation="Horizontal" ItemWidth="380" ItemHeight="26">
+					<TextBlock Text="{Binding LocationSummary}" FontSize="14" />
+					<TextBlock Text="{Binding ModeSummary}" FontSize="14" />
+					<TextBlock Text="{Binding PlayerSummary}" FontSize="14" />
+					<TextBlock Text="{Binding ProgressSummary}" FontSize="14" />
+					<TextBlock Text="{Binding EmulationSummary}" FontSize="14" />
+					<TextBlock Text="{Binding TimingSummary}" FontSize="14" />
+					<TextBlock Text="{Binding RomSummary}" FontSize="14" />
+					<TextBlock Text="{Binding GatewaySummary}" FontSize="14" />
+					<TextBlock Text="{Binding SocketSummary}" FontSize="14" />
+					<TextBlock Text="{Binding YazeSummary}" FontSize="14" />
+					<TextBlock Text="{Binding LastRefreshSummary}" FontSize="14" />
+				</WrapPanel>
+
+				<Border BorderBrush="#4A4A4A" BorderThickness="1" Padding="8">
+					<StackPanel Spacing="6">
+						<TextBlock Text="State Capture" FontWeight="Bold" FontSize="14" />
+						<Grid ColumnDefinitions="Auto,260,Auto,260,Auto,200" RowDefinitions="Auto,Auto,Auto">
+							<TextBlock Grid.Row="0" Grid.Column="0" Text="Label" VerticalAlignment="Center" />
+							<TextBox Grid.Row="0" Grid.Column="1" Text="{Binding CaptureLabel}" />
+							<TextBlock Grid.Row="0" Grid.Column="2" Text="Tags" VerticalAlignment="Center" />
+							<TextBox Grid.Row="0" Grid.Column="3" Text="{Binding CaptureTags}" />
+							<CheckBox Grid.Row="0" Grid.Column="4" Content="Verify now" IsChecked="{Binding CaptureVerifyNow}" VerticalAlignment="Center" />
+
+							<TextBlock Grid.Row="1" Grid.Column="0" Text="Verifier" VerticalAlignment="Center" />
+							<TextBox Grid.Row="1" Grid.Column="1" Text="{Binding CaptureVerifier}" />
+							<TextBlock Grid.Row="1" Grid.Column="2" Text="Trusted seed task" VerticalAlignment="Center" />
+							<TextBox Grid.Row="1" Grid.Column="3" Text="{Binding CaptureTrustedSeedTask}" />
+
+							<Button Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Content="Capture State + Screenshot" Click="OnCaptureStateClick" />
+						</Grid>
+					</StackPanel>
+				</Border>
+
+				<Border BorderBrush="#4A4A4A" BorderThickness="1" Padding="8">
+					<StackPanel Spacing="6">
+						<TextBlock Text="Quick Actions" FontWeight="Bold" FontSize="14" />
+						<Grid ColumnDefinitions="Auto,220,Auto,220,Auto,220" RowDefinitions="Auto,Auto,Auto">
+							<TextBlock Grid.Row="0" Grid.Column="0" Text="Save-data profile" VerticalAlignment="Center" />
+							<TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SaveDataProfile}" />
+							<Button Grid.Row="0" Grid.Column="2" Content="Apply Profile" Click="OnApplyProfileClick" />
+
+							<TextBlock Grid.Row="1" Grid.Column="0" Text="Flag" VerticalAlignment="Center" />
+							<TextBox Grid.Row="1" Grid.Column="1" Text="{Binding SetFlagName}" />
+							<TextBlock Grid.Row="1" Grid.Column="2" Text="Value" VerticalAlignment="Center" />
+							<TextBox Grid.Row="1" Grid.Column="3" Text="{Binding SetFlagValue}" />
+							<Button Grid.Row="1" Grid.Column="4" Content="Set Flag" Click="OnSetFlagClick" />
+
+							<TextBlock Grid.Row="2" Grid.Column="0" Text="Fly destination" VerticalAlignment="Center" />
+							<TextBox Grid.Row="2" Grid.Column="1" Text="{Binding FlyDestination}" />
+							<Button Grid.Row="2" Grid.Column="2" Content="Fly" Click="OnFlyClick" />
+							<TextBlock Grid.Row="2" Grid.Column="3" Text="Frame count" VerticalAlignment="Center" />
+							<TextBox Grid.Row="2" Grid.Column="4" Text="{Binding FrameAdvanceCount}" />
+							<Button Grid.Row="2" Grid.Column="5" Content="Advance Frame(s)" Click="OnFrameAdvanceClick" />
+						</Grid>
+						<StackPanel Orientation="Horizontal" Spacing="8">
+							<Button Content="Edit Save Data..." Click="OnOpenSaveDataEditorClick" />
+							<Button Content="Sync WRAMSAVE -> SRAM" Click="OnSyncSramClick" />
+							<Button Content="Refresh Metadata" Click="OnRefreshClick" />
+						</StackPanel>
+					</StackPanel>
+				</Border>
+
+				<Border BorderBrush="#4A4A4A" BorderThickness="1" Padding="8">
+					<StackPanel Spacing="6">
+						<TextBlock Text="Macro Deck" FontWeight="Bold" FontSize="14" />
+						<StackPanel Orientation="Horizontal" Spacing="8">
+							<TextBlock Text="Profile JSON" VerticalAlignment="Center" />
+							<TextBox Width="520" Text="{Binding MacroProfilePath}" />
+							<Button Content="Reload Macros" Click="OnReloadMacrosClick" />
+						</StackPanel>
+						<TextBlock Text="{Binding MacroStatus}" />
+						<ItemsControl ItemsSource="{Binding MacroButtons}">
+							<ItemsControl.ItemsPanel>
+								<ItemsPanelTemplate>
+									<WrapPanel Orientation="Horizontal" />
+								</ItemsPanelTemplate>
+							</ItemsControl.ItemsPanel>
+							<ItemsControl.ItemTemplate>
+								<DataTemplate>
+									<Button Margin="0,0,8,8" Padding="10,6" Tag="{Binding Id}" Click="OnRunMacroClick">
+										<TextBlock Text="{Binding DisplayLabel}" />
+									</Button>
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+					</StackPanel>
+				</Border>
+
+				<Border BorderBrush="#4A4A4A" BorderThickness="1" Padding="8">
+					<StackPanel Spacing="6">
+						<TextBlock Text="Session Log" FontWeight="Bold" FontSize="14" />
+						<TextBlock Text="{Binding StatusLine}" />
+						<TextBox
+							Height="120"
+							AcceptsReturn="True"
+							IsReadOnly="True"
+							TextWrapping="NoWrap"
+							Text="{Binding SessionLog}"
+							FontFamily="{DynamicResource MesenFont}"
+							FontSize="{DynamicResource MesenFontSize}"
+							ScrollViewer.HorizontalScrollBarVisibility="Auto"
+							ScrollViewer.VerticalScrollBarVisibility="Auto"
+						/>
+						<StackPanel Orientation="Horizontal" Spacing="8">
+							<Button Content="Copy Log" Click="OnCopyLogClick" />
+							<Button Content="Save Log..." Click="OnSaveLogClick" />
+							<Button Content="Clear Log" Click="OnClearLogClick" />
+							<TextBlock Text="Cmd/Ctrl+Shift+O: details on/off   Cmd/Ctrl+Shift+H: compact mode" VerticalAlignment="Center" />
+						</StackPanel>
+					</StackPanel>
+				</Border>
+			</StackPanel>
+		</StackPanel>
+	</Border>
+</UserControl>

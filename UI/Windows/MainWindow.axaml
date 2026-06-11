@@ -39,6 +39,8 @@
 		
 		<ContentControl Name="AudioPlayer" DockPanel.Dock="Bottom" Content="{Binding AudioPlayer}" />
 
+		<v:OracleDebugPanelView Name="OracleDebugPanel" DockPanel.Dock="Top" DataContext="{Binding OracleDebugPanel}" />
+
 		<Panel Name="RendererPanel" Background="Black">
 			<ContentControl Background="#181818" Content="{Binding RecentGames}" IsVisible="{Binding RecentGames.Visible}" />
 

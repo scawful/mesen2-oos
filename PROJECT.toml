@@ -1,0 +1,33 @@
+name = "mesen2-oos"
+description = "Mesen2 fork with Unix socket API for Oracle of Secrets agentic debugging"
+aliases = ["mesen2", "mesen-oos"]
+tags = ["game-dev", "romhacking", "snes", "emulator", "debugging", "active"]
+platforms = ["mac", "linux"]
+
+stage = "beta"
+is_product = false
+commercial_intent = "none"
+public = false
+
+# Technology stack
+languages = ["cpp", "csharp"]
+build_system = "make"
+requires_version = {dotnet = "8.0"}
+
+[dependencies]
+external = ["sdl2", "dotnet-sdk"]
+build = ["make", "clang"]
+
+[build]
+command = "make"
+
+[test]
+command = "pytest test_stack_attribution.py test_socket_api_full.py -v"
+
+[links]
+upstream = "https://github.com/SourMesen/Mesen2"
+
+[sync]
+type = "git"
+direction = "both"
+remote = "server"
