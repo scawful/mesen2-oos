@@ -3,7 +3,7 @@
 #include "Core/Shared/Emulator.h"
 #include "Core/Shared/EmuSettings.h"
 
-extern unique_ptr<Emulator> _emu;
+extern unique_ptr<Emulator>& _emu;
 shared_ptr<RecordedRomTest> _recordedRomTest;
 
 extern "C"

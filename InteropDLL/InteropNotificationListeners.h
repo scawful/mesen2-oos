@@ -11,13 +11,18 @@ typedef void(__stdcall *NotificationListenerCallback)(int, void*);
 class InteropNotificationListeners
 {
 	SimpleLock _externalNotificationListenerLock;
-	vector<shared_ptr<INotificationListener>> _externalNotificationListeners;
+	vector<shared_ptr<InteropNotificationListener>> _externalNotificationListeners;
+	bool _callbacksEnabled = true;
 
 public:
 	INotificationListener* RegisterNotificationCallback(NotificationListenerCallback callback, Emulator* emu)
 	{
 		auto lock = _externalNotificationListenerLock.AcquireSafe();
-		auto listener = shared_ptr<INotificationListener>(new InteropNotificationListener(callback));
+		if(!_callbacksEnabled || !emu) {
+			return nullptr;
+		}
+
+		auto listener = shared_ptr<InteropNotificationListener>(new InteropNotificationListener(callback));
 		_externalNotificationListeners.push_back(listener);
 		emu->GetNotificationManager()->RegisterNotificationListener(listener);
 		return listener.get();
@@ -25,14 +30,38 @@ public:
 
 	void UnregisterNotificationCallback(INotificationListener *listener)
 	{
-		auto lock = _externalNotificationListenerLock.AcquireSafe();
-		_externalNotificationListeners.erase(
-			std::remove_if(
+		shared_ptr<InteropNotificationListener> removedListener;
+		{
+			auto lock = _externalNotificationListenerLock.AcquireSafe();
+			auto match = std::find_if(
 				_externalNotificationListeners.begin(),
 				_externalNotificationListeners.end(),
-				[=](shared_ptr<INotificationListener> ptr) { return ptr.get() == listener; }
-			),
-			_externalNotificationListeners.end()
-		);
+				[=](const shared_ptr<InteropNotificationListener>& ptr) { return ptr.get() == listener; }
+			);
+			if(match != _externalNotificationListeners.end()) {
+				removedListener = *match;
+				_externalNotificationListeners.erase(match);
+			}
+		}
+
+		if(removedListener) {
+			removedListener->Disable();
+		}
+	}
+
+	void DisableCallbacks()
+	{
+		vector<shared_ptr<InteropNotificationListener>> listeners;
+		{
+			auto lock = _externalNotificationListenerLock.AcquireSafe();
+			_callbacksEnabled = false;
+			listeners.swap(_externalNotificationListeners);
+		}
+
+		// Disable outside the owner lock. A callback can unregister itself, and
+		// Disable() must be able to wait for any callback already in progress.
+		for(shared_ptr<InteropNotificationListener>& listener : listeners) {
+			listener->Disable();
+		}
 	}
 };

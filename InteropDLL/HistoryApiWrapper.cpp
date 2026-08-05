@@ -10,6 +10,7 @@
 #include "Core/Shared/Movies/MovieManager.h"
 #include "Shared/Video/SoftwareRenderer.h"
 #include "InteropNotificationListeners.h"
+#include "Utilities/SimpleLock.h"
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
@@ -21,16 +22,57 @@
 	#include "Sdl/SdlSoundManager.h"
 #endif
 
-extern unique_ptr<Emulator> _emu;
+extern unique_ptr<Emulator>& _emu;
 extern bool _softwareRenderer;
 
-unique_ptr<Emulator> _historyPlayer;
-unique_ptr<IRenderingDevice> _historyRenderer;
-unique_ptr<IAudioDevice> _historySoundManager;
+SimpleLock& _historyLifecycleLock = *new SimpleLock();
+unique_ptr<Emulator>& _historyPlayer = *new unique_ptr<Emulator>();
+unique_ptr<IRenderingDevice>& _historyRenderer = *new unique_ptr<IRenderingDevice>();
+unique_ptr<IAudioDevice>& _historySoundManager = *new unique_ptr<IAudioDevice>();
 
 HistoryViewer* _historyViewer = nullptr;
 
-static InteropNotificationListeners _listeners;
+static InteropNotificationListeners& _listeners = *new InteropNotificationListeners();
+
+static void ReleaseHistoryPlayer(bool processExit)
+{
+	auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
+	if(!_historyPlayer) {
+		_historyViewer = nullptr;
+		return;
+	}
+
+	if(processExit && _historyPlayer->IsEmulationThread()) {
+		// Process exit can begin inside a history callback on any core-owned
+		// worker. Never join or destroy an unknown current worker; the OS will
+		// reclaim these objects.
+		_historyRenderer.release();
+		_historySoundManager.release();
+		_historyPlayer.release();
+		_historyViewer = nullptr;
+		return;
+	}
+
+	if(processExit) {
+		_historyPlayer->ReleaseForProcessExit();
+	} else {
+		_historyPlayer->Release();
+	}
+	_historyRenderer.reset();
+	_historySoundManager.reset();
+	_historyPlayer.reset();
+	_historyViewer = nullptr;
+}
+
+void HistoryViewerDisableCallbacksForProcessExit()
+{
+	_listeners.DisableCallbacks();
+}
+
+void HistoryViewerReleaseForProcessExit()
+{
+	ReleaseHistoryPlayer(true);
+}
 
 extern "C"
 {
@@ -41,15 +83,12 @@ extern "C"
 
 	DllExport void __stdcall HistoryViewerRelease()
 	{
-		_historyPlayer->Release();
-		_historyRenderer.reset();
-		_historySoundManager.reset();
-		_historyPlayer.reset();
-		_historyViewer = nullptr;
+		ReleaseHistoryPlayer(false);
 	}
 
 	DllExport void __stdcall HistoryViewerInitialize(void* windowHandle, void* viewerHandle)
 	{
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		_historyPlayer.reset(new Emulator());
 		_historyPlayer->Initialize();
 		_historyPlayer->GetSettings()->CopySettings(*_emu->GetSettings());

@@ -17,11 +17,61 @@ namespace Mesen.Utilities
 {
 	public static class LoadRomHelper
 	{
+		private static readonly object _pendingLoadLock = new();
+		private static readonly HashSet<Task> _pendingLoadTasks = new();
+		private static readonly CancellationTokenSource _loadShutdownCts = new();
+		private static bool _loadShutdownStarted;
+
+		private static bool IsLoadShutdownStarted
+		{
+			get {
+				lock(_pendingLoadLock) {
+					return _loadShutdownStarted;
+				}
+			}
+		}
+
+		private static Task RunTrackedLoad(Func<CancellationToken, Task> action)
+		{
+			Task task;
+			lock(_pendingLoadLock) {
+				if(_loadShutdownStarted) {
+					return Task.CompletedTask;
+				}
+
+				task = Task.Run(() => action(_loadShutdownCts.Token), _loadShutdownCts.Token);
+				_pendingLoadTasks.Add(task);
+			}
+
+			_ = task.ContinueWith(completedTask => {
+				lock(_pendingLoadLock) {
+					_pendingLoadTasks.Remove(completedTask);
+				}
+			}, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+			return task;
+		}
+
+		public static Task BeginShutdownAsync()
+		{
+			Task[] pendingLoads;
+			lock(_pendingLoadLock) {
+				_loadShutdownStarted = true;
+				pendingLoads = _pendingLoadTasks.ToArray();
+			}
+
+			_loadShutdownCts.Cancel();
+			return Task.WhenAll(pendingLoads);
+		}
+
 		public static async void LoadRom(ResourcePath romPath, ResourcePath? patchPath = null)
 		{
+			if(IsLoadShutdownStarted) {
+				return;
+			}
+
 			if(FolderHelper.IsArchiveFile(romPath)) {
 				ResourcePath? selectedRom = await SelectRomWindow.Show(romPath);
-				if(selectedRom == null) {
+				if(selectedRom == null || IsLoadShutdownStarted) {
 					return;
 				}
 				romPath = selectedRom.Value;
@@ -43,42 +93,55 @@ namespace Mesen.Utilities
 
 		private static void InternalLoadRom(ResourcePath romPath, ResourcePath? patchPath)
 		{
+			if(IsLoadShutdownStarted) {
+				return;
+			}
+
 			//Temporarily hide selection screen to allow displaying error messages
 			MainWindowViewModel.Instance.RecentGames.Visible = false;
 
-			Task.Run(() => {
+			_ = RunTrackedLoad(async shutdownToken => {
 				//Run in another thread to prevent deadlocks etc. when emulator notifications are processed UI-side
+				shutdownToken.ThrowIfCancellationRequested();
 				if(EmuApi.LoadRom(romPath, patchPath)) {
 					ConfigManager.Config.RecentFiles.AddRecentFile(romPath, patchPath);
 					ConfigManager.Config.Save();
 				}
-				ShowSelectionOnScreenAfterError();
+				await ShowSelectionOnScreenAfterError(shutdownToken);
 			});
 		}
 
 		public static void LoadRecentGame(string filename, bool forceLoadState)
 		{
+			if(IsLoadShutdownStarted) {
+				return;
+			}
+
 			//Temporarily hide selection screen to allow displaying error messages
 			MainWindowViewModel.Instance.RecentGames.Visible = false;
 
-			Task.Run(() => {
+			_ = RunTrackedLoad(async shutdownToken => {
 				//Run in another thread to prevent deadlocks etc. when emulator notifications are processed UI-side
+				shutdownToken.ThrowIfCancellationRequested();
 				if(File.Exists(filename)) {
 					EmuApi.LoadRecentGame(filename, !forceLoadState && ConfigManager.Config.Preferences.GameSelectionScreenMode == GameSelectionMode.PowerOn);
 				}
-				ShowSelectionOnScreenAfterError();
+				await ShowSelectionOnScreenAfterError(shutdownToken);
 			});
 		}
 
-		private static void ShowSelectionOnScreenAfterError()
+		private static async Task ShowSelectionOnScreenAfterError(CancellationToken shutdownToken)
 		{
 			if(ConfigManager.Config.Preferences.GameSelectionScreenMode != GameSelectionMode.Disabled) {
-				Thread.Sleep(3100);
+				await Task.Delay(3100, shutdownToken).ConfigureAwait(false);
+				shutdownToken.ThrowIfCancellationRequested();
 				if(!EmuApi.IsRunning()) {
 					//No game was loaded, show game selection screen again after ~3 seconds
 					//This allows error messages to be visible to the user
 					Dispatcher.UIThread.Post(() => {
-						MainWindowViewModel.Instance.RecentGames.Visible = true;
+						if(!IsLoadShutdownStarted) {
+							MainWindowViewModel.Instance.RecentGames.Visible = true;
+						}
 					});
 				}
 			}
@@ -86,6 +149,10 @@ namespace Mesen.Utilities
 
 		public static async void LoadPatchFile(string patchFile)
 		{
+			if(IsLoadShutdownStarted) {
+				return;
+			}
+
 			string? patchFolder = Path.GetDirectoryName(patchFile);
 			if(patchFolder == null) {
 				return;
@@ -103,16 +170,26 @@ namespace Mesen.Utilities
 				LoadRom(romsInFolder[0], patchFile);
 			} else {
 				Window? wnd = ApplicationHelper.GetMainWindow();
+				if(IsLoadShutdownStarted) {
+					return;
+				}
+
 				if(!EmuApi.IsRunning()) {
 					//Prompt the user for a rom to load
 					if(await MesenMsgBox.Show(wnd, "SelectRomIps", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK) {
+						if(IsLoadShutdownStarted) {
+							return;
+						}
 						string? filename = await FileDialogHelper.OpenFile(null, wnd, FileDialogHelper.RomExt);
-						if(filename != null) {
+						if(filename != null && !IsLoadShutdownStarted) {
 							LoadRom(filename, patchFile);
 						}
 					}
 				} else if(await MesenMsgBox.Show(wnd, "PatchAndReset", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK) {
 					//Confirm that the user wants to patch the current rom and reset
+					if(IsLoadShutdownStarted) {
+						return;
+					}
 					LoadRom(EmuApi.GetRomInfo().RomPath, patchFile);
 				}
 			}
@@ -136,6 +213,10 @@ namespace Mesen.Utilities
 
 		public static void LoadFile(string filename)
 		{
+			if(IsLoadShutdownStarted) {
+				return;
+			}
+
 			if(File.Exists(filename)) {
 				if(IsPatchFile(filename)) {
 					LoadPatchFile(filename);

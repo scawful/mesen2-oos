@@ -1,16 +1,53 @@
 ﻿using Avalonia.Controls;
 using System;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace Mesen.Interop
 {
 	public class NotificationListener : IDisposable
 	{
-		private static volatile bool _suppressCallbacks;
-		public static bool SuppressCallbacks
+		private static readonly object _callbackStateLock = new();
+		private static bool _suppressCallbacks;
+		private static int _callbacksInFlight;
+		private static TaskCompletionSource<bool>? _callbacksDrained;
+
+		public static Task SuppressAndWaitForCallbacksAsync()
 		{
-			get => _suppressCallbacks;
-			set => _suppressCallbacks = value;
+			lock(_callbackStateLock) {
+				_suppressCallbacks = true;
+				if(_callbacksInFlight == 0) {
+					return Task.CompletedTask;
+				}
+
+				_callbacksDrained ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+				return _callbacksDrained.Task;
+			}
+		}
+
+		private static bool TryBeginCallback()
+		{
+			lock(_callbackStateLock) {
+				if(_suppressCallbacks) {
+					return false;
+				}
+
+				_callbacksInFlight++;
+				return true;
+			}
+		}
+
+		private static void EndCallback()
+		{
+			TaskCompletionSource<bool>? callbacksDrained = null;
+			lock(_callbackStateLock) {
+				_callbacksInFlight--;
+				if(_callbacksInFlight == 0) {
+					callbacksDrained = _callbacksDrained;
+					_callbacksDrained = null;
+				}
+			}
+			callbacksDrained?.TrySetResult(true);
 		}
 
 		public delegate void NotificationCallback(int type, IntPtr parameter);
@@ -55,11 +92,11 @@ namespace Mesen.Interop
 
 		public void ProcessNotification(int type, IntPtr parameter)
 		{
-			try {
-				if(_suppressCallbacks) {
-					return;
-				}
+			if(!TryBeginCallback()) {
+				return;
+			}
 
+			try {
 				if(OnNotification == null) {
 					return;
 				}
@@ -87,6 +124,8 @@ namespace Mesen.Interop
 				} catch {
 					//Ignore logging failures during shutdown or core teardown
 				}
+			} finally {
+				EndCallback();
 			}
 		}
 	}

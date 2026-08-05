@@ -121,6 +121,10 @@ private:
 	int32_t _stopCode = 0;
 	bool _stopRequested = false;
 
+	// Keep release-only state at the end to preserve existing member offsets.
+	SimpleLock _releaseLock;
+	bool _releaseStarted = false;
+
 	void WaitForLock();
 	void WaitForPauseEnd();
 
@@ -130,6 +134,7 @@ private:
 
 	void BlockDebuggerRequests();
 	void ResetDebugger(bool startDebugger = false);
+	void ReleaseInternal(bool processExit);
 
 	double GetFrameDelay();
 
@@ -146,6 +151,7 @@ public:
 
 	void Initialize(bool enableShortcuts = true);
 	void Release();
+	void ReleaseForProcessExit();
 
 	void Run();
 	void Stop(bool sendNotification, bool preventRecentGameSave = false, bool saveBattery = true);

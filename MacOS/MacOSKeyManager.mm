@@ -106,7 +106,11 @@ MacOSKeyManager::~MacOSKeyManager()
 	for(auto joystick : _joysticks) {
 		if(joystick) SDL_JoystickClose(joystick);
 	}
-	SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK);
+
+	// The UI creates this manager on a worker thread and destroys it on the UI
+	// thread. SDL2-compat can block in IOHIDManagerUnscheduleFromRunLoop when
+	// joystick shutdown runs on a different run loop than initialization.
+	// This manager is process-lifetime, so leave subsystem cleanup to the OS.
 }
 
 void MacOSKeyManager::HandleModifiers(uint32_t flags)

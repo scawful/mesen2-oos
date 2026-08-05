@@ -5,7 +5,7 @@
 #include "Core/Netplay/GameServer.h"
 #include "Core/Netplay/GameClient.h"
 
-extern unique_ptr<Emulator> _emu;
+extern unique_ptr<Emulator>& _emu;
 
 extern "C" {
 	DllExport void __stdcall StartServer(uint16_t port, char* password) { _emu->GetGameServer()->StartServer(port, password); }

@@ -16,8 +16,10 @@
 #include "Core/Netplay/GameServer.h"
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
+#include "Utilities/SimpleLock.h"
 #include "Utilities/StringUtilities.h"
 #include "InteropNotificationListeners.h"
+#include <cstdlib>
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
@@ -37,19 +39,71 @@
 
 #include "Shared/Video/SoftwareRenderer.h"
 
-unique_ptr<IRenderingDevice> _renderer;
-unique_ptr<IAudioDevice> _soundManager;
-unique_ptr<IKeyManager> _keyManager;
-unique_ptr<IMouseManager> _mouseManager;
-unique_ptr<Emulator> _emu(new Emulator());
+// Keep owner slots process-lifetime. Normal and atexit paths reset them
+// explicitly; an atexit handler running inside a core-owned callback can leave
+// them allocated so static destruction never joins the current worker.
+unique_ptr<IRenderingDevice>& _renderer = *new unique_ptr<IRenderingDevice>();
+unique_ptr<IAudioDevice>& _soundManager = *new unique_ptr<IAudioDevice>();
+unique_ptr<IKeyManager>& _keyManager = *new unique_ptr<IKeyManager>();
+unique_ptr<IMouseManager>& _mouseManager = *new unique_ptr<IMouseManager>();
+SimpleLock& _interopReleaseLock = *new SimpleLock();
+unique_ptr<Emulator>& _emu = *new unique_ptr<Emulator>(new Emulator());
 bool _softwareRenderer = false;
+bool _exitCleanupRegistered = false;
 
 static void* _windowHandle = nullptr;
 static void* _viewerHandle = nullptr;
 
 static constexpr char* _buildDateTime = __DATE__ ", " __TIME__;
 
-static InteropNotificationListeners _listeners;
+static InteropNotificationListeners& _listeners = *new InteropNotificationListeners();
+
+void HistoryViewerDisableCallbacksForProcessExit();
+void HistoryViewerReleaseForProcessExit();
+
+static void ReleaseEmulator(bool processExit)
+{
+	unique_ptr<Emulator> emu;
+	unique_ptr<IKeyManager> keyManager;
+	unique_ptr<IAudioDevice> soundManager;
+	unique_ptr<IRenderingDevice> renderer;
+	{
+		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
+		if(!_emu) {
+			return;
+		}
+
+		// Transfer ownership as one operation so a concurrent Release call
+		// observes an empty owner instead of using an object being deleted.
+		emu = std::move(_emu);
+		keyManager = std::move(_keyManager);
+		soundManager = std::move(_soundManager);
+		renderer = std::move(_renderer);
+	}
+
+	if(processExit) {
+		emu->ReleaseForProcessExit();
+	} else {
+		emu->Release();
+	}
+	renderer.reset();
+	soundManager.reset();
+	keyManager.reset();
+	emu.reset();
+}
+
+static void ReleaseAtProcessExit()
+{
+	// This handler is registered after static initialization, so it runs before
+	// the MessageManager and SocketServer statics begin reverse-order teardown.
+	_listeners.DisableCallbacks();
+	HistoryViewerDisableCallbacksForProcessExit();
+	if(InteropNotificationListener::HasCallbacksInFlight()) {
+		return;
+	}
+	HistoryViewerReleaseForProcessExit();
+	ReleaseEmulator(true);
+}
 
 struct InteropRomInfo
 {
@@ -73,8 +127,16 @@ extern "C" {
 
 	DllExport void __stdcall InitDll()
 	{
+		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
 		if(!_emu) {
 			return;
+		}
+		if(!_exitCleanupRegistered) {
+			if(std::atexit(ReleaseAtProcessExit) == 0) {
+				_exitCleanupRegistered = true;
+			} else {
+				MessageManager::Log("[Shutdown] Failed to register process-exit cleanup");
+			}
 		}
 		_emu->Initialize();
 		KeyManager::SetSettings(_emu->GetSettings());
@@ -82,6 +144,7 @@ extern "C" {
 
 	DllExport void __stdcall InitializeEmu(const char* homeFolder, void *windowHandle, void *viewerHandle, bool softwareRenderer, bool noAudio, bool noVideo, bool noInput)
 	{
+		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
 		if(!_emu) {
 			return;
 		}
@@ -140,6 +203,7 @@ extern "C" {
 
 	DllExport bool __stdcall LoadRom(char* filename, char* patchFile)
 	{
+		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
 		if(!_emu) {
 			return false;
 		}
@@ -230,6 +294,7 @@ extern "C" {
 
 	DllExport void __stdcall Stop()
 	{
+		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
 		if(!_emu) {
 			return;
 		}
@@ -267,15 +332,7 @@ extern "C" {
 
 	DllExport void __stdcall Release()
 	{
-		if(_emu) {
-			_emu->Stop(true);
-			_emu->Release();
-		}
-
-		_renderer.reset();
-		_soundManager.reset();
-		_keyManager.reset();
-		_emu.reset();
+		ReleaseEmulator(false);
 	}
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)

@@ -6,9 +6,9 @@
 #include "Utilities/StringUtilities.h"
 #include "Core/Shared/Interfaces/IMouseManager.h"
 
-extern unique_ptr<IKeyManager> _keyManager;
-extern unique_ptr<IMouseManager> _mouseManager;
-extern unique_ptr<Emulator> _emu;
+extern unique_ptr<IKeyManager>& _keyManager;
+extern unique_ptr<IMouseManager>& _mouseManager;
+extern unique_ptr<Emulator>& _emu;
 
 extern "C" 
 {

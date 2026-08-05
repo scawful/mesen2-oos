@@ -7,8 +7,8 @@
 #include "Core/Shared/SettingTypes.h"
 #include "Utilities/StringUtilities.h"
 
-extern unique_ptr<Emulator> _emu;
-extern unique_ptr<IAudioDevice> _soundManager;
+extern unique_ptr<Emulator>& _emu;
+extern unique_ptr<IAudioDevice>& _soundManager;
 
 extern "C" {
 	DllExport void __stdcall SetVideoConfig(VideoConfig config)

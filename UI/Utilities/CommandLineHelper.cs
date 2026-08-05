@@ -138,26 +138,29 @@ public class CommandLineHelper
 		}
 	}
 
-	public void OnAfterInit(MainWindow wnd, CancellationToken shutdownToken)
+	public Task OnAfterInit(MainWindow wnd, CancellationToken shutdownToken)
 	{
+		Task fullscreenTask = Task.CompletedTask;
 		if(Fullscreen && FilesToLoad.Count == 0) {
-			wnd.ToggleFullscreen();
+			fullscreenTask = wnd.ToggleFullscreen();
 			Fullscreen = false;
 		}
 
 		if(OpenDebuggerRequested || OpenStateInspectorRequested || EnableWatchHudRequested) {
 			if(shutdownToken.IsCancellationRequested) {
-				return;
+				return fullscreenTask;
 			}
 
-			Task.Run(async () => {
+			Task debugAutomationTask = Task.Run(async () => {
 				const int timeoutMs = 10000;
 				const int pollMs = 100;
 				int waitedMs = 0;
+				shutdownToken.ThrowIfCancellationRequested();
 				RomInfo romInfo = EmuApi.GetRomInfo();
 				while(!shutdownToken.IsCancellationRequested && romInfo.Format == RomFormat.Unknown && waitedMs < timeoutMs) {
-					await Task.Delay(pollMs).ConfigureAwait(false);
+					await Task.Delay(pollMs, shutdownToken).ConfigureAwait(false);
 					waitedMs += pollMs;
+					shutdownToken.ThrowIfCancellationRequested();
 					romInfo = EmuApi.GetRomInfo();
 				}
 
@@ -172,8 +175,11 @@ public class CommandLineHelper
 
 					ProcessDebugAutomation(wnd);
 				});
-			});
+			}, shutdownToken);
+			return Task.WhenAll(fullscreenTask, debugAutomationTask);
 		}
+
+		return fullscreenTask;
 	}
 
 	private static string ConvertArg(string arg)
@@ -257,8 +263,12 @@ public class CommandLineHelper
 		return args.Any(arg => CommandLineHelper.ConvertArg(arg).ToLowerInvariant() == "testrunner");
 	}
 
-	public void ProcessPostLoadCommandSwitches(MainWindow wnd)
+	public Task ProcessPostLoadCommandSwitches(MainWindow wnd, CancellationToken shutdownToken)
 	{
+		if(shutdownToken.IsCancellationRequested) {
+			return Task.CompletedTask;
+		}
+
 		if(LuaScriptsToLoad.Count > 0) {
 			foreach(string luaScript in LuaScriptsToLoad) {
 				if(OpenScriptWindowRequested) {
@@ -282,17 +292,23 @@ public class CommandLineHelper
 			RecordApi.MovieRecord(options);
 		}
 
+		Task fullscreenTask = Task.CompletedTask;
 		if(Fullscreen) {
-			wnd.ToggleFullscreen();
+			fullscreenTask = wnd.ToggleFullscreen();
 		}
 
+		Task loadLastSessionTask = Task.CompletedTask;
 		if(LoadLastSessionRequested) {
-			Task.Run(() => {
+			loadLastSessionTask = Task.Run(() => {
+				shutdownToken.ThrowIfCancellationRequested();
 				EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = Config.Shortcuts.EmulatorShortcut.LoadLastSession });
-			});
+			}, shutdownToken);
 		}
 
-		ProcessDebugAutomation(wnd);
+		if(!shutdownToken.IsCancellationRequested) {
+			ProcessDebugAutomation(wnd);
+		}
+		return Task.WhenAll(fullscreenTask, loadLastSessionTask);
 	}
 
 	private void LoadScriptHeadless(string luaScript)

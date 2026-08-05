@@ -44,7 +44,14 @@ namespace Mesen.Windows
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
 		private bool _shutdownStarted = false;
+		private bool _shutdownCompleted = false;
 		private readonly CancellationTokenSource _shutdownCts = new();
+		private Task _initializationTask = Task.CompletedTask;
+		private Task _postInitializationTask = Task.CompletedTask;
+		private Task _pendingLoadShutdownTask = Task.CompletedTask;
+		private Task _postLoadTask = Task.CompletedTask;
+		private Task _fullscreenTask = Task.CompletedTask;
+		private Task _notificationShutdownTask = Task.CompletedTask;
 		
 		private bool _preventFullscreenToggle = false;
 		private bool _headlessRequested = false;
@@ -146,33 +153,59 @@ namespace Mesen.Windows
 		protected override void OnClosing(WindowClosingEventArgs e)
 		{
 			base.OnClosing(e);
+			if(_shutdownCompleted) {
+				return;
+			}
+
+			e.Cancel = true;
+			if(_shutdownStarted) {
+				return;
+			}
+
 			if(_needCloseValidation) {
-				e.Cancel = true;
 				ValidateExit();
-			} else {
-				//Close all other windows first
-				DebugWindowManager.CloseAllWindows();
-				foreach(Window wnd in ApplicationHelper.GetOpenedWindows()) {
-					if(wnd != this) {
-						wnd.Close();
-					}
-				}
+				return;
+			}
 
-				if(ApplicationHelper.GetOpenedWindows().Count > 1) {
-					e.Cancel = true;
-					return;
+			//Close all other windows first
+			DebugWindowManager.CloseAllWindows();
+			foreach(Window wnd in ApplicationHelper.GetOpenedWindows()) {
+				if(wnd != this) {
+					wnd.Close();
 				}
+			}
 
-				if(_shutdownStarted) {
-					return;
-				}
+			if(ApplicationHelper.GetOpenedWindows().Count > 1) {
+				return;
+			}
 
+			_shutdownStarted = true;
+			_shutdownCts.Cancel();
+			_pendingLoadShutdownTask = LoadRomHelper.BeginShutdownAsync();
+			_timerBackgroundFlag.Stop();
+			_mouseManager.Dispose();
+			_notificationShutdownTask = NotificationListener.SuppressAndWaitForCallbacksAsync();
+			_ = CompleteShutdownAsync();
+		}
+
+		private async Task CompleteShutdownAsync()
+		{
+			try {
 				Stopwatch shutdownTimer = Stopwatch.StartNew();
-				bool traceShutdown = ShouldTraceShutdown();
+				bool traceShutdown = false;
+				try {
+					traceShutdown = ShouldTraceShutdown();
+				} catch {
+					// Environment access must not prevent terminal cleanup.
+				}
 				void Trace(string message)
 				{
 					if(traceShutdown) {
-						EmuApi.WriteLogEntry("[Shutdown] " + message);
+						try {
+							EmuApi.WriteLogEntry("[Shutdown] " + message);
+						} catch {
+							// Logging must not prevent terminal cleanup.
+						}
 					}
 				}
 
@@ -180,16 +213,38 @@ namespace Mesen.Windows
 				{
 					Stopwatch stepTimer = Stopwatch.StartNew();
 					Trace("BEGIN " + label);
-					action();
-					stepTimer.Stop();
-					Trace("END   " + label + " (" + stepTimer.ElapsedMilliseconds + "ms)");
+					try {
+						action();
+					} catch(Exception ex) {
+						Trace("FAIL  " + label + ": " + ex);
+					} finally {
+						stepTimer.Stop();
+						Trace("END   " + label + " (" + stepTimer.ElapsedMilliseconds + "ms)");
+					}
+				}
+
+				async Task AwaitStartupStep(string label, Task task)
+				{
+					Trace("BEGIN " + label);
+					try {
+						await task;
+					} catch(OperationCanceledException) when(_shutdownCts.IsCancellationRequested) {
+						Trace(label + " canceled");
+					} catch(Exception ex) {
+						Trace(label + " failed: " + ex);
+					} finally {
+						Trace("END   " + label);
+					}
 				}
 
 				Trace("Main window shutdown started");
-				_shutdownStarted = true;
-				TraceStep("_shutdownCts.Cancel", () => _shutdownCts.Cancel());
-				TraceStep("_timerBackgroundFlag.Stop", () => _timerBackgroundFlag.Stop());
-				TraceStep("NotificationListener.SuppressCallbacks=true", () => NotificationListener.SuppressCallbacks = true);
+				await AwaitStartupStep("initialization task", _initializationTask);
+				await AwaitStartupStep("post-initialization task", _postInitializationTask);
+				await AwaitStartupStep("pending ROM loads", _pendingLoadShutdownTask);
+				await AwaitStartupStep("post-load task", _postLoadTask);
+				await AwaitStartupStep("fullscreen task", _fullscreenTask);
+				await AwaitStartupStep("notification callbacks", _notificationShutdownTask);
+
 				TraceStep("WatchHudService.Shutdown", () => WatchHudService.Shutdown());
 				TraceStep("DebugApi.ReleaseDebugger", () => DebugApi.ReleaseDebugger());
 				TraceStep("SingleInstance unsubscribe", () => SingleInstance.Instance.ArgumentsReceived -= Instance_ArgumentsReceived);
@@ -200,6 +255,9 @@ namespace Mesen.Windows
 				TraceStep("Config.Save", () => ConfigManager.Config.Save());
 				shutdownTimer.Stop();
 				Trace("Main window shutdown finished in " + shutdownTimer.ElapsedMilliseconds + "ms");
+			} finally {
+				_shutdownCompleted = true;
+				Close();
 			}
 		}
 
@@ -252,10 +310,13 @@ namespace Mesen.Windows
 			_timerBackgroundFlag.Tick += timerUpdateBackgroundFlag;
 			_timerBackgroundFlag.Start();
 			
-			Task.Run(() => {
+			CancellationToken shutdownToken = _shutdownCts.Token;
+			_initializationTask = Task.Run(async () => {
+				shutdownToken.ThrowIfCancellationRequested();
 				CommandLineHelper cmdLine = new CommandLineHelper(Program.CommandLineArgs, true);
 				_cmdLine = cmdLine;
 				_headlessRequested = cmdLine.HeadlessRequested;
+				shutdownToken.ThrowIfCancellationRequested();
 
 				EmuApi.InitializeEmu(
 					ConfigManager.HomeFolder,
@@ -266,6 +327,7 @@ namespace Mesen.Windows
 					cmdLine.NoVideo,
 					cmdLine.NoInput
 				);
+				shutdownToken.ThrowIfCancellationRequested();
 				_oraclePanelRefreshEnabled = true;
 
 				ConfigManager.Config.RemoveObsoleteConfig();
@@ -273,13 +335,16 @@ namespace Mesen.Windows
 				//InitializeDefaults must be after InitializeEmu, otherwise keybindings will be empty
 				ConfigManager.Config.InitializeDefaults();
 				ConfigManager.Config.UpgradeConfig();
+				shutdownToken.ThrowIfCancellationRequested();
 
 				_listener = new NotificationListener();
 				_listener.OnNotification += OnNotification;
 
 				_model.Init(this);
+				shutdownToken.ThrowIfCancellationRequested();
 
 				ConfigManager.Config.ApplyConfig();
+				shutdownToken.ThrowIfCancellationRequested();
 
 				if(ConfigManager.Config.Preferences.OverrideGameFolder && Directory.Exists(ConfigManager.Config.Preferences.GameFolder)) {
 					EmuApi.AddKnownGameFolder(ConfigManager.Config.Preferences.GameFolder);
@@ -290,22 +355,35 @@ namespace Mesen.Windows
 
 				ConfigManager.Config.Preferences.UpdateFileAssociations();
 				SingleInstance.Instance.ArgumentsReceived += Instance_ArgumentsReceived;
+				shutdownToken.ThrowIfCancellationRequested();
 
-				Dispatcher.UIThread.Post(() => {
+				await Dispatcher.UIThread.InvokeAsync(() => {
+					if(shutdownToken.IsCancellationRequested) {
+						return;
+					}
+
 					cmdLine.LoadFiles();
-					cmdLine.OnAfterInit(this, _shutdownCts.Token);
+					_postInitializationTask = cmdLine.OnAfterInit(this, shutdownToken);
 					ApplyHeadlessMode();
 
 					if(ConfigManager.Config.Preferences.AutomaticallyCheckForUpdates) {
 						_model.MainMenu.CheckForUpdate(this, true);
 					}
 				});
-			});
+			}, shutdownToken);
 		}
 
 		private void Instance_ArgumentsReceived(object? sender, ArgumentsReceivedEventArgs e)
 		{
+			if(_shutdownStarted || _shutdownCts.IsCancellationRequested) {
+				return;
+			}
+
 			Dispatcher.UIThread.Post(() => {
+				if(_shutdownStarted || _shutdownCts.IsCancellationRequested) {
+					return;
+				}
+
 				CommandLineHelper cmdLine = new(e.Args, false);
 				ConfigManager.Config.ApplyConfig();
 				cmdLine.LoadFiles();
@@ -314,7 +392,7 @@ namespace Mesen.Windows
 
 		private void OnNotification(NotificationEventArgs e)
 		{
-			if(_shutdownStarted) {
+			if(IsShutdownPending) {
 				return;
 			}
 
@@ -325,13 +403,13 @@ namespace Mesen.Windows
 					CheatCodes.ApplyCheats();
 					RomInfo romInfo = EmuApi.GetRomInfo();
 					
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
 						_model.RomInfo = romInfo;
 						bool isAudioFile = _model.AudioPlayer != null;
 						if(wasAudioFile != isAudioFile) {
 							//Force window size update when switching between an audio file and a regular rom
-							Dispatcher.UIThread.Post(() => {
+							PostUnlessShuttingDown(() => {
 								ProcessResolutionChange();
 							});
 						}
@@ -345,12 +423,16 @@ namespace Mesen.Windows
 						evtParams = Marshal.PtrToStructure<GameLoadedEventParams>(e.Parameter);
 					}
 					if(!evtParams.IsPowerCycle) {
-						Dispatcher.UIThread.Post(() => {
+						PostUnlessShuttingDown(() => {
 							_model.RecentGames.Visible = false;
 
 							DispatcherTimer.RunOnce(() => {
+								if(IsShutdownPending) {
+									return;
+								}
+
 								if(_cmdLine != null) {
-									_cmdLine?.ProcessPostLoadCommandSwitches(this);
+									_postLoadTask = _cmdLine.ProcessPostLoadCommandSwitches(this, _shutdownCts.Token);
 									_cmdLine = null;
 								}
 
@@ -364,33 +446,33 @@ namespace Mesen.Windows
 						});
 					}
 
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						ApplicationHelper.GetExistingWindow<HdPackBuilderWindow>()?.Close();
 					});
 					break;
 
 				case ConsoleNotificationType.DebuggerResumed:
 				case ConsoleNotificationType.GameResumed:
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						_model.RecentGames.Visible = false;
 					});
 					break;
 
 				case ConsoleNotificationType.RequestConfigChange:
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						UpdateInputConfiguration();
 					});
 					break;
 
 				case ConsoleNotificationType.EmulationStopped:
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						_model.RomInfo = new RomInfo();
 						_model.RecentGames.Init(GameScreenMode.RecentGames);
 					});
 					break;
 
 				case ConsoleNotificationType.ResolutionChanged:
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						ProcessResolutionChange();
 					});
 					break;
@@ -400,7 +482,7 @@ namespace Mesen.Windows
 						break;
 					}
 					ExecuteShortcutParams p = Marshal.PtrToStructure<ExecuteShortcutParams>(e.Parameter);
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						_shortcutHandler.ExecuteShortcut(p.Shortcut);
 					});
 					break;
@@ -412,14 +494,19 @@ namespace Mesen.Windows
 					MissingFirmwareMessage msg = Marshal.PtrToStructure<MissingFirmwareMessage>(e.Parameter);
 					TaskCompletionSource tcs = new TaskCompletionSource();
 					Dispatcher.UIThread.Post(async () => {
-						await FirmwareHelper.RequestFirmwareFile(msg);
-						tcs.SetResult();
+						try {
+							if(!IsShutdownPending) {
+								await FirmwareHelper.RequestFirmwareFile(msg);
+							}
+						} finally {
+							tcs.TrySetResult();
+						}
 					});
 					tcs.Task.Wait();
 					break;
 
 				case ConsoleNotificationType.BeforeGameLoad:
-					Dispatcher.UIThread.Post(() => {
+					PostUnlessShuttingDown(() => {
 						ApplicationHelper.GetExistingWindow<HdPackBuilderWindow>()?.Close();
 					});
 					break;
@@ -432,6 +519,17 @@ namespace Mesen.Windows
 					_softwareRenderer.UpdateSoftwareRenderer(frame);
 					break;
 			}
+		}
+
+		private bool IsShutdownPending => _shutdownStarted || _shutdownCts.IsCancellationRequested;
+
+		private void PostUnlessShuttingDown(Action action)
+		{
+			Dispatcher.UIThread.Post(() => {
+				if(!IsShutdownPending) {
+					action();
+				}
+			});
 		}
 
 		private static void UpdateInputConfiguration()
@@ -555,15 +653,15 @@ namespace Mesen.Windows
 			ResizeRenderer();
 		}
 
-		public void ToggleFullscreen()
+		public Task ToggleFullscreen()
 		{
-			if(_preventFullscreenToggle) {
-				return;
+			if(_shutdownStarted || _shutdownCts.IsCancellationRequested || _preventFullscreenToggle) {
+				return Task.CompletedTask;
 			}
 
 			_preventFullscreenToggle = true;
 			if(WindowState == WindowState.FullScreen) {
-				Task.Run(() => {
+				_fullscreenTask = Task.Run(() => {
 					if(ConfigManager.Config.Video.UseExclusiveFullscreen) {
 						EmuApi.SetExclusiveFullscreenMode(false, _renderer.Handle);
 					}
@@ -577,6 +675,7 @@ namespace Mesen.Windows
 						_preventFullscreenToggle = false;
 					});
 				});
+				return _fullscreenTask;
 			} else {
 				_originalSize = ClientSize;
 				_originalPos = Position;
@@ -586,20 +685,23 @@ namespace Mesen.Windows
 					if(!EmuApi.IsRunning()) {
 						//Prevent entering fullscreen mode until a game is loaded
 						_preventFullscreenToggle = false;
-						return;
+						return Task.CompletedTask;
 					}
 
 					WindowState = WindowState.FullScreen;
 
-					Task.Run(() => {
+					_fullscreenTask = Task.Run(() => {
 						EmuApi.SetExclusiveFullscreenMode(true, TryGetPlatformHandle()?.Handle ?? IntPtr.Zero);
 						_preventFullscreenToggle = false;
 					});
+					return _fullscreenTask;
 				} else {
 					WindowState = WindowState.FullScreen;
 					_preventFullscreenToggle = false;
 				}
 			}
+
+			return Task.CompletedTask;
 		}
 
 		protected override void OnLostFocus(RoutedEventArgs e)

@@ -94,10 +94,21 @@ Emulator::Emulator() :
 
 Emulator::~Emulator()
 {
+	// The interop owner normally calls Release(), but process termination can
+	// destroy this object directly while the emulation thread is still active.
+	// Stop and join that thread before member destruction begins, without
+	// attempting persistence after other process-wide state may be gone.
+	ReleaseInternal(true);
 }
 
 void Emulator::Initialize(bool enableShortcuts)
 {
+	// PGO and other direct users can reuse an Emulator after Release().  Hold
+	// the lifecycle lock while making the next release eligible and restarting
+	// the owned worker threads.
+	auto releaseLock = _releaseLock.AcquireSafe();
+	_releaseStarted = false;
+
 	_systemActionManager.reset(new SystemActionManager(this));
 	if(enableShortcuts) {
 		_shortcutKeyHandler.reset(new ShortcutKeyHandler(this));
@@ -114,13 +125,32 @@ void Emulator::Initialize(bool enableShortcuts)
 
 void Emulator::Release()
 {
+	ReleaseInternal(false);
+}
+
+void Emulator::ReleaseForProcessExit()
+{
+	ReleaseInternal(true);
+}
+
+void Emulator::ReleaseInternal(bool processExit)
+{
+	// Release can be reached through the managed shutdown path and again from
+	// the destructor.  Running it twice would access devices already destroyed
+	// by the interop owner.
+	auto releaseLock = _releaseLock.AcquireSafe();
+	if(_releaseStarted) {
+		return;
+	}
+	_releaseStarted = true;
+
 	bool traceShutdown = TraceShutdownEnabled();
 	auto releaseStart = std::chrono::steady_clock::now();
 	if(traceShutdown) {
 		MessageManager::Log("[Shutdown] Emulator::Release BEGIN");
 	}
 
-	Stop(true);
+	Stop(!processExit, processExit, !processExit);
 	if(traceShutdown) {
 		MessageManager::Log("[Shutdown] Emulator::Release after Stop()");
 	}
