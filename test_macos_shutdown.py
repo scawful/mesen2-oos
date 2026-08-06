@@ -204,6 +204,57 @@ raise AssertionError("exit returned")
 """
 
 
+CROSS_THREAD_CALLBACK_EXIT_CHILD = r"""
+import ctypes
+import os
+import sys
+import threading
+
+core_path, home = sys.argv[1:]
+os.makedirs(home, exist_ok=True)
+os.environ["MESEN2_SOCKET_PATH"] = os.path.join(home, "mesen.sock")
+
+core = ctypes.CDLL(core_path)
+core.InitDll.argtypes = []
+callback_type = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_void_p)
+core.RegisterNotificationCallback.argtypes = [callback_type]
+core.RegisterNotificationCallback.restype = ctypes.c_void_p
+
+class ExecuteShortcutParams(ctypes.Structure):
+    _fields_ = [
+        ("shortcut", ctypes.c_int),
+        ("param", ctypes.c_uint32),
+        ("param_ptr", ctypes.c_void_p),
+    ]
+
+core.ExecuteShortcut.argtypes = [ExecuteShortcutParams]
+libc = ctypes.CDLL(None)
+libc.exit.argtypes = [ctypes.c_int]
+callback_entered = threading.Event()
+hold_callback = threading.Event()
+
+def on_notification(notification_type, parameter):
+    callback_entered.set()
+    hold_callback.wait(30)
+
+callback = callback_type(on_notification)
+core.InitDll()
+assert core.RegisterNotificationCallback(callback)
+worker = threading.Thread(
+    target=lambda: core.ExecuteShortcut(ExecuteShortcutParams(0, 0, None))
+)
+worker.start()
+assert callback_entered.wait(5), "callback did not start"
+print("cross-thread callback active", flush=True)
+
+# The atexit handler runs on this thread while the callback and its interop API
+# are still active elsewhere. It must fail fast rather than waiting on a cycle
+# in which that callback needs this thread.
+libc.exit(0)
+raise AssertionError("exit returned")
+"""
+
+
 EXIT_FROM_EMULATION_CALLBACK_CHILD = r"""
 import ctypes
 import os
@@ -557,7 +608,7 @@ def test_callbacks_do_not_hold_lock_while_calling_foreign_code(tmp_path: Path) -
     assert "nested callback returned" in result.stdout
 
 
-def test_process_exit_from_callback_does_not_deadlock(tmp_path: Path) -> None:
+def test_process_exit_from_callback_fails_fast_without_deadlock(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -571,7 +622,27 @@ def test_process_exit_from_callback_does_not_deadlock(tmp_path: Path) -> None:
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_process_exit_with_callback_active_on_other_thread_fails_fast(
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(CROSS_THREAD_CALLBACK_EXIT_CHILD),
+            str(_core_path()),
+            str(tmp_path / "home"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cross-thread callback active" in result.stdout
 
 
 def test_process_exit_from_emulation_callback_does_not_self_join(tmp_path: Path) -> None:
@@ -595,7 +666,7 @@ def test_process_exit_from_emulation_callback_does_not_self_join(tmp_path: Path)
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "exit on emulation thread" in result.stdout
 
 
@@ -620,7 +691,7 @@ def test_process_exit_from_decoder_callback_does_not_self_join(tmp_path: Path) -
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "exit on decoder thread" in result.stdout
 
 
@@ -645,7 +716,7 @@ def test_process_exit_from_renderer_callback_does_not_deadlock(tmp_path: Path) -
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "exit on renderer thread" in result.stdout
 
 
@@ -667,7 +738,7 @@ def test_unregister_then_process_exit_from_callback_is_safe(tmp_path: Path) -> N
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "unregister then exit" in result.stdout
 
 

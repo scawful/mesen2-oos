@@ -52,6 +52,7 @@ namespace Mesen.Windows
 		private Task _postLoadTask = Task.CompletedTask;
 		private Task _fullscreenTask = Task.CompletedTask;
 		private Task _notificationShutdownTask = Task.CompletedTask;
+		private Task _emulatorOperationShutdownTask = Task.CompletedTask;
 		
 		private bool _preventFullscreenToggle = false;
 		private bool _headlessRequested = false;
@@ -181,6 +182,7 @@ namespace Mesen.Windows
 
 			_shutdownStarted = true;
 			_shutdownCts.Cancel();
+			_emulatorOperationShutdownTask = EmulatorOperationTracker.BeginShutdownAsync();
 			_pendingLoadShutdownTask = LoadRomHelper.BeginShutdownAsync();
 			_timerBackgroundFlag.Stop();
 			_mouseManager.Dispose();
@@ -244,6 +246,7 @@ namespace Mesen.Windows
 				await AwaitStartupStep("post-load task", _postLoadTask);
 				await AwaitStartupStep("fullscreen task", _fullscreenTask);
 				await AwaitStartupStep("notification callbacks", _notificationShutdownTask);
+				await AwaitStartupStep("emulator operations", _emulatorOperationShutdownTask);
 
 				TraceStep("WatchHudService.Shutdown", () => WatchHudService.Shutdown());
 				TraceStep("DebugApi.ReleaseDebugger", () => DebugApi.ReleaseDebugger());

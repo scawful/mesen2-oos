@@ -247,7 +247,7 @@ MACOS_SHUTDOWN_BUILD_DIR ?= build-codex/test-macos-shutdown
 test-macos-shutdown:
 	cmake -S . -B "$(MACOS_SHUTDOWN_BUILD_DIR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	cmake --build "$(MACOS_SHUTDOWN_BUILD_DIR)" --target MesenCore --parallel
-	MESEN2_CORE_PATH="$(CURDIR)/$(MACOS_SHUTDOWN_BUILD_DIR)/lib/$(MESENPLATFORM)/lib$(SHAREDLIB)" python3 -m pytest -q test_macos_shutdown.py
+	MESEN2_CORE_PATH="$(CURDIR)/$(MACOS_SHUTDOWN_BUILD_DIR)/lib/$(MESENPLATFORM)/lib$(SHAREDLIB)" python3 -m pytest -q test_macos_shutdown.py test_interop_lifecycle.py
 
 pgohelper: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 	mkdir -p PGOHelper/$(OBJFOLDER) && cd PGOHelper/$(OBJFOLDER) && $(CXX) $(CXXFLAGS) $(LINKCHECKUNRESOLVED) -o pgohelper ../PGOHelper.cpp ../../bin/pgohelperlib.so -pthread $(FSLIB) $(SDL2LIB) $(LIBEVDEVLIB) $(X11LIB)

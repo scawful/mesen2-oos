@@ -2,6 +2,7 @@
 #include "Core/Shared/RecordedRomTest.h"
 #include "Core/Shared/Emulator.h"
 #include "Core/Shared/EmuSettings.h"
+#include "InteropLifecycle.h"
 
 extern unique_ptr<Emulator>& _emu;
 shared_ptr<RecordedRomTest> _recordedRomTest;
@@ -10,6 +11,7 @@ extern "C"
 {
 	DllExport RomTestResult __stdcall RunRecordedTest(char* filename, bool inBackground)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(RomTestResult {});
 		if(inBackground) {
 			unique_ptr<Emulator> emu(new Emulator());
 			emu->Initialize();
@@ -24,6 +26,9 @@ extern "C"
 
 	DllExport uint64_t __stdcall RunTest(char* filename, uint32_t address, MemoryType memType)
 	{
+		// This uses an independent emulator, but still depends on process-wide
+		// core statics that a terminal Release/process exit tears down.
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
 		unique_ptr<Emulator> emu(new Emulator());
 		emu->Initialize();
 		emu->GetSettings()->SetFlag(EmulationFlags::ConsoleMode);
@@ -55,17 +60,19 @@ extern "C"
 
 	DllExport void __stdcall RomTestRecord(char* filename, bool reset)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		_recordedRomTest.reset(new RecordedRomTest(_emu.get(), false));
 		_recordedRomTest->Record(filename, reset);
 	}
 	
 	DllExport void __stdcall RomTestStop()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_recordedRomTest) {
 			_recordedRomTest->Stop();
 			_recordedRomTest.reset();
 		}
 	}
 
-	DllExport bool __stdcall RomTestRecording() { return _recordedRomTest != nullptr; }
+	DllExport bool __stdcall RomTestRecording() { INTEROP_EMU_LEASE_OR_RETURN_VALUE(false); return _recordedRomTest != nullptr; }
 }

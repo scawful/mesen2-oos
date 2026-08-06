@@ -48,10 +48,10 @@ namespace Mesen.Interop
 		[DllImport(DllPath)] public static extern void Stop();
 		[DllImport(DllPath)] public static extern Int32 GetStopCode();
 
-		public static void Reset() { Task.Run(() => EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecReset })); }
-		public static void PowerCycle() { Task.Run(() => EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecPowerCycle })); }
-		public static void PowerOff() { Task.Run(() => EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecPowerOff })); }
-		public static void ReloadRom() { Task.Run(() => EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecReloadRom })); }
+		public static void Reset() { _ = ExecuteShortcutAsync(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecReset }); }
+		public static void PowerCycle() { _ = ExecuteShortcutAsync(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecPowerCycle }); }
+		public static void PowerOff() { _ = ExecuteShortcutAsync(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecPowerOff }); }
+		public static void ReloadRom() { _ = ExecuteShortcutAsync(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.ExecReloadRom }); }
 
 		[DllImport(DllPath)] public static extern void Pause();
 		[DllImport(DllPath)] public static extern void Resume();
@@ -91,6 +91,13 @@ namespace Mesen.Interop
 		[DllImport(DllPath)] public static extern void SetWatchHudData([MarshalAs(UnmanagedType.LPUTF8Str)]string dataJson);
 
 		[DllImport(DllPath)] public static extern void ExecuteShortcut(ExecuteShortcutParams p);
+		public static Task ExecuteShortcutAsync(ExecuteShortcutParams p)
+		{
+			return EmulatorOperationTracker.Run(shutdownToken => {
+				shutdownToken.ThrowIfCancellationRequested();
+				ExecuteShortcut(p);
+			});
+		}
 		[DllImport(DllPath)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool IsShortcutAllowed(EmulatorShortcut shortcut, UInt32 shortcutParam = 0);
 
 		[DllImport(DllPath, EntryPoint = "GetLog")] private static extern void GetLogWrapper(IntPtr outLog, Int32 maxLength);

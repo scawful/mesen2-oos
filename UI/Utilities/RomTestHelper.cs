@@ -40,14 +40,15 @@ namespace Mesen.Utilities
 
 		public static void RunAllTests()
 		{
-			Task.Run(() => {
+			_ = EmulatorOperationTracker.Run(shutdownToken => {
 				ConcurrentDictionary<string, RomTestResult> results = new();
 
 				List<string> testFiles = Directory.EnumerateFiles(ConfigManager.TestFolder, "*.mtp", SearchOption.AllDirectories).ToList();
-				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2 }, (string testFile) => {
+				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2, CancellationToken = shutdownToken }, (string testFile) => {
 					string entryName = testFile.Substring(ConfigManager.TestFolder.Length);
 					results[entryName] = TestApi.RunRecordedTest(testFile, true);
 				});
+				shutdownToken.ThrowIfCancellationRequested();
 
 				EmuApi.WriteLogEntry("==================");
 				List<string> failedTests = new List<string>();
@@ -80,22 +81,27 @@ namespace Mesen.Utilities
 				}
 				EmuApi.WriteLogEntry("==================");
 
-				Dispatcher.UIThread.Post(() => {
-					ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
-				});
+				if(!shutdownToken.IsCancellationRequested) {
+					Dispatcher.UIThread.Post(() => {
+						if(!shutdownToken.IsCancellationRequested) {
+							ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
+						}
+					});
+				}
 			});
 		}
 
 		public static void RunGbMicroTests()
 		{
-			Task.Run(() => {
+			_ = EmulatorOperationTracker.Run(shutdownToken => {
 				ConcurrentDictionary<string, UInt64> results = new();
 
 				List<string> testFiles = Directory.EnumerateFiles(@"C:\Code\gbmicrotest-main\bin", "*.gb", SearchOption.AllDirectories).ToList();
-				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2 }, (string testFile) => {
+				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2, CancellationToken = shutdownToken }, (string testFile) => {
 					string entryName = Path.GetFileName(testFile);
 					results[entryName] = TestApi.RunTest(testFile, 0x02, MemoryType.GbHighRam);
 				});
+				shutdownToken.ThrowIfCancellationRequested();
 
 				EmuApi.WriteLogEntry("==================");
 				List<string> failedTests = new List<string>();
@@ -132,24 +138,29 @@ namespace Mesen.Utilities
 				}
 				EmuApi.WriteLogEntry("==================");
 
-				Dispatcher.UIThread.Post(() => {
-					ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
-				});
+				if(!shutdownToken.IsCancellationRequested) {
+					Dispatcher.UIThread.Post(() => {
+						if(!shutdownToken.IsCancellationRequested) {
+							ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
+						}
+					});
+				}
 			});
 		}
 
 		public static void RunGambatteTests()
 		{
-			Task.Run(() => {
+			_ = EmulatorOperationTracker.Run(shutdownToken => {
 				ConcurrentDictionary<string, UInt64> results = new();
 
 				Regex regex = new Regex("dmg08_(cgb04c_){0,1}out([a-f0-9]+)[.]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 				string folder = @"C:\Code\gambatte-tests\";
 				List<string> testFiles = Directory.EnumerateFiles(folder, "*.gb*", SearchOption.AllDirectories).Where(x=>x.Contains("dmg08_") && regex.IsMatch(x)).ToList();
-				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2 }, (string testFile) => {
+				Parallel.ForEach(testFiles, new ParallelOptions() { MaxDegreeOfParallelism = Environment.ProcessorCount - 2, CancellationToken = shutdownToken }, (string testFile) => {
 					string entryName = testFile.Substring(folder.Length);
 					results[entryName] = TestApi.RunTest(testFile, 0x1800, MemoryType.GbVideoRam);
 				});
+				shutdownToken.ThrowIfCancellationRequested();
 
 				EmuApi.WriteLogEntry("==================");
 				List<string> failedTests = new List<string>();
@@ -189,9 +200,13 @@ namespace Mesen.Utilities
 				}
 				EmuApi.WriteLogEntry("==================");
 
-				Dispatcher.UIThread.Post(() => {
-					ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
-				});
+				if(!shutdownToken.IsCancellationRequested) {
+					Dispatcher.UIThread.Post(() => {
+						if(!shutdownToken.IsCancellationRequested) {
+							ApplicationHelper.GetOrCreateUniqueWindow<LogWindow>(null, () => new LogWindow());
+						}
+					});
+				}
 			});
 		}
 	}

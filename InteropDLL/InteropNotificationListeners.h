@@ -12,6 +12,7 @@ class InteropNotificationListeners
 {
 	SimpleLock _externalNotificationListenerLock;
 	vector<shared_ptr<InteropNotificationListener>> _externalNotificationListeners;
+	shared_ptr<InteropNotificationCallbackState> _callbackState = std::make_shared<InteropNotificationCallbackState>();
 	bool _callbacksEnabled = true;
 
 public:
@@ -22,7 +23,7 @@ public:
 			return nullptr;
 		}
 
-		auto listener = shared_ptr<InteropNotificationListener>(new InteropNotificationListener(callback));
+		auto listener = shared_ptr<InteropNotificationListener>(new InteropNotificationListener(callback, _callbackState));
 		_externalNotificationListeners.push_back(listener);
 		emu->GetNotificationManager()->RegisterNotificationListener(listener);
 		return listener.get();
@@ -30,38 +31,49 @@ public:
 
 	void UnregisterNotificationCallback(INotificationListener *listener)
 	{
-		shared_ptr<InteropNotificationListener> removedListener;
-		{
-			auto lock = _externalNotificationListenerLock.AcquireSafe();
-			auto match = std::find_if(
-				_externalNotificationListeners.begin(),
-				_externalNotificationListeners.end(),
-				[=](const shared_ptr<InteropNotificationListener>& ptr) { return ptr.get() == listener; }
-			);
-			if(match != _externalNotificationListeners.end()) {
-				removedListener = *match;
-				_externalNotificationListeners.erase(match);
-			}
-		}
-
-		if(removedListener) {
-			removedListener->Disable();
+		auto lock = _externalNotificationListenerLock.AcquireSafe();
+		auto match = std::find_if(
+			_externalNotificationListeners.begin(),
+			_externalNotificationListeners.end(),
+			[=](const shared_ptr<InteropNotificationListener>& ptr) { return ptr.get() == listener; }
+		);
+		if(match != _externalNotificationListeners.end()) {
+			// Close this listener's callback admission before making it
+			// unreachable to a concurrent registry shutdown.
+			(*match)->Disable();
+			_externalNotificationListeners.erase(match);
 		}
 	}
 
 	void DisableCallbacks()
 	{
-		vector<shared_ptr<InteropNotificationListener>> listeners;
+		auto lock = _externalNotificationListenerLock.AcquireSafe();
+		_callbacksEnabled = false;
+		for(shared_ptr<InteropNotificationListener>& listener : _externalNotificationListeners) {
+			listener->Disable();
+		}
+		_externalNotificationListeners.clear();
+	}
+
+	void DisableCallbacksAndWait()
+	{
 		{
 			auto lock = _externalNotificationListenerLock.AcquireSafe();
 			_callbacksEnabled = false;
-			listeners.swap(_externalNotificationListeners);
+			for(shared_ptr<InteropNotificationListener>& listener : _externalNotificationListeners) {
+				listener->Disable();
+			}
+			_externalNotificationListeners.clear();
 		}
+		// The owner state also counts callbacks from listeners unregistered just
+		// before shutdown. NotificationManager can still be executing one after
+		// it has been removed from this registry's active vector.
+		_callbackState->WaitForCallbacks();
+	}
 
-		// Disable outside the owner lock. A callback can unregister itself, and
-		// Disable() must be able to wait for any callback already in progress.
-		for(shared_ptr<InteropNotificationListener>& listener : listeners) {
-			listener->Disable();
-		}
+	void EnableCallbacks()
+	{
+		auto lock = _externalNotificationListenerLock.AcquireSafe();
+		_callbacksEnabled = true;
 	}
 };

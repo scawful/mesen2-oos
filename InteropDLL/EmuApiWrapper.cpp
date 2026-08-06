@@ -16,10 +16,12 @@
 #include "Core/Netplay/GameServer.h"
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
-#include "Utilities/SimpleLock.h"
 #include "Utilities/StringUtilities.h"
+#include "InteropLifecycle.h"
 #include "InteropNotificationListeners.h"
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
@@ -46,10 +48,34 @@ unique_ptr<IRenderingDevice>& _renderer = *new unique_ptr<IRenderingDevice>();
 unique_ptr<IAudioDevice>& _soundManager = *new unique_ptr<IAudioDevice>();
 unique_ptr<IKeyManager>& _keyManager = *new unique_ptr<IKeyManager>();
 unique_ptr<IMouseManager>& _mouseManager = *new unique_ptr<IMouseManager>();
-SimpleLock& _interopReleaseLock = *new SimpleLock();
 unique_ptr<Emulator>& _emu = *new unique_ptr<Emulator>(new Emulator());
 bool _softwareRenderer = false;
 bool _exitCleanupRegistered = false;
+
+enum class InteropLifecyclePhase
+{
+	Running,
+	Draining,
+	Releasing,
+	Released
+};
+
+struct InteropLifecycleState
+{
+	std::mutex Mutex;
+	std::condition_variable Changed;
+	InteropLifecyclePhase Phase = InteropLifecyclePhase::Running;
+	uint32_t ActiveCalls = 0;
+	std::thread::id ReleaseThread;
+};
+
+static InteropLifecycleState& _interopLifecycle = *new InteropLifecycleState();
+// Preserve the original recursive serialization between the handful of
+// exports that initialize, load, or stop the process-wide emulator.  The
+// lifetime gate above pins owners during ordinary calls; this lock prevents
+// two owner-mutating operations from running at the same time.
+static std::recursive_mutex& _interopOperationMutex = *new std::recursive_mutex();
+static thread_local uint32_t _interopLeaseDepth = 0;
 
 static void* _windowHandle = nullptr;
 static void* _viewerHandle = nullptr;
@@ -59,17 +85,111 @@ static constexpr char* _buildDateTime = __DATE__ ", " __TIME__;
 static InteropNotificationListeners& _listeners = *new InteropNotificationListeners();
 
 void HistoryViewerDisableCallbacksForProcessExit();
-void HistoryViewerReleaseForProcessExit();
+void HistoryViewerReleaseForInteropShutdown(bool processExit);
+
+InteropEmulatorLease::InteropEmulatorLease(Emulator* emulator)
+	: _emulator(emulator), _active(emulator != nullptr)
+{
+}
+
+InteropEmulatorLease::~InteropEmulatorLease()
+{
+	if(!_active) {
+		return;
+	}
+
+	std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+	_interopLifecycle.ActiveCalls--;
+	_interopLeaseDepth--;
+	lock.unlock();
+	_interopLifecycle.Changed.notify_all();
+}
+
+InteropEmulatorLease AcquireInteropEmulatorLease()
+{
+	std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+	if(_interopLifecycle.Phase != InteropLifecyclePhase::Running || !_emu) {
+		return InteropEmulatorLease();
+	}
+
+	_interopLifecycle.ActiveCalls++;
+	_interopLeaseDepth++;
+	return InteropEmulatorLease(_emu.get());
+}
+
+bool InteropEmulatorLeaseHeldByCurrentThread()
+{
+	return _interopLeaseDepth > 0;
+}
 
 static void ReleaseEmulator(bool processExit)
 {
+	bool callbackOnCurrentThread = InteropNotificationListener::IsCallbackOnCurrentThread();
+	bool interopCallOnCurrentThread = InteropEmulatorLeaseHeldByCurrentThread();
+	if(!processExit && (interopCallOnCurrentThread || callbackOnCurrentThread)) {
+		MessageManager::Log("[Shutdown] Ignoring reentrant Release() from an active interop call or notification callback");
+		return;
+	}
+
+	{
+		std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+		if(_interopLifecycle.Phase == InteropLifecyclePhase::Released) {
+			return;
+		}
+		if(_interopLifecycle.Phase != InteropLifecyclePhase::Running) {
+			if(processExit) {
+				// Another thread is already draining or destroying process-wide
+				// owners.  An atexit handler cannot safely wait for that thread.
+				std::_Exit(EXIT_FAILURE);
+			}
+			if(_interopLifecycle.ReleaseThread == std::this_thread::get_id()) {
+				return;
+			}
+			_interopLifecycle.Changed.wait(lock, []() {
+				return _interopLifecycle.Phase == InteropLifecyclePhase::Released;
+			});
+			return;
+		}
+
+		_interopLifecycle.Phase = InteropLifecyclePhase::Draining;
+		_interopLifecycle.ReleaseThread = std::this_thread::get_id();
+	}
+
+	_listeners.DisableCallbacks();
+	HistoryViewerDisableCallbacksForProcessExit();
+	if(processExit) {
+		// Disable first so no new foreign callback can start, then inspect the
+		// process-wide state.  Waiting from an atexit handler can deadlock when
+		// an in-flight callback or API is synchronously waiting for the thread
+		// that called exit().  Use an explicit failure status because this
+		// emergency path intentionally skips the remaining atexit handlers and
+		// destructors.  Normal UI shutdown calls Release() before process exit.
+		bool activeCalls = false;
+		{
+			std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+			activeCalls = _interopLifecycle.ActiveCalls > 0;
+		}
+		if(activeCalls || InteropNotificationListener::HasCallbacksInFlight()) {
+			std::_Exit(EXIT_FAILURE);
+		}
+	} else {
+		InteropNotificationListener::WaitForCallbacks();
+	}
+
 	unique_ptr<Emulator> emu;
 	unique_ptr<IKeyManager> keyManager;
+	unique_ptr<IMouseManager> mouseManager;
 	unique_ptr<IAudioDevice> soundManager;
 	unique_ptr<IRenderingDevice> renderer;
 	{
-		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
+		std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+		_interopLifecycle.Changed.wait(lock, []() {
+			return _interopLifecycle.ActiveCalls == 0;
+		});
 		if(!_emu) {
+			_interopLifecycle.Phase = InteropLifecyclePhase::Released;
+			lock.unlock();
+			_interopLifecycle.Changed.notify_all();
 			return;
 		}
 
@@ -77,31 +197,40 @@ static void ReleaseEmulator(bool processExit)
 		// observes an empty owner instead of using an object being deleted.
 		emu = std::move(_emu);
 		keyManager = std::move(_keyManager);
+		mouseManager = std::move(_mouseManager);
 		soundManager = std::move(_soundManager);
 		renderer = std::move(_renderer);
+		_interopLifecycle.Phase = InteropLifecyclePhase::Releasing;
 	}
 
+	HistoryViewerReleaseForInteropShutdown(processExit);
 	if(processExit) {
 		emu->ReleaseForProcessExit();
 	} else {
 		emu->Release();
 	}
+	if(soundManager) {
+		soundManager->Stop();
+	}
+	KeyManager::RegisterKeyManager(nullptr);
+	KeyManager::SetSettings(nullptr);
 	renderer.reset();
 	soundManager.reset();
+	mouseManager.reset();
 	keyManager.reset();
 	emu.reset();
+
+	{
+		std::unique_lock<std::mutex> lock(_interopLifecycle.Mutex);
+		_interopLifecycle.Phase = InteropLifecyclePhase::Released;
+	}
+	_interopLifecycle.Changed.notify_all();
 }
 
 static void ReleaseAtProcessExit()
 {
 	// This handler is registered after static initialization, so it runs before
 	// the MessageManager and SocketServer statics begin reverse-order teardown.
-	_listeners.DisableCallbacks();
-	HistoryViewerDisableCallbacksForProcessExit();
-	if(InteropNotificationListener::HasCallbacksInFlight()) {
-		return;
-	}
-	HistoryViewerReleaseForProcessExit();
 	ReleaseEmulator(true);
 }
 
@@ -122,15 +251,17 @@ extern "C" {
 		return true;
 	}
 
-	DllExport uint32_t __stdcall GetMesenVersion() { return _emu ? _emu->GetSettings()->GetVersion() : 0; }
+	DllExport uint32_t __stdcall GetMesenVersion()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetSettings()->GetVersion();
+	}
 	DllExport char* __stdcall GetMesenBuildDate() { return _buildDateTime; }
 
 	DllExport void __stdcall InitDll()
 	{
-		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		if(!_exitCleanupRegistered) {
 			if(std::atexit(ReleaseAtProcessExit) == 0) {
 				_exitCleanupRegistered = true;
@@ -144,10 +275,8 @@ extern "C" {
 
 	DllExport void __stdcall InitializeEmu(const char* homeFolder, void *windowHandle, void *viewerHandle, bool softwareRenderer, bool noAudio, bool noVideo, bool noInput)
 	{
-		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		FolderUtilities::SetHomeFolder(homeFolder);
 
 		if(windowHandle != nullptr && viewerHandle != nullptr) {
@@ -196,6 +325,7 @@ extern "C" {
 
 	DllExport void __stdcall SetExclusiveFullscreenMode(bool fullscreen, void *windowHandle)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_renderer) {
 			_renderer->SetExclusiveFullscreenMode(fullscreen, windowHandle);
 		}
@@ -203,10 +333,8 @@ extern "C" {
 
 	DllExport bool __stdcall LoadRom(char* filename, char* patchFile)
 	{
-		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
-		if(!_emu) {
-			return false;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		_emu->GetGameClient()->Disconnect();
 		return _emu->LoadRom((VirtualFile)filename, patchFile ? (VirtualFile)patchFile : VirtualFile());
 	}
@@ -216,9 +344,7 @@ extern "C" {
 	DllExport void __stdcall GetRomInfo(InteropRomInfo &info)
 	{
 		memset(&info, 0, sizeof(info));
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 
 		RomInfo romInfo = _emu->GetRomInfo();
 
@@ -243,15 +369,13 @@ extern "C" {
 
 	DllExport TimingInfo __stdcall GetTimingInfo(CpuType cpuType)
 	{
-		if(!_emu) {
-			TimingInfo info = {};
-			return info;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(TimingInfo {});
 		return _emu->GetTimingInfo(cpuType);
 	}
 
 	DllExport void __stdcall TakeScreenshot()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_emu && _emu->GetVideoDecoder()) {
 			_emu->GetVideoDecoder()->TakeScreenshot();
 		}
@@ -259,6 +383,7 @@ extern "C" {
 
 	DllExport void __stdcall ProcessAudioPlayerAction(AudioPlayerActionParams p)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_emu) {
 			_emu->ProcessAudioPlayerAction(p);
 		}
@@ -278,35 +403,27 @@ extern "C" {
 
 	DllExport bool __stdcall IsRunning()
 	{
-		if(!_emu) {
-			return false;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
 		return _emu->IsRunning();
 	}
 
 	DllExport int32_t __stdcall GetStopCode()
 	{
-		if(!_emu) {
-			return 0;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
 		return _emu->GetStopCode();
 	}
 
 	DllExport void __stdcall Stop()
 	{
-		auto lifecycleLock = _interopReleaseLock.AcquireSafe();
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		_emu->GetGameClient()->Disconnect();
 		_emu->Stop(true);
 	}
 
 	DllExport void __stdcall Pause()
 	{
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Pause();
 		}
@@ -314,9 +431,7 @@ extern "C" {
 
 	DllExport void __stdcall Resume()
 	{
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Resume();
 		}
@@ -324,9 +439,7 @@ extern "C" {
 
 	DllExport bool __stdcall IsPaused()
 	{
-		if(!_emu) {
-			return false;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
 		return _emu->IsPaused();
 	}
 
@@ -337,9 +450,7 @@ extern "C" {
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)
 	{
-		if(!_emu) {
-			return nullptr;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(nullptr);
 		return _listeners.RegisterNotificationCallback(callback, _emu.get());
 	}
 
@@ -357,6 +468,7 @@ extern "C" {
 
 	DllExport void __stdcall SetRendererSize(uint32_t width, uint32_t height)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_emu && _emu->GetVideoRenderer()) {
 			_emu->GetVideoRenderer()->SetRendererSize(width, height);
 		}
@@ -364,6 +476,7 @@ extern "C" {
 
 	DllExport void __stdcall SetWatchHudText(char* text)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_emu && _emu->GetVideoRenderer()) {
 			_emu->GetVideoRenderer()->SetWatchHudText(text ? text : "");
 		}
@@ -371,6 +484,7 @@ extern "C" {
 
 	DllExport void __stdcall SetWatchHudData(char* dataJson)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		if(_emu && _emu->GetVideoRenderer()) {
 			_emu->GetVideoRenderer()->SetWatchHudData(dataJson ? dataJson : "");
 		}
@@ -378,6 +492,7 @@ extern "C" {
 
 	DllExport double __stdcall GetAspectRatio()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(1.0);
 		if(!_emu || !_emu->GetSettings() || !_emu->GetVideoDecoder()) {
 			return 1.0;
 		}
@@ -386,6 +501,7 @@ extern "C" {
 
 	DllExport FrameInfo __stdcall GetBaseScreenSize()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE((FrameInfo { 256, 240 }));
 		if(_emu && _emu->GetVideoDecoder()) {
 			return _emu->GetVideoDecoder()->GetBaseFrameInfo(true);
 		}
@@ -394,39 +510,38 @@ extern "C" {
 	
 	DllExport uint32_t __stdcall GetGameMemorySize(MemoryType type)
 	{
-		if(!_emu) {
-			return 0;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
 		return _emu->GetMemory(type).Size;
 	}
 
-	DllExport void __stdcall ClearCheats() { if(_emu) { _emu->GetCheatManager()->ClearCheats(); } }
-	DllExport void __stdcall SetCheats(CheatCode codes[], uint32_t length) { if(_emu) { _emu->GetCheatManager()->SetCheats(codes, length); } }
-	DllExport bool __stdcall GetConvertedCheat(CheatCode input, InternalCheatCode& output) { return _emu ? _emu->GetCheatManager()->GetConvertedCheat(input, output) : false; }
+	DllExport void __stdcall ClearCheats() { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetCheatManager()->ClearCheats(); }
+	DllExport void __stdcall SetCheats(CheatCode codes[], uint32_t length) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetCheatManager()->SetCheats(codes, length); }
+	DllExport bool __stdcall GetConvertedCheat(CheatCode input, InternalCheatCode& output) { INTEROP_EMU_LEASE_OR_RETURN_VALUE(false); return _emu->GetCheatManager()->GetConvertedCheat(input, output); }
 
 	DllExport void __stdcall GetRomHash(HashType hashType, char* outBuffer, uint32_t maxLength)
 	{
-		if(!_emu) {
+		auto interopEmuLease = AcquireInteropEmulatorLease();
+		if(!interopEmuLease) {
 			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
 			return;
 		}
 		StringUtilities::CopyToBuffer(_emu->GetHash(hashType), outBuffer, maxLength);
 	}
 
-	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { if(_emu) { _emu->InputBarcode(barcode, digitCount); } }
-	DllExport void __stdcall ProcessTapeRecorderAction(TapeRecorderAction action, char* filename) { if(_emu) { _emu->ProcessTapeRecorderAction(action, filename); } }
+	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->InputBarcode(barcode, digitCount); }
+	DllExport void __stdcall ProcessTapeRecorderAction(TapeRecorderAction action, char* filename) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->ProcessTapeRecorderAction(action, filename); }
 
-	DllExport void __stdcall ExecuteShortcut(ExecuteShortcutParams params) { if(_emu) { _emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::ExecuteShortcut, &params); } }
-	DllExport bool __stdcall IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam) { return _emu ? _emu->GetShortcutKeyHandler()->IsShortcutAllowed(shortcut, shortcutParam) : false; }
+	DllExport void __stdcall ExecuteShortcut(ExecuteShortcutParams params) { INTEROP_EMU_LEASE_OR_RETURN(); if(_emu->GetNotificationManager()) { _emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::ExecuteShortcut, &params); } }
+	DllExport bool __stdcall IsShortcutAllowed(EmulatorShortcut shortcut, uint32_t shortcutParam) { INTEROP_EMU_LEASE_OR_RETURN_VALUE(false); return _emu->GetShortcutKeyHandler() ? _emu->GetShortcutKeyHandler()->IsShortcutAllowed(shortcut, shortcutParam) : false; }
 
 	DllExport void __stdcall WriteLogEntry(char* message) { MessageManager::Log(message); }
 
-	DllExport void __stdcall SaveState(uint32_t stateIndex) { if(_emu) { _emu->GetSaveStateManager()->SaveState(stateIndex); } }
-	DllExport void __stdcall LoadState(uint32_t stateIndex) { if(_emu) { _emu->GetSaveStateManager()->LoadState(stateIndex); } }
-	DllExport void __stdcall SaveStateFile(char* filepath) { if(_emu) { _emu->GetSaveStateManager()->SaveState(filepath); } }
-	DllExport void __stdcall LoadStateFile(char* filepath) { if(_emu) { _emu->GetSaveStateManager()->LoadState(filepath); } }
-	DllExport void __stdcall LoadRecentGame(char* filepath, bool resetGame) { if(_emu) { _emu->GetSaveStateManager()->LoadRecentGame(filepath, resetGame); } }
-	DllExport int32_t __stdcall GetSaveStatePreview(char* saveStatePath, uint8_t* pngData) { return _emu ? _emu->GetSaveStateManager()->GetSaveStatePreview(saveStatePath, pngData) : 0; }
+	DllExport void __stdcall SaveState(uint32_t stateIndex) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetSaveStateManager()->SaveState(stateIndex); }
+	DllExport void __stdcall LoadState(uint32_t stateIndex) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetSaveStateManager()->LoadState(stateIndex); }
+	DllExport void __stdcall SaveStateFile(char* filepath) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetSaveStateManager()->SaveState(filepath); }
+	DllExport void __stdcall LoadStateFile(char* filepath) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetSaveStateManager()->LoadState(filepath); }
+	DllExport void __stdcall LoadRecentGame(char* filepath, bool resetGame) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetSaveStateManager()->LoadRecentGame(filepath, resetGame); }
+	DllExport int32_t __stdcall GetSaveStatePreview(char* saveStatePath, uint8_t* pngData) { INTEROP_EMU_LEASE_OR_RETURN_VALUE(0); return _emu->GetSaveStateManager()->GetSaveStatePreview(saveStatePath, pngData); }
 	DllExport uint32_t __stdcall GetSaveStateSlotCount() { return SaveStateManager::GetMaxIndex(); }
 
 	class PgoKeyManager : public IKeyManager
@@ -448,6 +563,7 @@ extern "C" {
 
 	DllExport void __stdcall PgoRunTest(vector<string> testRoms, bool enableDebugger)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
 		FolderUtilities::SetHomeFolder("../PGOMesenHome");
 		PgoKeyManager pgoKeyManager;
 		KeyManager::RegisterKeyManager(&pgoKeyManager);

@@ -14,7 +14,6 @@ using ReactiveUI.Fody.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Reactive;
-using System.Threading.Tasks;
 using System.Windows.Input;
 
 namespace Mesen.Debugger.Utilities
@@ -228,9 +227,7 @@ namespace Mesen.Debugger.Utilities
 
 				OnClick = () => {
 					//Run outside the UI thread to avoid deadlocks, etc.
-					Task.Run(() => {
-						EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = shortcut.Value, Param = ShortcutParam });
-					});
+					_ = EmuApi.ExecuteShortcutAsync(new ExecuteShortcutParams() { Shortcut = shortcut.Value, Param = ShortcutParam });
 				};
 			}
 		}

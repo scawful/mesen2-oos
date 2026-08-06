@@ -12,7 +12,6 @@ using ReactiveUI.Fody.Helpers;
 using System;
 using System.IO;
 using System.IO.Compression;
-using System.Threading.Tasks;
 
 namespace Mesen.Controls
 {
@@ -125,9 +124,10 @@ namespace Mesen.Controls
 			Image = StateGridEntry.EmptyImage;
 
 			if(fileExists) {
-				Task.Run(() => {
+				_ = EmulatorOperationTracker.Run(shutdownToken => {
 					Bitmap? img = null;
 					try {
+						shutdownToken.ThrowIfCancellationRequested();
 						if(Path.GetExtension(game.FileName) == "." + FileDialogHelper.MesenSaveStateExt) {
 							img = EmuApi.GetSaveStatePreview(game.FileName);
 						} else {
@@ -149,7 +149,16 @@ namespace Mesen.Controls
 						}
 					} catch { }
 
+					if(shutdownToken.IsCancellationRequested) {
+						img?.Dispose();
+						return;
+					}
+
 					Dispatcher.UIThread.Post(() => {
+						if(shutdownToken.IsCancellationRequested) {
+							img?.Dispose();
+							return;
+						}
 						Image = img ?? StateGridEntry.EmptyImage;
 					});
 				});

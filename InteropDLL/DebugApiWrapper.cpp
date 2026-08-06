@@ -23,13 +23,15 @@
 #include "Core/Debugger/FrozenAddressManager.h"
 #include "Core/Gameboy/GbTypes.h"
 #include "Utilities/StringUtilities.h"
+#include "InteropLifecycle.h"
 
 extern unique_ptr<Emulator>& _emu;
 
 template<typename T>
 T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
 {
-	if(!_emu) {
+	auto interopEmuLease = AcquireInteropEmulatorLease();
+	if(!interopEmuLease) {
 		return {};
 	}
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
@@ -43,7 +45,8 @@ T WrapDebuggerCall(std::function<T(Debugger* debugger)> func)
 template<>
 void WrapDebuggerCall(std::function<void(Debugger* debugger)> func)
 {
-	if(!_emu) {
+	auto interopEmuLease = AcquireInteropEmulatorLease();
+	if(!interopEmuLease) {
 		return;
 	}
 	DebuggerRequest dbgRequest = _emu->GetDebugger(true);
@@ -61,23 +64,20 @@ extern "C"
 	//Debugger wrapper
 	DllExport void __stdcall InitializeDebugger()
 	{
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 		_emu->InitDebugger();
 	}
 
 	DllExport void __stdcall ReleaseDebugger()
 	{
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 		_emu->StopDebugger();
 	}
 
 	DllExport bool __stdcall IsDebuggerRunning()
 	{
-		return _emu && _emu->GetDebugger().GetDebugger() != nullptr;
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetDebugger().GetDebugger() != nullptr;
 	}
 
 	DllExport bool __stdcall IsExecutionStopped() { return WithDebugger(bool, IsExecutionStopped()); }
@@ -153,9 +153,7 @@ extern "C"
 	DllExport void __stdcall SetLabel(uint32_t address, MemoryType memType, char* label, char* comment) { WithDebugger(void, GetLabelManager()->SetLabel(address, memType, label, comment)); }
 	DllExport void __stdcall ClearLabels()
 	{
-		if(!_emu) {
-			return;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN();
 		DebuggerRequest dbgRequest = _emu->GetDebugger(false);
 		if(dbgRequest.GetDebugger()) {
 			dbgRequest.GetDebugger()->GetLabelManager()->ClearLabels();
@@ -205,9 +203,7 @@ extern "C"
 	DllExport void __stdcall RemoveScript(int32_t scriptId) { WithToolVoid(GetScriptManager(), RemoveScript(scriptId)); }
 	DllExport bool __stdcall HasScriptRunning()
 	{
-		if(!_emu) {
-			return false;
-		}
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
 
 		DebuggerRequest dbgRequest = _emu->GetDebugger(false);
 		Debugger* dbg = dbgRequest.GetDebugger();

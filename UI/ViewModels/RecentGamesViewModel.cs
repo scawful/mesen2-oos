@@ -11,7 +11,6 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using Avalonia.Threading;
 
 namespace Mesen.ViewModels
@@ -185,13 +184,15 @@ namespace Mesen.ViewModels
 			}
 
 			if(StateIndex > 0) {
-				Task.Run(() => {
+				_ = EmulatorOperationTracker.Run(shutdownToken => {
 					//Run in another thread to prevent deadlocks etc. when emulator notifications are processed UI-side
+					shutdownToken.ThrowIfCancellationRequested();
 					if(SaveMode) {
 						EmuApi.SaveState((uint)StateIndex);
 					} else {
 						EmuApi.LoadState((uint)StateIndex);
 					}
+					shutdownToken.ThrowIfCancellationRequested();
 					EmuApi.Resume();
 				});
 			} else {

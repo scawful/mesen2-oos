@@ -13,7 +13,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace Mesen.ViewModels
 {
@@ -92,7 +91,8 @@ namespace Mesen.ViewModels
 
 			IsRecording = true;
 
-			Task.Run(() => {
+			_ = EmulatorOperationTracker.Run(shutdownToken => {
+				shutdownToken.ThrowIfCancellationRequested();
 				HdPackBuilderOptions options = Config.ToInterop(SaveFolder);
 				if(!IsBankSizeVisible) {
 					options.ChrRamBankSize = 0x1000;
@@ -119,13 +119,18 @@ namespace Mesen.ViewModels
 
 			IsRecording = false;
 
-			Task.Run(() => {
+			_ = EmulatorOperationTracker.Run(shutdownToken => {
+				shutdownToken.ThrowIfCancellationRequested();
 				EmuApi.ExecuteShortcut(new ExecuteShortcutParams() { Shortcut = EmulatorShortcut.StopRecordHdPack });
 
-				Dispatcher.UIThread.Post(() => {
-					IsOpenFolderEnabled = true;
-					UpdateFilterDropdown();
-				});
+				if(!shutdownToken.IsCancellationRequested) {
+					Dispatcher.UIThread.Post(() => {
+						if(!shutdownToken.IsCancellationRequested) {
+							IsOpenFolderEnabled = true;
+							UpdateFilterDropdown();
+						}
+					});
+				}
 			});
 		}
 

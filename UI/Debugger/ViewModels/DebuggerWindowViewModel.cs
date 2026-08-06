@@ -384,11 +384,12 @@ namespace Mesen.Debugger.ViewModels
 			if(ConsoleStatus != null) {
 				//Disable status fields in 50ms (if the debugger isn't paused by then)
 				//This improves performance when stepping through code, etc.
-				Task.Run(() => {
-					System.Threading.Thread.Sleep(50);
+				_ = EmulatorOperationTracker.Run(async shutdownToken => {
+					await Task.Delay(50, shutdownToken);
+					shutdownToken.ThrowIfCancellationRequested();
 					Dispatcher.UIThread.Post(() => {
 						BaseConsoleStatusViewModel status = ConsoleStatus;
-						if(status != null && status.EditAllowed && !EmuApi.IsPaused()) {
+						if(!shutdownToken.IsCancellationRequested && status != null && status.EditAllowed && !EmuApi.IsPaused()) {
 							status.EditAllowed = false;
 
 							if(DockFactory.StatusTool.Owner is IDock parent && parent.IsActive && parent.ActiveDockable == DockFactory.StatusTool) {

@@ -28,13 +28,14 @@ public class DisplayMessageHelper
 			//Prevent multiple calls from causing the game selection screen from appearing too quickly
 			int counter = Interlocked.Increment(ref _taskId);
 
-			Task.Run(async () => {
-				await Task.Delay(3100);
+			_ = EmulatorOperationTracker.Run(async shutdownToken => {
+				await Task.Delay(3100, shutdownToken);
+				shutdownToken.ThrowIfCancellationRequested();
 
 				//Show game selection screen after ~3 seconds
 				//This allows the message to be visible to the user
 				Dispatcher.UIThread.Post(() => {
-					if(_taskId == counter && !EmuApi.IsRunning()) {
+					if(!shutdownToken.IsCancellationRequested && _taskId == counter && !EmuApi.IsRunning()) {
 						MainWindowViewModel.Instance.RecentGames.Visible = true;
 					}
 				});

@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Mesen.Utilities;
 using Mesen.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -10,7 +11,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Mesen.Debugger.ViewModels;
 
@@ -80,26 +80,29 @@ public class QuickSearchViewModel : ViewModelBase
 		
 		_searchInProgress = true;
 
-		Task.Run(() => {
+		_ = EmulatorOperationTracker.Run(shutdownToken => {
 			OnFindEventArgs? args;
 			OnFindEventArgs? lastArgs = null;
 			while((args = Interlocked.Exchange(ref _searchArgs, null)) != null) {
 				//Keep searching until the most recent search is processed
+				shutdownToken.ThrowIfCancellationRequested();
 				OnFind?.Invoke(args);
 				lastArgs = args;
 			}
 
-			Dispatcher.UIThread.Post(() => {
-				if(lastArgs != null) {
-					if(lastArgs.Success) {
-						IsErrorVisible = false;
-						_noMatchSearch = "";
-					} else {
-						IsErrorVisible = true;
-						_noMatchSearch = SearchString;
+			if(!shutdownToken.IsCancellationRequested) {
+				Dispatcher.UIThread.Post(() => {
+					if(!shutdownToken.IsCancellationRequested && lastArgs != null) {
+						if(lastArgs.Success) {
+							IsErrorVisible = false;
+							_noMatchSearch = "";
+						} else {
+							IsErrorVisible = true;
+							_noMatchSearch = SearchString;
+						}
 					}
-				}
-			});
+				});
+			}
 			_searchInProgress = false;
 		});
 	}

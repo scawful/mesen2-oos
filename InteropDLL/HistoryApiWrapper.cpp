@@ -8,9 +8,12 @@
 #include "Core/Shared/Video/VideoRenderer.h"
 #include "Core/Shared/Audio/SoundMixer.h"
 #include "Core/Shared/Movies/MovieManager.h"
+#include "Core/Shared/MessageManager.h"
 #include "Shared/Video/SoftwareRenderer.h"
 #include "InteropNotificationListeners.h"
 #include "Utilities/SimpleLock.h"
+#include "InteropLifecycle.h"
+#include <mutex>
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
@@ -26,6 +29,7 @@ extern unique_ptr<Emulator>& _emu;
 extern bool _softwareRenderer;
 
 SimpleLock& _historyLifecycleLock = *new SimpleLock();
+static std::recursive_mutex& _historyOperationMutex = *new std::recursive_mutex();
 unique_ptr<Emulator>& _historyPlayer = *new unique_ptr<Emulator>();
 unique_ptr<IRenderingDevice>& _historyRenderer = *new unique_ptr<IRenderingDevice>();
 unique_ptr<IAudioDevice>& _historySoundManager = *new unique_ptr<IAudioDevice>();
@@ -38,17 +42,6 @@ static void ReleaseHistoryPlayer(bool processExit)
 {
 	auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 	if(!_historyPlayer) {
-		_historyViewer = nullptr;
-		return;
-	}
-
-	if(processExit && _historyPlayer->IsEmulationThread()) {
-		// Process exit can begin inside a history callback on any core-owned
-		// worker. Never join or destroy an unknown current worker; the OS will
-		// reclaim these objects.
-		_historyRenderer.release();
-		_historySoundManager.release();
-		_historyPlayer.release();
 		_historyViewer = nullptr;
 		return;
 	}
@@ -69,26 +62,45 @@ void HistoryViewerDisableCallbacksForProcessExit()
 	_listeners.DisableCallbacks();
 }
 
-void HistoryViewerReleaseForProcessExit()
+void HistoryViewerReleaseForInteropShutdown(bool processExit)
 {
-	ReleaseHistoryPlayer(true);
+	ReleaseHistoryPlayer(processExit);
 }
 
 extern "C"
 {
 	DllExport bool __stdcall HistoryViewerEnabled()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		return _emu->GetRewindManager()->HasHistory();
 	}
 
 	DllExport void __stdcall HistoryViewerRelease()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(InteropNotificationListener::IsCallbackOnCurrentThread()) {
+			MessageManager::Log("[Shutdown] Ignoring reentrant history release from a notification callback");
+			return;
+		}
+		std::lock_guard<std::recursive_mutex> operationLock(_historyOperationMutex);
+		// Closing the history viewer must not wait for unrelated callbacks from
+		// the main emulator.  Some main callbacks synchronously wait for the UI
+		// thread that closes this window.
+		_listeners.DisableCallbacksAndWait();
 		ReleaseHistoryPlayer(false);
 	}
 
 	DllExport void __stdcall HistoryViewerInitialize(void* windowHandle, void* viewerHandle)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(InteropNotificationListener::IsCallbackOnCurrentThread()) {
+			MessageManager::Log("[Shutdown] Ignoring reentrant history initialization from a notification callback");
+			return;
+		}
+		std::lock_guard<std::recursive_mutex> operationLock(_historyOperationMutex);
 		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
+		_listeners.EnableCallbacks();
 		_historyPlayer.reset(new Emulator());
 		_historyPlayer->Initialize();
 		_historyPlayer->GetSettings()->CopySettings(*_emu->GetSettings());
@@ -124,11 +136,15 @@ extern "C"
 
 	DllExport HistoryViewerState __stdcall HistoryViewerGetState()
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(HistoryViewerState {});
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		return _historyViewer ? _historyViewer->GetState() : HistoryViewerState {};
 	}
 
 	DllExport void __stdcall HistoryViewerSetOptions(HistoryViewerOptions options)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		if(_historyViewer) {
 			_historyViewer->SetOptions(options);
 		}
@@ -136,16 +152,22 @@ extern "C"
 
 	DllExport bool __stdcall HistoryViewerCreateSaveState(const char* outputFile, uint32_t position)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		return _historyViewer ? _historyViewer->CreateSaveState(outputFile, position) : false;
 	}
 
 	DllExport bool __stdcall HistoryViewerSaveMovie(const char* movieFile, uint32_t startPosition, uint32_t endPosition)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		return _historyViewer ? _historyViewer->SaveMovie(movieFile, startPosition, endPosition) : false;
 	}
 
 	DllExport void __stdcall HistoryViewerResumeGameplay(uint32_t resumePosition)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		if(_historyViewer) {
 			_historyViewer->ResumeGameplay(resumePosition);
 		}
@@ -153,6 +175,8 @@ extern "C"
 
 	DllExport void __stdcall HistoryViewerSetPosition(uint32_t seekPosition)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		if(_historyViewer) {
 			_historyViewer->SeekTo(seekPosition);
 		}
@@ -160,6 +184,8 @@ extern "C"
 
 	DllExport INotificationListener* __stdcall HistoryViewerRegisterNotificationCallback(NotificationListenerCallback callback)
 	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(nullptr);
+		auto lifecycleLock = _historyLifecycleLock.AcquireSafe();
 		return _listeners.RegisterNotificationCallback(callback, _historyPlayer.get());
 	}
 
