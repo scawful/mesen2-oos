@@ -252,13 +252,15 @@ static uint16_t ParseTcpPortFromEnv()
 
 static string ParseTcpBindFromEnv()
 {
+#ifdef __ANDROID__
+	// Android exposes state-loading, memory-writing, input, and Lua commands.
+	// Keep that control plane device-local; hosts must use adb forwarding.
+	return "127.0.0.1";
+#else
 	const char* env = std::getenv("MESEN2_TCP_BIND");
 	if(env && *env) {
 		return env;
 	}
-#ifdef __ANDROID__
-	return "0.0.0.0";
-#else
 	return "127.0.0.1";
 #endif
 }

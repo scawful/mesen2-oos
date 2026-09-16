@@ -355,7 +355,9 @@ extern "C" int SDL_main(int argc, char* argv[])
 	g_frameEvent = SDL_RegisterEvents(1);
 
 	setenv("MESEN2_TCP_PORT", "27015", 0);
-	setenv("MESEN2_TCP_BIND", "0.0.0.0", 0);
+	// The socket exposes privileged emulator controls. Keep it device-local
+	// and require hosts to connect through an explicit adb forward.
+	setenv("MESEN2_TCP_BIND", "127.0.0.1", 1);
 
 	const char* home = SDL_AndroidGetInternalStoragePath();
 	if(!home) {

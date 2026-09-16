@@ -2,13 +2,21 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
-## Host candidate — 0.1.9-workshop
+## Installed — 0.1.10-workshop
+
+Version code 11 / APK SHA256 `967e1184063bc9c37075e19d7bf4379ff987bd8ffd140a9f6b9f8d3fb9d503f0` closes direct LAN access to the privileged emulator-control protocol. Android now binds only `127.0.0.1:27015`; Mac tools connect through an explicit USB `adb forward`. Workshop publishes `bind=127.0.0.1` and `transport=adb-forward`, no longer advertises an NSD service or LAN endpoint, and no longer holds Wi-Fi or multicast locks for remote control. The manifest drops the four now-unused network/wake permissions while retaining `INTERNET` for the loopback socket.
+
+The APK also includes the 0.1.9 batched runtime-status snapshot described below. `Android/build.sh` passed; package inspection verified version code 11, arm64-v8a, and the reduced permission set. Seventy-three Oracle handheld host tests pass, including 31 shell-workflow checks for loopback environment generation and explicit `--lan` refusal. On RG353P `26489f9a104f2273`, the installed APK hash matched, `ss` reported only `127.0.0.1:27015`, USB-forwarded health reached the retained Weather ROM (CRC `9109C3A5`), and direct `192.168.1.227:27015` access timed out. The app was left paused at frame 302 with `debugging=false`.
+
+Exact package: `Roms/HandheldApps/oos-android-0.1.10-workshop-20260916-967e1184/`. The preinstall Workshop artifacts were copied to `Roms/device-workshop/workshop-jg9bgwwq/`; device files were not deleted.
+
+## Superseded host candidate — 0.1.9-workshop
 
 Version code 10 / APK SHA256 `5d1db75cffd2a959ec2311a903bad6d40401f036ea6ef5be50198ea76abf819e` consolidates the ROM SHA1, pause/frame state, and five ALTTP work-RAM status bytes into one `HandheldReadRuntimeSnapshot` call. The status JSON schema is unchanged. This replaces eight emulator lifetime-lock acquisitions per 180 ms poll with one and reduces cross-frame skew between the reported fields.
 
 `Android/build.sh` passes, and package inspection confirms arm64-v8a plus the consolidated native export. Host regressions pass with 83 Workshop checks using two real MSS fixtures, 7 frame-rate checks, 8 ROM-discovery checks, and 15 framebuffer tests under AddressSanitizer/UndefinedBehaviorSanitizer.
 
-This candidate is **not installed or device-verified** because the RG353P disconnected before deployment. The performance change must be measured on the same scene and pause/run state before promotion. The installed/device-verified release remains 0.1.8-workshop.
+This intermediate candidate was not installed or device-verified because the RG353P disconnected before deployment. Its code is included in 0.1.10; the performance change still needs a matched 0.1.8/0.1.10 device comparison.
 
 ## Workshop diagnostics — installed 0.1.8-workshop
 

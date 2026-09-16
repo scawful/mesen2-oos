@@ -185,7 +185,6 @@ public class MesenActivity extends SDLActivity {
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
         attachOverlay();
         applyIntentPrefs(getIntent());
-        mWorkshop.start();
         startNativeIfNeeded();
         mHandler.postDelayed(this::markNativeReady, 1200);
         mHandler.postDelayed(this::refreshHud, 1500);
@@ -202,9 +201,6 @@ public class MesenActivity extends SDLActivity {
             sInstance = null;
         }
         mHandler.removeCallbacksAndMessages(null);
-        if (mWorkshop != null) {
-            mWorkshop.stop();
-        }
         if (mHomeReceiverRegistered) {
             unregisterReceiver(mHomeReceiver);
             mHomeReceiverRegistered = false;
@@ -975,16 +971,16 @@ public class MesenActivity extends SDLActivity {
                         shortSha.isEmpty() ? getString(R.string.artifact_unknown_hash) : shortSha));
             }
             int agents = mWorkshop != null ? mWorkshop.agentCount() : 0;
-            String lan = mWorkshop != null ? mWorkshop.lanEndpoint() : socket;
+            String endpoint = mWorkshop != null ? mWorkshop.adbEndpoint() : socket;
             String agentBit = agents > 0 ? (agents + " agents") : "ready";
             mHudSocket.setText(socket + (pad ? " · pad" : " · no pad"));
             if (mHudLink != null) {
-                mHudLink.setText(lan + "  ·  " + modeLabel(json)
+                mHudLink.setText(endpoint + "  ·  " + modeLabel(json)
                         + "  ·  " + performance + "  ·  " + agentBit);
                 mHudLink.setVisibility(mKeepHud || mPauseVisible ? View.VISIBLE : View.GONE);
             }
             if (mWorkshopLink != null) {
-                mWorkshopLink.setText(lan);
+                mWorkshopLink.setText(endpoint);
             }
             if (mWorkshopMeta != null) {
                 String shortSha = sha1.length() > 12 ? sha1.substring(0, 12) : sha1;
