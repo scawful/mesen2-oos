@@ -2,13 +2,15 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
-## Workshop diagnostics — installed 0.1.7-workshop
+## Workshop diagnostics — installed 0.1.8-workshop
 
-Version code 8 / APK SHA256 `749877701a94c929d010b270977818716fb8c64353a553352569b65c49d235b9` retains the measured-FPS and direct-WRAM diagnostics and caches the loaded source ROM's immutable SHA1. The cache is invalidated after every successful ROM load; dynamic `Sha1Cheat` hashing remains uncached. This prevents the 180 ms Workshop UI poll and one-second socket status poll from repeatedly hashing the full ROM.
+Version code 9 / APK SHA256 `7a29934fc91c2d4914a79eb232900741e5e1f10c45aeb59160d4f3e199f7ecf0` makes `HEALTH` observational. Without an existing debugger it now returns `debugging:false`, `pc:null`, and `disasmOk:false` without calling `GetDebugger(true)`; when a debugger was already active it still includes PC/disassembly details. The installed regression check proves `STATE → HEALTH → STATE` remains debugger-free.
 
-In a short paused-Workshop comparison on the same RG353P and ROM, process CPU dropped from an average 41.8% to 33.4% of one core, while the Android UI thread dropped from 20.8% to 11.8%. These `top` samples are directional and noisy, not a full-speed claim. A ten-second running sample advanced at 40.06 FPS and Workshop reported 40.52 FPS, so the SNES core remains below full speed. Direct `GAMESTATE` and `SPRITES` reads both succeeded afterward without creating the persistent debugger.
+Version code 8 / `0.1.7-workshop` introduced loaded-ROM SHA1 caching but was superseded after a brief install when the `HEALTH` side effect was found. The cache is invalidated after every successful ROM load; dynamic `Sha1Cheat` hashing remains uncached. This prevents the 180 ms Workshop UI poll and one-second socket status poll from repeatedly hashing the full ROM.
 
-Version code 7 / `0.1.6-workshop` added `sprites` beside best-effort `game_state` in checkpoint and bug manifests and in host collections. Its complete on-device checkpoint contains both objects with no warnings. The exact installed 0.1.6 APK is preserved at `Roms/HandheldApps/oos-android-0.1.6-workshop-20260915-bdae1e2d/`, so its exact-APK checkpoint remains restorable after the 0.1.7 upgrade.
+In a short paused-Workshop comparison on the same RG353P and ROM, process CPU dropped from an average 41.8% to 33.4% of one core, while the Android UI thread dropped from 20.8% to 11.8%. The final 0.1.8 sample remained in the same reduced range. These `top` samples are directional and noisy, not a full-speed claim. An eight-second 0.1.8 run advanced at 39.93 FPS and Workshop reported 40.51 FPS. Sleep/wake preserved paused frame 636 and the exact framebuffer with zero render errors and `debugging:false`.
+
+Version code 7 / `0.1.6-workshop` added `sprites` beside best-effort `game_state` in checkpoint and bug manifests and in host collections. Its complete on-device checkpoint contains both objects with no warnings. The exact installed 0.1.6 APK is preserved at `Roms/HandheldApps/oos-android-0.1.6-workshop-20260915-bdae1e2d/`, so its exact-APK checkpoint remains restorable after later upgrades.
 
 The running FPS value is derived from frame-count/time deltas; paused Workshop shows the last running value rather than Mesen's nominal `60.1`. Sampling remains active when **Keep HUD** is hidden. `GAMESTATE` and `SPRITES` read SNES work RAM directly, `workshop.json` publication is atomic, and the Oracle collector/backup/launch scripts use Android `run-as` for app-private files. See the [current diagnostics report](../../oracle-of-secrets/Docs/Planning/Status/rg353p_workshop_diagnostics_2026-09-15.md).
 

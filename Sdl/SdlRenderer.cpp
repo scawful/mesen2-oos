@@ -45,11 +45,19 @@ bool SdlRenderer::Init()
 		return false;
 	};
 
+#ifdef __ANDROID__
+	_sdlWindow = static_cast<SDL_Window*>(_windowHandle);
+	if(!_sdlWindow) {
+		LogSdlError("[SDL] Missing Android SDL_Window handle.");
+		return false;
+	}
+#else
 	_sdlWindow = SDL_CreateWindowFrom(_windowHandle);
 	if(!_sdlWindow) {
 		LogSdlError("[SDL] Failed to create window from handle.");
 		return false;
 	}
+#endif
 
 	if(SDL_GL_LoadLibrary(NULL) != 0) {
 		LogSdlError("[SDL] Failed to initialize OpenGL, attempting to continue with initialization.");
@@ -81,7 +89,18 @@ bool SdlRenderer::InitTexture()
 		return false;
 	}
 
+#ifdef __ANDROID__
+	int windowWidth = 0;
+	int windowHeight = 0;
+	SDL_GetWindowSize(_sdlWindow, &windowWidth, &windowHeight);
+	if(windowWidth > 0 && windowHeight > 0) {
+		_screenWidth = static_cast<uint32_t>(windowWidth);
+		_screenHeight = static_cast<uint32_t>(windowHeight);
+	}
+	SDL_RenderSetLogicalSize(_sdlRenderer, static_cast<int>(_frameWidth), static_cast<int>(_frameHeight));
+#else
 	SDL_SetWindowSize(_sdlWindow, _screenWidth, _screenHeight);
+#endif
 
 	return true;
 }

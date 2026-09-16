@@ -11,6 +11,7 @@
 #include "Core/Shared/ShortcutKeyHandler.h"
 #include "Core/Shared/TimingInfo.h"
 #include "Core/Shared/CheatManager.h"
+#include "Core/Shared/MemoryType.h"
 #include "Core/Shared/DebuggerRequest.h"
 #include "Core/Netplay/GameClient.h"
 #include "Core/Netplay/GameServer.h"
@@ -28,10 +29,15 @@
 	#include "Windows/SoundManager.h"
 	#include "Windows/WindowsKeyManager.h"
 	#include "Windows/WindowsMouseManager.h"
-#elif __APPLE__
+#elif defined(__APPLE__)
 	#include "Sdl/SdlSoundManager.h"
 	#include "MacOS/MacOSKeyManager.h"
 	#include "MacOS/MacOSMouseManager.h"
+#elif defined(__ANDROID__)
+	#include "Sdl/SdlRenderer.h"
+	#include "Sdl/SdlSoundManager.h"
+	#include "Sdl/SdlKeyManager.h"
+	#include "Sdl/SdlMouseManager.h"
 #else
 	#include "Sdl/SdlRenderer.h"
 	#include "Sdl/SdlSoundManager.h"
@@ -310,14 +316,17 @@ extern "C" {
 				#ifdef _WIN32
 					_keyManager.reset(new WindowsKeyManager(_emu.get(), (HWND)_windowHandle));
 					_mouseManager.reset(new WindowsMouseManager());
-				#elif __APPLE__
+				#elif defined(__APPLE__)
 					_keyManager.reset(new MacOSKeyManager(_emu.get()));
 					_mouseManager.reset(new MacOSMouseManager());
-				#else 
+				#elif defined(__ANDROID__)
+					_keyManager.reset(new SdlKeyManager(_emu.get()));
+					_mouseManager.reset(new SdlMouseManager());
+				#else
 					_keyManager.reset(new LinuxKeyManager(_emu.get()));
 					_mouseManager.reset(new LinuxMouseManager(_windowHandle));
 				#endif
-					
+
 				KeyManager::RegisterKeyManager(_keyManager.get());
 			}
 		}
@@ -448,6 +457,67 @@ extern "C" {
 		ReleaseEmulator(false);
 	}
 
+	DllExport void __stdcall ApplyHandheldSnesDefaults()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		SnesConfig cfg = _emu->GetSettings()->GetSnesConfig();
+		cfg.Port1.Type = ControllerType::SnesController;
+		auto mapKey = [](const char* name) -> uint16_t {
+			return KeyManager::GetKeyCode(name);
+		};
+		uint16_t selectKey = mapKey("Pad1 Select");
+		if(!selectKey) {
+			selectKey = mapKey("Pad1 Back");
+		}
+		cfg.Port1.Keys.Mapping1.A = mapKey("Pad1 B");
+		cfg.Port1.Keys.Mapping1.B = mapKey("Pad1 A");
+		cfg.Port1.Keys.Mapping1.X = mapKey("Pad1 Y");
+		cfg.Port1.Keys.Mapping1.Y = mapKey("Pad1 X");
+		cfg.Port1.Keys.Mapping1.L = mapKey("Pad1 L1");
+		cfg.Port1.Keys.Mapping1.R = mapKey("Pad1 R1");
+		cfg.Port1.Keys.Mapping1.Select = selectKey;
+		cfg.Port1.Keys.Mapping1.Start = mapKey("Pad1 Start");
+		cfg.Port1.Keys.Mapping1.Up = mapKey("Pad1 Up");
+		cfg.Port1.Keys.Mapping1.Down = mapKey("Pad1 Down");
+		cfg.Port1.Keys.Mapping1.Left = mapKey("Pad1 Left");
+		cfg.Port1.Keys.Mapping1.Right = mapKey("Pad1 Right");
+		cfg.Port1.Keys.Mapping2.A = mapKey("X");
+		cfg.Port1.Keys.Mapping2.B = mapKey("Z");
+		cfg.Port1.Keys.Mapping2.X = mapKey("S");
+		cfg.Port1.Keys.Mapping2.Y = mapKey("A");
+		cfg.Port1.Keys.Mapping2.L = mapKey("Q");
+		cfg.Port1.Keys.Mapping2.R = mapKey("W");
+		cfg.Port1.Keys.Mapping2.Select = mapKey("Tab");
+		cfg.Port1.Keys.Mapping2.Start = mapKey("Enter");
+		cfg.Port1.Keys.Mapping2.Up = mapKey("Up Arrow");
+		cfg.Port1.Keys.Mapping2.Down = mapKey("Down Arrow");
+		cfg.Port1.Keys.Mapping2.Left = mapKey("Left Arrow");
+		cfg.Port1.Keys.Mapping2.Right = mapKey("Right Arrow");
+		_emu->GetSettings()->SetSnesConfig(cfg);
+	}
+
+	DllExport void __stdcall HandheldReset()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->PowerCycle();
+	}
+
+	DllExport uint32_t __stdcall HandheldFrameCount()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetFrameCount();
+	}
+
+	DllExport int32_t __stdcall HandheldWramByte(uint32_t offset)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		ConsoleMemoryInfo mem = _emu->GetMemory(MemoryType::SnesWorkRam);
+		if(!mem.Memory || offset >= mem.Size) {
+			return -1;
+		}
+		return static_cast<uint8_t*>(mem.Memory)[offset];
+	}
+
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)
 	{
 		INTEROP_EMU_LEASE_OR_RETURN_VALUE(nullptr);
@@ -526,6 +596,11 @@ extern "C" {
 			return;
 		}
 		StringUtilities::CopyToBuffer(_emu->GetHash(hashType), outBuffer, maxLength);
+	}
+
+	DllExport void __stdcall HandheldRomSha1(char* outBuffer, uint32_t maxLength)
+	{
+		GetRomHash(HashType::Sha1, outBuffer, maxLength);
 	}
 
 	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->InputBarcode(barcode, digitCount); }

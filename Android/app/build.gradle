@@ -11,8 +11,8 @@ android {
         applicationId "ca.mesen.oos"
         minSdk 21
         targetSdk 30
-        versionCode 8
-        versionName "0.1.7-workshop"
+        versionCode 9
+        versionName "0.1.8-workshop"
         ndk {
             abiFilters 'arm64-v8a'
         }

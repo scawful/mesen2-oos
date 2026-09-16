@@ -14,6 +14,7 @@ SoftwareRenderer::SoftwareRenderer(Emulator* emu)
 
 SoftwareRenderer::~SoftwareRenderer()
 {
+	_emu->GetVideoRenderer()->UnregisterRenderingDevice(this);
 	delete[] _textureBuffer[0];
 	delete[] _textureBuffer[1];
 }

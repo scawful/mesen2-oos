@@ -37,7 +37,11 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <cstdlib>
+#include <cstring>
 #include <poll.h>
 #include <chrono>
 #include <cctype>
@@ -228,13 +232,50 @@ string SocketResponse::ToJson() const {
 	return ss.str();
 }
 
+static uint16_t ParseTcpPortFromEnv()
+{
+	const char* env = std::getenv("MESEN2_TCP_PORT");
+#ifdef __ANDROID__
+	if(!env || !*env) {
+		env = "27015";
+	}
+#endif
+	if(!env || !*env) {
+		return 0;
+	}
+	int port = atoi(env);
+	if(port <= 0 || port > 65535) {
+		return 0;
+	}
+	return static_cast<uint16_t>(port);
+}
+
+static string ParseTcpBindFromEnv()
+{
+	const char* env = std::getenv("MESEN2_TCP_BIND");
+	if(env && *env) {
+		return env;
+	}
+#ifdef __ANDROID__
+	return "0.0.0.0";
+#else
+	return "127.0.0.1";
+#endif
+}
+
 SocketServer::SocketServer(Emulator* emu) : _emu(emu), _running(false) {
-	// Create socket path (allow override via env var for deterministic agents)
-	const char* envPath = std::getenv("MESEN2_SOCKET_PATH");
-	if (envPath && strlen(envPath) > 0) {
-		_socketPath = envPath;
+	_tcpPort = ParseTcpPortFromEnv();
+	_useTcp = _tcpPort != 0;
+	if(_useTcp) {
+		_tcpBind = ParseTcpBindFromEnv();
+		_socketPath = "tcp://" + _tcpBind + ":" + std::to_string(_tcpPort);
 	} else {
-		_socketPath = "/tmp/mesen2-" + std::to_string(getpid()) + ".sock";
+		const char* envPath = std::getenv("MESEN2_SOCKET_PATH");
+		if(envPath && strlen(envPath) > 0) {
+			_socketPath = envPath;
+		} else {
+			_socketPath = "/tmp/mesen2-" + std::to_string(getpid()) + ".sock";
+		}
 	}
 	RegisterHandlers();
 }
@@ -483,26 +524,56 @@ void SocketServer::LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, ui
 void SocketServer::Start() {
 	if (_running) return;
 
-	// Remove existing socket file
-	unlink(_socketPath.c_str());
+	if(_useTcp) {
+		_serverFd = socket(AF_INET, SOCK_STREAM, 0);
+		if(_serverFd < 0) {
+			MessageManager::Log("[SocketServer] Failed to create TCP socket");
+			return;
+		}
 
-	// Create Unix domain socket
-	_serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (_serverFd < 0) {
-		MessageManager::Log("[SocketServer] Failed to create socket");
-		return;
-	}
+		int reuse = 1;
+		setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+		setsockopt(_serverFd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+#endif
 
-	struct sockaddr_un addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, _socketPath.c_str(), sizeof(addr.sun_path) - 1);
+		struct sockaddr_in addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(_tcpPort);
+		if(inet_pton(AF_INET, _tcpBind.c_str(), &addr.sin_addr) != 1) {
+			MessageManager::Log("[SocketServer] Invalid TCP bind address: " + _tcpBind);
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
 
-	if (bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-		MessageManager::Log("[SocketServer] Failed to bind socket: " + _socketPath);
-		close(_serverFd);
-		_serverFd = -1;
-		return;
+		if(bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+			MessageManager::Log("[SocketServer] Failed to bind TCP " + _socketPath + ": " + string(strerror(errno)));
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
+	} else {
+		unlink(_socketPath.c_str());
+
+		_serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
+		if(_serverFd < 0) {
+			MessageManager::Log("[SocketServer] Failed to create socket");
+			return;
+		}
+
+		struct sockaddr_un addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sun_family = AF_UNIX;
+		strncpy(addr.sun_path, _socketPath.c_str(), sizeof(addr.sun_path) - 1);
+
+		if(bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+			MessageManager::Log("[SocketServer] Failed to bind socket: " + _socketPath);
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
 	}
 
 	if (listen(_serverFd, 5) < 0) {
@@ -553,10 +624,10 @@ void SocketServer::Stop() {
 	}
 	_serverThread.reset();
 
-	// Remove socket file
-	unlink(_socketPath.c_str());
-	
-	// Remove status file
+	if(!_useTcp) {
+		unlink(_socketPath.c_str());
+	}
+
 	string statusPath = GetStatusFilePath();
 	unlink(statusPath.c_str());
 
@@ -569,6 +640,18 @@ void SocketServer::Stop() {
 
 string SocketServer::GetStatusFilePath() const
 {
+	if(_useTcp) {
+		const char* overridePath = std::getenv("MESEN2_STATUS_PATH");
+		if(overridePath && *overridePath) {
+			return overridePath;
+		}
+#ifdef __ANDROID__
+		return "/data/local/tmp/mesen2-tcp-" + std::to_string(_tcpPort) + ".status";
+#else
+		return "/tmp/mesen2-tcp-" + std::to_string(_tcpPort) + ".status";
+#endif
+	}
+
 	string statusPath = _socketPath;
 	size_t pos = statusPath.rfind(".sock");
 	if(pos != string::npos && pos == statusPath.size() - 5) {
@@ -959,8 +1042,10 @@ SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cm
 	string pcValue = "null";
 	CpuType cpuType = CpuType::Snes;
 
-	if(running) {
-		auto dbg = emu->GetDebugger(true);
+	// HEALTH must remain observational. Only include debugger-backed PC and
+	// disassembly details when a debugger was already active.
+	if(running && debugging) {
+		auto dbg = emu->GetDebugger(false);
 		if(dbg.GetDebugger()) {
 			auto cpuTypes = emu->GetCpuTypes();
 			if(!cpuTypes.empty()) {
@@ -2781,13 +2866,19 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 		frameCount = std::stoi(countIt->second);
 		if (frameCount > 600) frameCount = 600; // Max 10 seconds at 60fps
 	}
+	if (frameCount <= 0) {
+		resp.success = false;
+		resp.error = "Frame count must be positive";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
 
 	auto dbg = emu->GetDebugger(true);
 	Debugger* debugger = dbg.GetDebugger();
 	if (debugger) {
 		CpuType cpuType = emu->GetCpuTypes()[0];
 		// Step by frames
-		debugger->Step(cpuType, frameCount, StepType::PpuStep);
+		debugger->Step(cpuType, frameCount, StepType::PpuFrame);
 	} else {
 		if(frameCount != 1) {
 			resp.success = false;
@@ -6579,24 +6670,23 @@ SocketResponse SocketServer::HandleGameState(Emulator* emu, const SocketCommand&
 		return resp;
 	}
 
-	auto dbg = emu->GetDebugger(false);
-	if (!dbg.GetDebugger()) {
+	ConsoleMemoryInfo workRam = emu->GetMemory(MemoryType::SnesWorkRam);
+	if (!workRam.Memory || workRam.Size < 0x20000) {
 		resp.success = false;
-		resp.error = "Debugger not available";
+		resp.error = "SNES work RAM is unavailable";
 		return resp;
 	}
-
-	MemoryDumper* dumper = dbg.GetDebugger()->GetMemoryDumper();
+	auto* workRamBytes = static_cast<uint8_t*>(workRam.Memory);
 
 	// Helper to read a byte
-	auto readByte = [dumper](uint32_t addr) -> uint8_t {
-		return dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
+	auto readByte = [workRamBytes](uint32_t addr) -> uint8_t {
+		return workRamBytes[addr & 0x1FFFF];
 	};
 
 	// Helper to read a word (little-endian)
-	auto readWord = [dumper](uint32_t addrLow) -> uint16_t {
-		uint8_t lo = dumper->GetMemoryValue(MemoryType::SnesMemory, addrLow);
-		uint8_t hi = dumper->GetMemoryValue(MemoryType::SnesMemory, addrLow + 1);
+	auto readWord = [readByte](uint32_t addrLow) -> uint16_t {
+		uint8_t lo = readByte(addrLow);
+		uint8_t hi = readByte(addrLow + 1);
 		return lo | (hi << 8);
 	};
 
@@ -6687,14 +6777,13 @@ SocketResponse SocketServer::HandleSprites(Emulator* emu, const SocketCommand& c
 		return resp;
 	}
 
-	auto dbg = emu->GetDebugger(false);
-	if (!dbg.GetDebugger()) {
+	ConsoleMemoryInfo workRam = emu->GetMemory(MemoryType::SnesWorkRam);
+	if (!workRam.Memory || workRam.Size < 0x20000) {
 		resp.success = false;
-		resp.error = "Debugger not available";
+		resp.error = "SNES work RAM is unavailable";
 		return resp;
 	}
-
-	MemoryDumper* dumper = dbg.GetDebugger()->GetMemoryDumper();
+	auto* workRamBytes = static_cast<uint8_t*>(workRam.Memory);
 
 	// Parse optional slot filter
 	int slotFilter = -1;
@@ -6711,8 +6800,8 @@ SocketResponse SocketServer::HandleSprites(Emulator* emu, const SocketCommand& c
 	}
 
 	// Helper to read a byte
-	auto readByte = [dumper](uint32_t addr) -> uint8_t {
-		return dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
+	auto readByte = [workRamBytes](uint32_t addr) -> uint8_t {
+		return workRamBytes[addr & 0x1FFFF];
 	};
 
 	// Read sprites

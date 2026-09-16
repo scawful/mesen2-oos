@@ -198,6 +198,9 @@ private:
 	atomic<bool> _running;
 	int _serverFd = -1;
 	string _socketPath;
+	bool _useTcp = false;
+	uint16_t _tcpPort = 0;
+	string _tcpBind;
 	SimpleLock _lock;
 
 	unordered_map<string, CommandHandler> _handlers;
@@ -400,6 +403,8 @@ public:
 	void Stop();
 	bool IsRunning() const { return _running; }
 	string GetSocketPath() const { return _socketPath; }
+	bool IsTcp() const { return _useTcp; }
+	uint16_t GetTcpPort() const { return _tcpPort; }
 	
 	// Status file management
 	void UpdateStatusFile();
