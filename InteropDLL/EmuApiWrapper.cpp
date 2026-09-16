@@ -18,6 +18,7 @@
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
 #include "Utilities/StringUtilities.h"
+#include "HandheldRuntimeSnapshot.h"
 #include "InteropLifecycle.h"
 #include "InteropNotificationListeners.h"
 #include <condition_variable>
@@ -502,20 +503,36 @@ extern "C" {
 		_emu->PowerCycle();
 	}
 
-	DllExport uint32_t __stdcall HandheldFrameCount()
+	DllExport bool __stdcall HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot)
 	{
-		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
-		return _emu->GetFrameCount();
-	}
+		snapshot = {};
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
 
-	DllExport int32_t __stdcall HandheldWramByte(uint32_t offset)
-	{
-		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		snapshot.FrameCount = _emu->GetFrameCount();
+		snapshot.Paused = _emu->IsPaused();
+		StringUtilities::CopyToBuffer(
+			_emu->GetHash(HashType::Sha1),
+			snapshot.RomSha1,
+			sizeof(snapshot.RomSha1)
+		);
+
 		ConsoleMemoryInfo mem = _emu->GetMemory(MemoryType::SnesWorkRam);
-		if(!mem.Memory || offset >= mem.Size) {
-			return -1;
+		if(!mem.Memory) {
+			return false;
 		}
-		return static_cast<uint8_t*>(mem.Memory)[offset];
+
+		auto readByte = [&](uint32_t offset) -> int32_t {
+			if(offset >= mem.Size) {
+				return -1;
+			}
+			return static_cast<uint8_t*>(mem.Memory)[offset];
+		};
+		snapshot.Mode = readByte(0x0010);
+		snapshot.Submode = readByte(0x0011);
+		snapshot.Indoor = readByte(0x001B);
+		snapshot.Area = readByte(0x008A);
+		snapshot.Room = readByte(0x00A0);
+		return true;
 	}
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)
@@ -596,11 +613,6 @@ extern "C" {
 			return;
 		}
 		StringUtilities::CopyToBuffer(_emu->GetHash(hashType), outBuffer, maxLength);
-	}
-
-	DllExport void __stdcall HandheldRomSha1(char* outBuffer, uint32_t maxLength)
-	{
-		GetRomHash(HashType::Sha1, outBuffer, maxLength);
 	}
 
 	DllExport void __stdcall InputBarcode(uint64_t barcode, uint32_t digitCount) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->InputBarcode(barcode, digitCount); }

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <atomic>
 #include "HandheldFramePresenter.h"
+#include "HandheldRuntimeSnapshot.h"
 #ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
@@ -25,12 +26,9 @@ extern "C" {
 	bool LoadRom(char* filename, char* patchFile);
 	void ApplyHandheldSnesDefaults();
 	void HandheldReset();
-	uint32_t HandheldFrameCount();
-	int32_t HandheldWramByte(uint32_t offset);
-	void HandheldRomSha1(char* outBuffer, uint32_t maxLength);
+	bool HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot);
 	void Pause();
 	void Resume();
-	bool IsPaused();
 	void* RegisterNotificationCallback(void (*callback)(int, void*));
 	void Release();
 }
@@ -658,13 +656,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 		}
 		return out;
 	};
-	char sha1[80] = {};
-	HandheldRomSha1(sha1, sizeof(sha1));
-	int32_t mode = HandheldWramByte(0x0010);
-	int32_t sub = HandheldWramByte(0x0011);
-	int32_t indoor = HandheldWramByte(0x001B);
-	int32_t area = HandheldWramByte(0x008A);
-	int32_t room = HandheldWramByte(0x00A0);
+	HandheldRuntimeSnapshot runtime;
+	HandheldReadRuntimeSnapshot(runtime);
 	std::string surfaceDiagnostic;
 	{
 		std::lock_guard<std::mutex> lock(g_surfaceDiagnosticMutex);
@@ -676,14 +669,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 		+ ",\"mapped\":" + (mapped ? "true" : "false")
 		+ ",\"padName\":\"" + jsonEscape(padName)
 		+ "\",\"buttons\":\"" + jsonEscape(buttons)
-		+ "\",\"paused\":" + (IsPaused() ? "true" : "false")
-		+ ",\"sha1\":\"" + jsonEscape(sha1)
-		+ "\",\"frames\":" + std::to_string(HandheldFrameCount())
-		+ ",\"mode\":" + std::to_string(mode)
-		+ ",\"sub\":" + std::to_string(sub)
-		+ ",\"indoor\":" + std::to_string(indoor)
-		+ ",\"area\":" + std::to_string(area)
-		+ ",\"room\":" + std::to_string(room)
+		+ "\",\"paused\":" + (runtime.Paused ? "true" : "false")
+		+ ",\"sha1\":\"" + jsonEscape(runtime.RomSha1)
+		+ "\",\"frames\":" + std::to_string(runtime.FrameCount)
+		+ ",\"mode\":" + std::to_string(runtime.Mode)
+		+ ",\"sub\":" + std::to_string(runtime.Submode)
+		+ ",\"indoor\":" + std::to_string(runtime.Indoor)
+		+ ",\"area\":" + std::to_string(runtime.Area)
+		+ ",\"room\":" + std::to_string(runtime.Room)
 		+ ",\"presentMode\":" + std::to_string(g_presentMode.load())
 		+ ",\"renderCallbacks\":" + std::to_string(g_renderCallbacks.load(std::memory_order_relaxed))
 		+ ",\"renderNewFrames\":" + std::to_string(g_renderNewFrames.load(std::memory_order_relaxed))
