@@ -2,6 +2,14 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Host candidate — 0.1.9-workshop
+
+Version code 10 / APK SHA256 `5d1db75cffd2a959ec2311a903bad6d40401f036ea6ef5be50198ea76abf819e` consolidates the ROM SHA1, pause/frame state, and five ALTTP work-RAM status bytes into one `HandheldReadRuntimeSnapshot` call. The status JSON schema is unchanged. This replaces eight emulator lifetime-lock acquisitions per 180 ms poll with one and reduces cross-frame skew between the reported fields.
+
+`Android/build.sh` passes, and package inspection confirms arm64-v8a plus the consolidated native export. Host regressions pass with 83 Workshop checks using two real MSS fixtures, 7 frame-rate checks, 8 ROM-discovery checks, and 15 framebuffer tests under AddressSanitizer/UndefinedBehaviorSanitizer.
+
+This candidate is **not installed or device-verified** because the RG353P disconnected before deployment. The performance change must be measured on the same scene and pause/run state before promotion. The installed/device-verified release remains 0.1.8-workshop.
+
 ## Workshop diagnostics — installed 0.1.8-workshop
 
 Version code 9 / APK SHA256 `7a29934fc91c2d4914a79eb232900741e5e1f10c45aeb59160d4f3e199f7ecf0` makes `HEALTH` observational. Without an existing debugger it now returns `debugging:false`, `pc:null`, and `disasmOk:false` without calling `GetDebugger(true)`; when a debugger was already active it still includes PC/disassembly details. The installed regression check proves `STATE → HEALTH → STATE` remains debugger-free.
