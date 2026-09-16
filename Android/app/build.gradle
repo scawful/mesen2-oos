@@ -1,0 +1,55 @@
+apply plugin: 'com.android.application'
+
+def ndkVer = System.getenv("ANDROID_NDK_VERSION") ?: "30.0.16248370"
+
+android {
+    namespace "ca.mesen.oos"
+    compileSdk 34
+    ndkVersion ndkVer
+
+    defaultConfig {
+        applicationId "ca.mesen.oos"
+        minSdk 21
+        targetSdk 30
+        versionCode 7
+        versionName "0.1.6-workshop"
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                // SDL's software renderer is C; optimize it alongside the C++ core.
+                arguments "-DANDROID_STL=c++_shared", "-DANDROID_ARM_NEON=TRUE", "-DCMAKE_C_FLAGS_DEBUG=-O2 -g", "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g"
+                cppFlags "-std=c++17 -fexceptions -frtti -fPIC"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+        debug {
+            jniDebuggable true
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+}

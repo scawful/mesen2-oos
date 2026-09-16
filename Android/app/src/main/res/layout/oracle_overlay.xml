@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/oracle_overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="false"
+    android:focusable="false">
+
+    <LinearLayout
+        android:id="@+id/oracle_hud"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="@drawable/hud_scrim"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingStart="10dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="15dp"
+                android:contentDescription="@string/hud_brand"
+                android:src="@drawable/triforce" />
+
+            <TextView
+                android:id="@+id/hud_brand"
+                style="@style/OracleHudText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/hud_brand"
+                android:textAllCaps="true"
+                android:textColor="@color/triforce_gold" />
+
+            <TextView
+                android:id="@+id/hud_rom"
+                style="@style/OracleHudText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:ellipsize="middle"
+                android:singleLine="true"
+                android:text="@string/hud_waiting" />
+
+            <TextView
+                android:id="@+id/hud_socket"
+                style="@style/OracleHudText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:text="tcp:27015"
+                android:textColor="@color/socket_teal"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/hud_link"
+            style="@style/OracleHudText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:textColor="@color/socket_teal"
+            android:textSize="10sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/pause_scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/night_moss_scrim"
+        android:clickable="true"
+        android:descendantFocusability="afterDescendants"
+        android:focusable="false"
+        android:visibility="gone">
+
+        <ScrollView
+            android:id="@+id/pause_scroller"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:descendantFocusability="afterDescendants"
+            android:fillViewport="true"
+            android:focusable="false"
+            android:overScrollMode="never">
+
+            <LinearLayout
+                android:id="@+id/pause_slate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="36dp"
+                android:layout_marginEnd="36dp"
+                android:background="@drawable/slate_panel"
+                android:orientation="vertical">
+
+                <ImageView
+                    android:layout_width="28dp"
+                    android:layout_height="22dp"
+                    android:layout_gravity="center_horizontal"
+                    android:contentDescription="@string/pause_title"
+                    android:src="@drawable/triforce" />
+
+                <TextView
+                    style="@style/OracleTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center"
+                    android:text="@string/pause_title" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp"
+                    android:background="@drawable/gold_rule" />
+
+                <Button
+                    android:id="@+id/btn_continue"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:focusedByDefault="true"
+                    android:nextFocusDown="@id/btn_checkpoint_save"
+                    android:text="@string/pause_continue" />
+
+                <TextView
+                    android:id="@+id/artifact_build"
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center"
+                    android:text="@string/artifact_no_rom"
+                    android:textColor="@color/parchment"
+                    android:textSize="10sp" />
+
+                <EditText
+                    android:id="@+id/artifact_title"
+                    style="@style/OracleField"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/artifact_title_hint"
+                    android:imeOptions="actionNext"
+                    android:inputType="textCapSentences"
+                    android:maxLength="48"
+                    android:nextFocusDown="@id/artifact_note" />
+
+                <EditText
+                    android:id="@+id/artifact_note"
+                    style="@style/OracleField"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/artifact_note_hint"
+                    android:imeOptions="actionDone"
+                    android:inputType="textCapSentences"
+                    android:maxLength="200"
+                    android:nextFocusDown="@id/btn_checkpoint_save" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btn_checkpoint_save"
+                        style="@style/OracleMenuButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1"
+                        android:minHeight="44dp"
+                        android:nextFocusDown="@id/btn_bug_capture"
+                        android:nextFocusRight="@id/btn_bug_capture"
+                        android:nextFocusUp="@id/btn_continue"
+                        android:text="@string/checkpoint_save" />
+
+                    <Button
+                        android:id="@+id/btn_bug_capture"
+                        style="@style/OracleMenuButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:minHeight="44dp"
+                        android:nextFocusDown="@id/btn_checkpoints"
+                        android:nextFocusLeft="@id/btn_checkpoint_save"
+                        android:nextFocusUp="@id/btn_checkpoint_save"
+                        android:text="@string/bug_capture" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/artifact_status"
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:accessibilityLiveRegion="polite"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
+                    android:textColor="@color/parchment"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/bug_categories"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/btn_checkpoints"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nextFocusDown="@id/btn_reset"
+                    android:nextFocusUp="@id/btn_bug_capture"
+                    android:text="@string/checkpoints" />
+
+                <ScrollView
+                    android:id="@+id/checkpoint_scroller"
+                    android:layout_width="match_parent"
+                    android:layout_height="112dp"
+                    android:layout_marginTop="4dp"
+                    android:descendantFocusability="afterDescendants"
+                    android:fillViewport="true"
+                    android:focusable="false"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/checkpoint_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+
+                <LinearLayout
+                    android:id="@+id/restore_review"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/restore_description"
+                        style="@style/OracleHudText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:textColor="@color/parchment" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btn_restore_checkpoint"
+                            style="@style/OracleMenuButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="4dp"
+                            android:layout_weight="1"
+                            android:minHeight="44dp"
+                            android:nextFocusDown="@id/btn_cancel_restore"
+                            android:nextFocusRight="@id/btn_cancel_restore"
+                            android:nextFocusUp="@id/btn_checkpoints"
+                            android:text="@string/checkpoint_restore" />
+
+                        <Button
+                            android:id="@+id/btn_cancel_restore"
+                            style="@style/OracleMenuButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_weight="1"
+                            android:minHeight="44dp"
+                            android:nextFocusDown="@id/btn_reset"
+                            android:nextFocusLeft="@id/btn_restore_checkpoint"
+                            android:nextFocusUp="@id/btn_restore_checkpoint"
+                            android:text="@string/artifact_cancel" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/btn_reset"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusDown="@id/btn_roms"
+                    android:nextFocusUp="@id/btn_checkpoints"
+                    android:text="@string/pause_reset" />
+
+                <Button
+                    android:id="@+id/btn_roms"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusDown="@id/btn_hud"
+                    android:nextFocusUp="@id/btn_reset"
+                    android:text="@string/pause_roms" />
+
+                <ScrollView
+                    android:id="@+id/rom_scroller"
+                    android:layout_width="match_parent"
+                    android:layout_height="96dp"
+                    android:layout_marginTop="4dp"
+                    android:fillViewport="true"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/rom_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+
+                <LinearLayout
+                    android:id="@+id/workshop_card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/workshop_card"
+                    android:clickable="false"
+                    android:focusable="false"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/OracleHudText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.18"
+                        android:text="@string/workshop_eyebrow"
+                        android:textAllCaps="true"
+                        android:textColor="@color/triforce_gold"
+                        android:textSize="9sp" />
+
+                    <TextView
+                        android:id="@+id/workshop_link"
+                        style="@style/OracleHudText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:fontFamily="monospace"
+                        android:text="tcp://127.0.0.1:27015"
+                        android:textColor="@color/socket_teal"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/workshop_meta"
+                        style="@style/OracleHudText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:fontFamily="monospace"
+                        android:maxLines="2"
+                        android:textColor="@color/parchment"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btn_hud"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/chip"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:fontFamily="serif"
+                        android:minHeight="0dp"
+                        android:nextFocusDown="@id/btn_fit"
+                        android:nextFocusRight="@id/btn_fit"
+                        android:nextFocusUp="@id/btn_roms"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:text="@string/chip_hud"
+                        android:textColor="@color/parchment"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/btn_fit"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/chip"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:fontFamily="serif"
+                        android:minHeight="0dp"
+                        android:nextFocusDown="@id/btn_home"
+                        android:nextFocusLeft="@id/btn_hud"
+                        android:nextFocusUp="@id/btn_hud"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:text="@string/chip_fit"
+                        android:textColor="@color/parchment"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/btn_home"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nextFocusDown="@id/btn_continue"
+                    android:nextFocusUp="@id/btn_fit"
+                    android:text="@string/pause_home" />
+
+                <TextView
+                    android:id="@+id/home_status"
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:accessibilityLiveRegion="polite"
+                    android:gravity="center"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/pause_status"
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:textColor="@color/socket_teal"
+                    android:textSize="10sp" />
+
+                <TextView
+                    android:id="@+id/pause_pad"
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:maxLines="2"
+                    android:text="@string/pad_idle"
+                    android:textColor="@color/parchment"
+                    android:textSize="10sp" />
+
+                <TextView
+                    style="@style/OracleHudText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center"
+                    android:text="@string/pause_hint"
+                    android:textSize="10sp" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</FrameLayout>
