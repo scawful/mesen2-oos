@@ -60,6 +60,10 @@ struct SoftwareRendererFrame
 
 static HandheldVideo::FrameMailbox g_frames;
 static std::atomic<int> g_presentMode{0};
+static std::atomic<int> g_preferAccelerated{1}; // Workshop "GPU" chip; default on.
+static std::atomic<int> g_forceSoftware{0}; // Sticky after accelerated failure.
+static std::atomic<int> g_renderAccelerated{0}; // 1 when live renderer is accelerated.
+static std::atomic<int> g_driverChangeRequested{0}; // Force rebuild after GPU chip toggle.
 static uint32_t g_frameEvent = static_cast<uint32_t>(-1);
 static std::atomic<uint64_t> g_renderCallbacks{0};
 static std::atomic<uint64_t> g_renderNewFrames{0};
@@ -67,13 +71,87 @@ static std::atomic<uint64_t> g_renderUploads{0};
 static std::atomic<uint64_t> g_renderPresents{0};
 static std::atomic<uint64_t> g_renderErrors{0};
 static std::atomic<uint64_t> g_renderSurfaceRebuilds{0};
+static std::atomic<uint64_t> g_renderAccelFallbacks{0};
 static std::mutex g_surfaceDiagnosticMutex;
 static std::string g_surfaceDiagnostic = "null";
+static std::mutex g_renderDriverMutex;
+static std::string g_renderDriverName = "none";
 // Only the SDL thread reads/writes these tracing flags.
 static bool g_traceNextPresent = true;
 static bool g_traceNextRebuild = true;
 static uint64_t g_lastPresentErrorTrace = 0;
 static uint64_t g_lastRebuildTrace = 0;
+
+static void SetRenderDriverName(const char* name)
+{
+	std::lock_guard<std::mutex> lock(g_renderDriverMutex);
+	g_renderDriverName = name ? name : "none";
+}
+
+static std::string GetRenderDriverName()
+{
+	std::lock_guard<std::mutex> lock(g_renderDriverMutex);
+	return g_renderDriverName;
+}
+
+// Prefer accelerated GLES on this SDL thread (never Mesen's video thread).
+// Fall back to the known-good software path after any creation failure.
+static SDL_Renderer* CreateHandheldRenderer(SDL_Window* window)
+{
+	const bool tryAccel = g_preferAccelerated.load(std::memory_order_relaxed) != 0
+		&& g_forceSoftware.load(std::memory_order_relaxed) == 0;
+	if(tryAccel) {
+		SDL_ClearError();
+		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
+		SDL_Renderer* accelerated = SDL_CreateRenderer(
+			window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
+		if(accelerated) {
+			SDL_RendererInfo info{};
+			const char* name = "accelerated";
+			if(SDL_GetRendererInfo(accelerated, &info) == 0 && info.name) {
+				name = info.name;
+			}
+			SetRenderDriverName(name);
+			g_renderAccelerated.store(1, std::memory_order_relaxed);
+			return accelerated;
+		}
+		g_renderAccelFallbacks.fetch_add(1, std::memory_order_relaxed);
+		g_forceSoftware.store(1, std::memory_order_relaxed);
+	}
+
+	SDL_ClearError();
+	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+	SDL_Renderer* software = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+	SetRenderDriverName(software ? "software" : "none");
+	g_renderAccelerated.store(0, std::memory_order_relaxed);
+	return software;
+}
+
+static void FallbackToSoftwareRenderer(
+	SDL_Window* window,
+	SDL_Renderer** renderer,
+	SDL_Texture** texture,
+	uint32_t* texW,
+	uint32_t* texH,
+	HandheldVideo::PresentationState& presentation)
+{
+	if(g_renderAccelerated.load(std::memory_order_relaxed) == 0) {
+		return;
+	}
+	g_renderAccelFallbacks.fetch_add(1, std::memory_order_relaxed);
+	g_forceSoftware.store(1, std::memory_order_relaxed);
+	if(*texture) {
+		SDL_DestroyTexture(*texture);
+		*texture = nullptr;
+	}
+	*texW = *texH = 0;
+	if(*renderer) {
+		SDL_DestroyRenderer(*renderer);
+		*renderer = nullptr;
+	}
+	presentation.InvalidateTexture();
+	*renderer = CreateHandheldRenderer(window);
+}
 
 static std::string DiagnosticQuote(const char* value)
 {
@@ -505,6 +583,11 @@ extern "C" int SDL_main(int argc, char* argv[])
 			presentMode = requestedMode;
 			presentation.RequestRedraw();
 		}
+		if(g_driverChangeRequested.exchange(0, std::memory_order_relaxed)) {
+			surface.Invalidate();
+			presentation.RequestRedraw();
+			g_traceNextRebuild = true;
+		}
 		const AndroidSurfaceBinding beforeRebuild = observeBinding();
 		if(window && surface.CanRebuild(SDL_GetTicks64())) {
 			const uint64_t now = SDL_GetTicks64();
@@ -526,9 +609,9 @@ extern "C" int SDL_main(int argc, char* argv[])
 			// Also clears framebuffer resources left by a failed creation.
 			SDL_DestroyWindowSurface(window);
 			presentation.InvalidateTexture();
-			// Preserve the Mali workaround: all SDL work stays on this thread.
-			SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
-			renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+			// Prefer accelerated GLES on this SDL thread; fall back to software.
+			// Mesen's own video-thread SdlRenderer path remains unused (SIGBUS).
+			renderer = CreateHandheldRenderer(window);
 			const std::string creationError = renderer ? "" : SDL_GetError();
 			const AndroidSurfaceBinding afterRebuild = observeBinding();
 			const bool bootstrap = beforeRebuild.Bootstrap && beforeRebuild.Surface == 0;
@@ -537,10 +620,13 @@ extern "C" int SDL_main(int argc, char* argv[])
 					|| (bootstrap && beforeRebuild.Window == afterRebuild.Window));
 			if(!usable) {
 				g_renderErrors.fetch_add(1, std::memory_order_relaxed);
+				if(renderer && g_renderAccelerated.load(std::memory_order_relaxed)) {
+					FallbackToSoftwareRenderer(window, &renderer, &texture, &texW, &texH, presentation);
+				}
 			} else {
 				g_renderSurfaceRebuilds.fetch_add(1, std::memory_order_relaxed);
 			}
-			surface.Rebuilt(usable, SDL_GetTicks64());
+			surface.Rebuilt(usable || (renderer != nullptr), SDL_GetTicks64());
 			const std::string rebuildError = renderer && !usable ? "Android surface unavailable or changed during renderer creation" : creationError;
 			if(traceRebuild) {
 				TraceSurface("after-rebuild", window, renderer, rebuildError.c_str());
@@ -554,6 +640,9 @@ extern "C" int SDL_main(int argc, char* argv[])
 			if(!presented || !afterPresent.Complete() || !beforePresent.SamePair(afterPresent)) {
 				// A Java surface callback can race a successful-looking creation or
 				// draw. Retain pixels and redraw after a bounded resource retry.
+				if(!presented && g_renderAccelerated.load(std::memory_order_relaxed)) {
+					FallbackToSoftwareRenderer(window, &renderer, &texture, &texW, &texH, presentation);
+				}
 				presentation.RequestRedraw();
 				surface.Rebuilt(false, SDL_GetTicks64());
 			}
@@ -744,12 +833,16 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 		+ ",\"area\":" + std::to_string(runtime.Area)
 		+ ",\"room\":" + std::to_string(runtime.Room)
 		+ ",\"presentMode\":" + std::to_string(g_presentMode.load())
+		+ ",\"renderDriver\":\"" + jsonEscape(GetRenderDriverName()) + "\""
+		+ ",\"renderAccelerated\":" + (g_renderAccelerated.load(std::memory_order_relaxed) ? "true" : "false")
+		+ ",\"preferAccelerated\":" + (g_preferAccelerated.load(std::memory_order_relaxed) ? "true" : "false")
 		+ ",\"renderCallbacks\":" + std::to_string(g_renderCallbacks.load(std::memory_order_relaxed))
 		+ ",\"renderNewFrames\":" + std::to_string(g_renderNewFrames.load(std::memory_order_relaxed))
 		+ ",\"renderUploads\":" + std::to_string(g_renderUploads.load(std::memory_order_relaxed))
 		+ ",\"renderPresents\":" + std::to_string(g_renderPresents.load(std::memory_order_relaxed))
 		+ ",\"renderErrors\":" + std::to_string(g_renderErrors.load(std::memory_order_relaxed))
 		+ ",\"renderSurfaceRebuilds\":" + std::to_string(g_renderSurfaceRebuilds.load(std::memory_order_relaxed))
+		+ ",\"renderAccelFallbacks\":" + std::to_string(g_renderAccelFallbacks.load(std::memory_order_relaxed))
 		+ ",\"renderSurfaceDiagnostic\":" + surfaceDiagnostic
 		+ "}";
 	return env->NewStringUTF(json.c_str());
@@ -758,5 +851,28 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setPresentMode(JNIEnv*, jclass, jint mode)
 {
 	g_presentMode.store(mode == 0 ? 0 : 1);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setPreferAccelerated(
+	JNIEnv*,
+	jclass,
+	jboolean enabled
+) {
+	const bool on = enabled == JNI_TRUE;
+	g_preferAccelerated.store(on ? 1 : 0, std::memory_order_relaxed);
+	if(on) {
+		// Allow another attempt after the user re-enables the GPU chip.
+		g_forceSoftware.store(0, std::memory_order_relaxed);
+	} else {
+		g_forceSoftware.store(1, std::memory_order_relaxed);
+	}
+	g_driverChangeRequested.store(1, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isRenderAccelerated(
+	JNIEnv*,
+	jclass
+) {
+	return g_renderAccelerated.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
 }
 #endif

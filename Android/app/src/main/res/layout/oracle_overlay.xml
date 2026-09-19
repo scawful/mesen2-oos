@@ -519,10 +519,31 @@
                         android:minHeight="0dp"
                         android:nextFocusDown="@id/btn_home"
                         android:nextFocusLeft="@id/btn_fit"
+                        android:nextFocusRight="@id/btn_gpu"
                         android:nextFocusUp="@id/btn_fit"
                         android:paddingTop="6dp"
                         android:paddingBottom="6dp"
                         android:text="@string/chip_play"
+                        android:textColor="@color/parchment"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/btn_gpu"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/chip"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:fontFamily="serif"
+                        android:minHeight="0dp"
+                        android:nextFocusDown="@id/btn_home"
+                        android:nextFocusLeft="@id/btn_play"
+                        android:nextFocusUp="@id/btn_play"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:text="@string/chip_gpu"
                         android:textColor="@color/parchment"
                         android:textSize="12sp" />
                 </LinearLayout>

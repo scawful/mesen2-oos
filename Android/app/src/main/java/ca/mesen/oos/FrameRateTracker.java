@@ -76,9 +76,17 @@ final class FrameRateTracker {
     }
 
     /**
+     * Whether accelerated presentation should be preferred. Creation or present
+     * failures stick to software until the user re-enables the GPU chip.
+     */
+    static boolean shouldPreferAccelerated(boolean userPrefersGpu, boolean forceSoftware) {
+        return userPrefersGpu && !forceSoftware;
+    }
+
+    /**
      * Whether the next emulated frame should skip the video pipeline given
      * elapsed ms since the last presented frame. Mirrors the native policy:
-     * turbo / unlimited / speed>1.5x use the 40 ms window; Smooth play uses 10.
+     * turbo / unlimited / speed>1.5x use the 48 ms window; Smooth play uses 10.
      */
     static boolean shouldSkipVisualFrame(boolean turboOrFastSpeed, boolean allowSkip,
             long elapsedMsSincePresent) {

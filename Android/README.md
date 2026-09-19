@@ -2,6 +2,24 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Installed candidate — 0.1.14-handheld
+
+Version code 15 / APK SHA256 `61c5a734d5cb4b62a5240af08e0605c722d0aa739cbabc1838224e8df0bc0701`
+adds a runtime-selectable **GPU blit** presenter on the SDL thread (never
+Mesen's video thread). Accelerated OpenGL ES is preferred by default; creation
+or present failure sticks to the known-good software path until the Workshop
+chip is toggled back on. Status JSON reports `renderDriver`,
+`renderAccelerated`, `preferAccelerated`, and `renderAccelFallbacks`. Turbo
+replaces a pending decode instead of spinning, and the decode wait yields.
+
+**Matched baseline with GPU on (`opengles2`, 0 fallbacks)**
+
+| Mode | Core FPS | Notes |
+|------|----------|-------|
+| Smooth 1× | 60.1 | Stable |
+| Full-render 1× | ~55 | Similar to 0.1.13 |
+| Fast-forward max | ~73 (~1.2×) | Stretch goal 90 still needs PGO / deeper core work |
+
 ## Installed candidate — 0.1.13-handheld
 
 Version code 14 / APK SHA256 `2e1bd8b39743d787bb216e75336c70340fa9aa9aa697c797eb861b903334f944`

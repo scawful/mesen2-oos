@@ -53,6 +53,7 @@ public class MesenActivity extends SDLActivity {
     private static final String PREF_HUD = "keep_hud";
     private static final String PREF_FIT = "fill_screen";
     private static final String PREF_PLAY = "smooth_play";
+    private static final String PREF_GPU = "gpu_blit";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -112,6 +113,7 @@ public class MesenActivity extends SDLActivity {
     private Button mChipHud;
     private Button mChipFit;
     private Button mChipPlay;
+    private Button mChipGpu;
     private LinearLayout mRomList;
     private ScrollView mRomScroller;
     private TextView mArtifactBuild;
@@ -139,6 +141,7 @@ public class MesenActivity extends SDLActivity {
     private boolean mKeepHud;
     private boolean mFillScreen;
     private boolean mSmoothPlay;
+    private boolean mPreferGpu;
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
@@ -198,6 +201,7 @@ public class MesenActivity extends SDLActivity {
         mKeepHud = prefs.getBoolean(PREF_HUD, false);
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
         mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
+        mPreferGpu = prefs.getBoolean(PREF_GPU, true);
         attachOverlay();
         applyIntentPrefs(getIntent());
         startNativeIfNeeded();
@@ -425,6 +429,7 @@ public class MesenActivity extends SDLActivity {
         mChipHud = overlay.findViewById(R.id.btn_hud);
         mChipFit = overlay.findViewById(R.id.btn_fit);
         mChipPlay = overlay.findViewById(R.id.btn_play);
+        mChipGpu = overlay.findViewById(R.id.btn_gpu);
         mRomList = overlay.findViewById(R.id.rom_list);
         mRomScroller = overlay.findViewById(R.id.rom_scroller);
         mArtifactBuild = overlay.findViewById(R.id.artifact_build);
@@ -481,6 +486,9 @@ public class MesenActivity extends SDLActivity {
         if (mChipPlay != null) {
             mChipPlay.setOnClickListener(v -> setSmoothPlay(!mSmoothPlay));
         }
+        if (mChipGpu != null) {
+            mChipGpu.setOnClickListener(v -> setPreferGpu(!mPreferGpu));
+        }
         applyChipState();
         applyPresentMode();
     }
@@ -489,6 +497,7 @@ public class MesenActivity extends SDLActivity {
         mNativeReady = true;
         applyPresentMode();
         applyPerformanceMode();
+        applyPreferAccelerated();
         refreshHud();
         mHandler.removeCallbacks(mStatusPoller);
         mHandler.post(mStatusPoller);
@@ -1162,6 +1171,11 @@ public class MesenActivity extends SDLActivity {
             if (json.optBoolean("performanceMode", mSmoothPlay)) {
                 performance += " · SMOOTH";
             }
+            if (json.optBoolean("renderAccelerated", false)) {
+                performance += " · GPU";
+            } else if (json.optBoolean("preferAccelerated", mPreferGpu)) {
+                performance += " · SW";
+            }
             json.put("observedFps",
                     observedFps == null ? JSONObject.NULL : observedFps);
             json.put("observedFpsState",
@@ -1268,6 +1282,14 @@ public class MesenActivity extends SDLActivity {
         refreshHud();
     }
 
+    private void setPreferGpu(boolean enabled) {
+        mPreferGpu = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_GPU, enabled).apply();
+        applyChipState();
+        applyPreferAccelerated();
+        refreshHud();
+    }
+
     private void setFastForwardKeyHeld(boolean enabled) {
         mFastForwardKeyHeld = enabled;
         updateFastForward();
@@ -1317,6 +1339,10 @@ public class MesenActivity extends SDLActivity {
             mChipPlay.setSelected(mSmoothPlay);
             mChipPlay.setTextColor(mSmoothPlay ? GOLD : PARCHMENT);
         }
+        if (mChipGpu != null) {
+            mChipGpu.setSelected(mPreferGpu);
+            mChipGpu.setTextColor(mPreferGpu ? GOLD : PARCHMENT);
+        }
     }
 
     private void applyIntentPrefs(Intent intent) {
@@ -1332,6 +1358,9 @@ public class MesenActivity extends SDLActivity {
         if (intent.hasExtra("smooth_play")) {
             setSmoothPlay(intent.getBooleanExtra("smooth_play", true));
         }
+        if (intent.hasExtra("gpu_blit")) {
+            setPreferGpu(intent.getBooleanExtra("gpu_blit", true));
+        }
     }
 
     private void applyPresentMode() {
@@ -1343,6 +1372,12 @@ public class MesenActivity extends SDLActivity {
     private void applyPerformanceMode() {
         if (mNativeReady) {
             MesenNative.setPerformanceMode(mSmoothPlay);
+        }
+    }
+
+    private void applyPreferAccelerated() {
+        if (mNativeReady) {
+            MesenNative.setPreferAccelerated(mPreferGpu);
         }
     }
 
@@ -1451,8 +1486,10 @@ public class MesenActivity extends SDLActivity {
             mChipFit.requestFocus();
         } else if (focused == mChipFit) {
             focusPauseView(left ? mChipHud : mChipPlay);
-        } else if (focused == mChipPlay && left) {
-            focusPauseView(mChipFit);
+        } else if (focused == mChipPlay) {
+            focusPauseView(left ? mChipFit : mChipGpu);
+        } else if (focused == mChipGpu && left) {
+            focusPauseView(mChipPlay);
         }
     }
 
@@ -1500,6 +1537,7 @@ public class MesenActivity extends SDLActivity {
         addFocusable(views, mChipHud);
         addFocusable(views, mChipFit);
         addFocusable(views, mChipPlay);
+        addFocusable(views, mChipGpu);
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_home));
         return views;
     }

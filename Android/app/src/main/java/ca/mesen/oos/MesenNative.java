@@ -16,4 +16,6 @@ public final class MesenNative {
     public static native boolean loadRom(String path);
     public static native String statusJson();
     public static native void setPresentMode(int mode);
+    public static native void setPreferAccelerated(boolean enabled);
+    public static native boolean isRenderAccelerated();
 }

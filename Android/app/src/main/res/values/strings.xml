@@ -19,6 +19,7 @@
     <string name="chip_hud">Keep HUD</string>
     <string name="chip_fit">Fill screen</string>
     <string name="chip_play">Smooth play</string>
+    <string name="chip_gpu">GPU blit</string>
     <string name="pad_idle">pad: —</string>
     <string name="checkpoint_save">Save checkpoint</string>
     <string name="states">Save states</string>

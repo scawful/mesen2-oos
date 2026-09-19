@@ -53,6 +53,12 @@ public final class FrameRateTrackerTest {
                 "smooth play presents once the 10 ms window elapses");
         check(!FrameRateTracker.shouldSkipVisualFrame(true, false, 0),
                 "full-render never skips from the visual policy alone");
+        check(FrameRateTracker.shouldPreferAccelerated(true, false),
+                "GPU preference allows accelerated present");
+        check(!FrameRateTracker.shouldPreferAccelerated(true, true),
+                "forced software overrides GPU preference");
+        check(!FrameRateTracker.shouldPreferAccelerated(false, false),
+                "disabled GPU chip stays on software");
 
         System.out.println("FrameRateTrackerTest: " + checks + " checks passed");
     }
