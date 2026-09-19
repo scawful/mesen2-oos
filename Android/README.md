@@ -2,6 +2,12 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Installed candidate — 0.1.15-handheld
+
+Version code 16 / APK SHA256 `ed0bf6512e98fe900d6a32f8b59d18042ddc6259147a4dc90a4cc26d82ce5bee` fixes fast-forward audio loops: turbo mute now **stops and
+clears** the SDL audio ring buffer instead of starving it (which replayed stale
+PCM). R2 should be silent while held and resume cleanly on release.
+
 ## Installed candidate — 0.1.14-handheld
 
 Version code 15 / APK SHA256 `61c5a734d5cb4b62a5240af08e0605c722d0aa739cbabc1838224e8df0bc0701`

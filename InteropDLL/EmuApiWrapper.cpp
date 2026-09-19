@@ -13,6 +13,7 @@
 #include "Core/Shared/CheatManager.h"
 #include "Core/Shared/MemoryType.h"
 #include "Core/Shared/DebuggerRequest.h"
+#include "Core/Shared/Audio/SoundMixer.h"
 #include "Core/Netplay/GameClient.h"
 #include "Core/Netplay/GameServer.h"
 #include "Utilities/ArchiveReader.h"
@@ -521,6 +522,10 @@ extern "C" {
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
 		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, enabled);
+		if(enabled) {
+			// Immediate clean mute: clear the SDL ring so leftover PCM cannot loop.
+			_emu->GetSoundMixer()->StopAudio(true);
+		}
 	}
 
 	DllExport bool __stdcall HandheldIsFastForward()
