@@ -435,6 +435,9 @@ extern "C" {
 	DllExport void __stdcall Pause()
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
+		// Belt-and-suspenders with Java clearFastForward(): never leave Turbo
+		// stuck if R2 ACTION_UP is lost while opening Workshop or backgrounding.
+		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, false);
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Pause();
 		}
@@ -473,7 +476,9 @@ extern "C" {
 		_emu->GetSettings()->SetAudioConfig(audio);
 
 		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
-		emulation.TurboSpeed = 300;
+		// Unlimited turbo while R2 is held. Visual cadence is capped by the
+		// PPU skip window (~48 ms). Audio stays muted via EmulationFlags::Turbo.
+		emulation.TurboSpeed = 0;
 		_emu->GetSettings()->SetEmulationConfig(emulation);
 
 		SnesConfig cfg = _emu->GetSettings()->GetSnesConfig();

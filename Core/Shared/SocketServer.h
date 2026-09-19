@@ -418,6 +418,7 @@ public:
 	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer, uint8_t opcode = 0, Emulator* emu = nullptr);
 	static void CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu);
 	static void BroadcastEvent(string eventType, string data);
+	static bool HasEventSubscribers();
 	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled; }
 	static bool HasMemoryWatch(uint32_t addr);
 	static bool HasLogpoints() { return !_logpoints.empty(); }

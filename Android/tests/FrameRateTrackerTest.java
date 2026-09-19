@@ -32,6 +32,28 @@ public final class FrameRateTrackerTest {
         check(tracker.sample("new-build.sfc", 0, false, 3_200) == null,
                 "frame counter rollback establishes a fresh baseline");
 
+        check("FF".equals(FrameRateTracker.formatFastForwardLabel(null)),
+                "missing FPS keeps a plain FF label");
+        check("FF ×2.0".equals(FrameRateTracker.formatFastForwardLabel(120.2)),
+                "120.2 FPS is reported as ×2.0 against NTSC");
+        check("FF ×1.5".equals(FrameRateTracker.formatFastForwardLabel(90.15)),
+                "90.15 FPS is reported as ×1.5 against NTSC");
+
+        check(FrameRateTracker.turboVisualIntervalMs() == 48,
+                "turbo targets a 48 ms visual interval (~21 FPS)");
+        check(FrameRateTracker.smoothVisualIntervalMs() == 10,
+                "smooth play keeps the 10 ms visual interval");
+        check(FrameRateTracker.shouldSkipVisualFrame(true, true, 20),
+                "turbo skips while under the 48 ms window");
+        check(!FrameRateTracker.shouldSkipVisualFrame(true, true, 48),
+                "turbo presents once the 48 ms window elapses");
+        check(FrameRateTracker.shouldSkipVisualFrame(false, true, 5),
+                "smooth play skips while under the 10 ms window");
+        check(!FrameRateTracker.shouldSkipVisualFrame(false, true, 10),
+                "smooth play presents once the 10 ms window elapses");
+        check(!FrameRateTracker.shouldSkipVisualFrame(true, false, 0),
+                "full-render never skips from the visual policy alone");
+
         System.out.println("FrameRateTrackerTest: " + checks + " checks passed");
     }
 }

@@ -492,16 +492,22 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			_emu->ProcessEvent(EventType::StartFrame);
 
 			uint32_t emulationSpeed = _settings->GetEmulationSpeed();
+			bool turbo = _settings->CheckFlag(EmulationFlags::Turbo);
 			bool handheldFrameSkipping =
 				_settings->CheckFlag(EmulationFlags::HandheldPerformance) &&
 				!_emu->IsDebugging();
+			// Balanced fast-forward aims for ~20-25 visual FPS (≈40-50 ms between
+			// presents) while the core runs as fast as the device allows. Applies
+			// to R2 Turbo and socket SPEED>1.5x. Smooth play keeps 10 ms.
+			bool fastForwardLike = turbo || emulationSpeed == 0 || emulationSpeed > 150;
+			uint32_t skipWindowMs = fastForwardLike ? 48 : 10;
 			_skipRender = (
 				!_settings->GetSnesConfig().DisableFrameSkipping &&
 				(!_interlacedFrame || (_frameCount & 0x02)) &&
 				!_emu->GetRewindManager()->IsRewinding() &&
 				!_emu->GetVideoRenderer()->IsRecording() &&
 				(emulationSpeed == 0 || emulationSpeed > 150 || handheldFrameSkipping) &&
-				_frameSkipTimer.GetElapsedMS() < 10
+				_frameSkipTimer.GetElapsedMS() < skipWindowMs
 			);
 			
 			if(_emu->IsRunAheadFrame()) {
@@ -1497,7 +1503,13 @@ void SnesPpu::SendFrame()
 	uint16_t width = _useHighResOutput ? 512 : 256;
 	uint16_t height = _useHighResOutput ? 478 : 239;
 
-	if(!_overscanFrame) {
+	bool isRewinding = _emu->GetRewindManager()->IsRewinding();
+	// Skipped frames still advance emulation and fire PpuFrameDone (rewind,
+	// input, and socket observers rely on it). Only the video pipeline is
+	// bypassed — matching PceVpc::SendFrame. Rewind/debug always present.
+	bool sendVideo = !_skipRender || isRewinding || _emu->IsDebugging();
+
+	if(sendVideo && !_overscanFrame) {
 		//Clear the top 7 and bottom 8 rows
 		int top = (_useHighResOutput ? 14 : 7);
 		int bottom = (_useHighResOutput ? 16 : 8);
@@ -1507,14 +1519,15 @@ void SnesPpu::SendFrame()
 
 	_emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::PpuFrameDone);
 
-	bool isRewinding = _emu->GetRewindManager()->IsRewinding();
 	if(isRewinding && _needFullFrame) {
 		FillInterlacedFrame();
 	}
 	_needFullFrame = false;
 
-	RenderedFrame frame(_currentBuffer, width, height, _useHighResOutput ? 0.5 : 1.0, _frameCount, _console->GetControlManager()->GetPortStates());
-	_emu->GetVideoDecoder()->UpdateFrame(frame, isRewinding, isRewinding);
+	if(sendVideo) {
+		RenderedFrame frame(_currentBuffer, width, height, _useHighResOutput ? 0.5 : 1.0, _frameCount, _console->GetControlManager()->GetPortStates());
+		_emu->GetVideoDecoder()->UpdateFrame(frame, isRewinding, isRewinding);
+	}
 
 	if(!_skipRender) {
 		_frameSkipTimer.Reset();

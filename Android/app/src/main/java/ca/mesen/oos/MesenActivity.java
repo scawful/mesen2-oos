@@ -1157,7 +1157,7 @@ public class MesenActivity extends SDLActivity {
                     SystemClock.elapsedRealtime());
             String performance = performanceLabel(paused, observedFps);
             if (json.optBoolean("fastForward", mFastForwardHeld)) {
-                performance += " · FF";
+                performance += " · " + FrameRateTracker.formatFastForwardLabel(observedFps);
             }
             if (json.optBoolean("performanceMode", mSmoothPlay)) {
                 performance += " · SMOOTH";

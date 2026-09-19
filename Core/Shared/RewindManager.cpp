@@ -42,6 +42,13 @@ void RewindManager::Reset()
 
 void RewindManager::ClearBuffer()
 {
+	if(!_hasHistory && _history.empty() && _historyBackup.empty()
+			&& _videoHistory.empty() && _videoHistoryBuilder.empty()
+			&& _audioHistory.empty() && _audioHistoryBuilder.empty()
+			&& _framesToFastForward == 0 && _rewindState == RewindState::Stopped
+			&& _currentHistory.FrameCount == 0) {
+		return;
+	}
 	_hasHistory = false;
 	_history.clear();
 	_historyBackup.clear();

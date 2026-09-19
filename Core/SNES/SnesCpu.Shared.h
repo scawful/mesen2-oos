@@ -375,10 +375,10 @@ uint32_t SnesCpu::GetDataAddress(uint16_t addr)
 
 uint8_t SnesCpu::GetOpCode()
 {
-	uint32_t pcFull = ((uint32_t)_state.K << 16) | _state.PC;
-	bool invalidPcRegion = (_state.K == 0x1D && _state.PC < 0x8000);
-	bool invalidSpRegion = _state.SP >= 0x2000;
 	if (_emu && _emu->IsDebugging()) {
+		uint32_t pcFull = ((uint32_t)_state.K << 16) | _state.PC;
+		bool invalidPcRegion = (_state.K == 0x1D && _state.PC < 0x8000);
+		bool invalidSpRegion = _state.SP >= 0x2000;
 		if (invalidPcRegion && !_invalidPcLogged) {
 			_emu->DebugLog(
 				"[K] Invalid PC prev=" + HexUtilities::ToHex(_lastExecPc) +
@@ -415,8 +415,8 @@ uint8_t SnesCpu::GetOpCode()
 		if (!invalidSpRegion && _invalidRtiLogged) {
 			_invalidRtiLogged = false;
 		}
+		_lastExecPc = pcFull;
 	}
-	_lastExecPc = pcFull;
 	uint8_t opCode = ReadCode(_state.PC, MemoryOperationType::ExecOpCode);
 	_state.PC++;
 	return opCode;

@@ -90,6 +90,13 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	_leftSample = samples[0];
 	_rightSample = samples[1];
 
+	// Handheld turbo mutes output (VolumeReduction=100) and disables rewind.
+	// Skip resample/EQ/device work entirely — SPC still runs for game logic.
+	if(masterVolume == 0 && !isRecording && !audioPlayer
+			&& settings->GetPreferences().RewindBufferSize == 0) {
+		return;
+	}
+
 	int16_t *out = _sampleBuffer;
 	uint32_t count = _resampler->Resample(samples, sampleCount, sourceRate, cfg.SampleRate, out, 0x10000);
 

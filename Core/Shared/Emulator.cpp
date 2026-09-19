@@ -324,8 +324,10 @@ void Emulator::OnBeforeSendFrame()
 
 void Emulator::ProcessEndOfFrame()
 {
-	// Broadcast frame_complete event
-	if (_socketServer && _socketServer->IsRunning()) {
+	// Broadcast frame_complete event only when a client is listening — the
+	// handheld socket is always running, and stringstream construction was
+	// paying every frame for an empty subscription map.
+	if (_socketServer && _socketServer->IsRunning() && SocketServer::HasEventSubscribers()) {
 		stringstream ss;
 		ss << "{\"frame\":" << GetFrameCount() << "}";
 		SocketServer::BroadcastEvent("frame_complete", ss.str());
@@ -894,6 +896,17 @@ void Emulator::PauseOnNextFrame()
 
 void Emulator::Pause()
 {
+	// Any pause path (JNI, socket, Workshop) must drop hold-to-turbo so R2
+	// release races cannot leave unlimited speed active after the menu opens.
+	_settings->SetFlagState(EmulationFlags::Turbo, false);
+#ifdef __ANDROID__
+	EmulationConfig cfg = _settings->GetEmulationConfig();
+	if(cfg.EmulationSpeed != 100) {
+		cfg.EmulationSpeed = 100;
+		_settings->SetEmulationConfig(cfg);
+	}
+#endif
+
 	shared_ptr<Debugger> debugger = _debugger.lock();
 	if(debugger) {
 		debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);

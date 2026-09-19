@@ -3150,6 +3150,11 @@ SocketResponse SocketServer::HandleSpeed(Emulator* emu, const SocketCommand& cmd
 
 	settings->SetEmulationConfig(config);
 
+#ifdef __ANDROID__
+	// Match R2 hold-to-turbo: mute + skip resample when Workshop sets SPEED≠1x.
+	settings->SetFlagState(EmulationFlags::Turbo, multiplier != 1.0);
+#endif
+
 	resp.success = true;
 	resp.data = "\"OK\"";
 	return resp;
@@ -5239,6 +5244,12 @@ SocketResponse SocketServer::HandleSubscribe(Emulator* emu, const SocketCommand&
 	}
 
 	return resp;
+}
+
+bool SocketServer::HasEventSubscribers()
+{
+	auto lock = _eventLock.AcquireSafe();
+	return !_eventSubscriptions.empty();
 }
 
 void SocketServer::BroadcastEvent(string eventType, string data) {

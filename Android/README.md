@@ -2,6 +2,42 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Installed candidate — 0.1.13-handheld
+
+Version code 14 / APK SHA256 `2e1bd8b39743d787bb216e75336c70340fa9aa9aa697c797eb861b903334f944`
+targets faster core headroom and a balanced R2 fast-forward policy.
+
+**Core changes**
+- Skipped PPU frames no longer re-enqueue the unchanged image into the video
+  decoder (matching the PC Engine path).
+- Turbo / SPEED≠1x uses a 48 ms visual interval (~20 Hz present budget) while
+  the core runs unlimited (`TurboSpeed=0`). Audio stays muted via
+  `EmulationFlags::Turbo`, and muted handheld turbo skips resample/EQ/device
+  work when rewind is disabled.
+- HUD reports the measured multiplier (`FF ×N.N`).
+- `Emulator::Pause()` clears Turbo and restores 1× speed on Android (covers
+  JNI, socket, and Workshop pause paths).
+- `-mcpu=cortex-a55` (LSE atomics), gated invalid-PC/SP work behind
+  `IsDebugging()`, skip `frame_complete` JSON when no socket subscribers, and
+  a no-op rewind clear when buffers are already empty.
+
+**Matched `perf-baseline-20260916.mss` results (focused, surface active)**
+
+| Mode | Core FPS | Visual (new) | Notes |
+|------|----------|--------------|-------|
+| Smooth 1× | 60.1 | ~26 | Meets NTSC |
+| Full-render 1× | 55.0 | ~34 | Was ~49.5 before this pass |
+| Fast-forward max | 71–72 | ~13–14 | ~1.2×; static title under-reports visual via pixel dedupe |
+
+Hold R2 for fast-forward. Disable **Smooth play** for full-render debugging.
+
+Preinstall backup: `pre013perf`. Internal SRAM, auto-state, SD SRAM, and the
+matched benchmark state retained their preinstall SHA256 hashes.
+
+**Follow-up (gated):** full-render is at the ~55 FPS evidence gate; FF is short
+of a 90 FPS stretch goal. Next levers are a runtime-selectable accelerated SDL
+presenter (software fallback) and Android PGO — do not combine with this pass.
+
 ## Installed candidate — 0.1.12-handheld
 
 Version code 13 / APK SHA256 `f7fb4fe0ae9589af5a3331c8dce642539a83e33d2485fad2343c0105b077fee7`
