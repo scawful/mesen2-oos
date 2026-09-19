@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -51,6 +52,7 @@ public class MesenActivity extends SDLActivity {
     private static final String PREF_LAST_ROM = "last_rom";
     private static final String PREF_HUD = "keep_hud";
     private static final String PREF_FIT = "fill_screen";
+    private static final String PREF_PLAY = "smooth_play";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -109,6 +111,7 @@ public class MesenActivity extends SDLActivity {
     private TextView mHomeStatus;
     private Button mChipHud;
     private Button mChipFit;
+    private Button mChipPlay;
     private LinearLayout mRomList;
     private ScrollView mRomScroller;
     private TextView mArtifactBuild;
@@ -120,14 +123,25 @@ public class MesenActivity extends SDLActivity {
     private ScrollView mCheckpointScroller;
     private View mRestoreReview;
     private TextView mRestoreDescription;
+    private LinearLayout mStateList;
+    private ScrollView mStateScroller;
+    private View mStateReview;
+    private TextView mStateDescription;
+    private Button mStateSave;
+    private Button mStateLoad;
     private WorkshopArtifacts mArtifacts;
     private WorkshopArtifacts.Entry mSelectedCheckpoint;
+    private SaveStateSlots.Entry mSelectedState;
     private boolean mArtifactBusy;
     private boolean mDestroyed;
     private boolean mPauseVisible;
     private boolean mNativeReady;
     private boolean mKeepHud;
     private boolean mFillScreen;
+    private boolean mSmoothPlay;
+    private boolean mFastForwardHeld;
+    private boolean mFastForwardKeyHeld;
+    private boolean mFastForwardTriggerHeld;
     private int mPauseHatLatch;
     private int mPauseHatXLatch;
     private final FrameRateTracker mFrameRateTracker = new FrameRateTracker();
@@ -183,6 +197,7 @@ public class MesenActivity extends SDLActivity {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         mKeepHud = prefs.getBoolean(PREF_HUD, false);
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
+        mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
         attachOverlay();
         applyIntentPrefs(getIntent());
         startNativeIfNeeded();
@@ -229,11 +244,13 @@ public class MesenActivity extends SDLActivity {
 
     @Override
     protected void onPause() {
+        clearFastForward();
         super.onPause();
     }
 
     @Override
     protected void onStop() {
+        clearFastForward();
         super.onStop();
     }
 
@@ -253,6 +270,7 @@ public class MesenActivity extends SDLActivity {
             if (rom != null && !rom.isEmpty() && mNativeReady) {
                 if (MesenNative.loadRom(rom)) {
                     rememberRom(rom);
+                    applyPerformanceMode();
                     refreshHud();
                 }
             }
@@ -269,7 +287,19 @@ public class MesenActivity extends SDLActivity {
         int code = event.getKeyCode();
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_BUTTON_MODE) {
             if (event.getAction() == KeyEvent.ACTION_UP) {
-                togglePauseMenu();
+                if (mPauseVisible) {
+                    handlePauseBack();
+                } else {
+                    showPauseMenu();
+                }
+            }
+            return true;
+        }
+        if (!mPauseVisible && code == KeyEvent.KEYCODE_BUTTON_R2) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                setFastForwardKeyHeld(true);
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                setFastForwardKeyHeld(false);
             }
             return true;
         }
@@ -287,7 +317,7 @@ public class MesenActivity extends SDLActivity {
             forwardPadToSdl(event);
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (code == KeyEvent.KEYCODE_BUTTON_A || code == KeyEvent.KEYCODE_ESCAPE) {
-                    hidePauseMenu();
+                    handlePauseBack();
                     return true;
                 }
                 if (code == KeyEvent.KEYCODE_BUTTON_B
@@ -315,10 +345,16 @@ public class MesenActivity extends SDLActivity {
 
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        int source = event.getSource();
         if (!mPauseVisible) {
+            if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0) {
+                float trigger = Math.max(
+                        event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
+                        event.getAxisValue(MotionEvent.AXIS_GAS));
+                setFastForwardTriggerHeld(trigger > 0.55f);
+            }
             return super.dispatchGenericMotionEvent(event);
         }
-        int source = event.getSource();
         if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_DPAD
                 | InputDevice.SOURCE_GAMEPAD)) == 0) {
             return super.dispatchGenericMotionEvent(event);
@@ -388,6 +424,7 @@ public class MesenActivity extends SDLActivity {
         mHomeStatus = overlay.findViewById(R.id.home_status);
         mChipHud = overlay.findViewById(R.id.btn_hud);
         mChipFit = overlay.findViewById(R.id.btn_fit);
+        mChipPlay = overlay.findViewById(R.id.btn_play);
         mRomList = overlay.findViewById(R.id.rom_list);
         mRomScroller = overlay.findViewById(R.id.rom_scroller);
         mArtifactBuild = overlay.findViewById(R.id.artifact_build);
@@ -399,6 +436,12 @@ public class MesenActivity extends SDLActivity {
         mCheckpointScroller = overlay.findViewById(R.id.checkpoint_scroller);
         mRestoreReview = overlay.findViewById(R.id.restore_review);
         mRestoreDescription = overlay.findViewById(R.id.restore_description);
+        mStateList = overlay.findViewById(R.id.state_list);
+        mStateScroller = overlay.findViewById(R.id.state_scroller);
+        mStateReview = overlay.findViewById(R.id.state_review);
+        mStateDescription = overlay.findViewById(R.id.state_description);
+        mStateSave = overlay.findViewById(R.id.btn_state_save);
+        mStateLoad = overlay.findViewById(R.id.btn_state_load);
 
         overlay.findViewById(R.id.oracle_hud).setOnClickListener(v -> togglePauseMenu());
         overlay.findViewById(R.id.btn_continue).setOnClickListener(v -> hidePauseMenu());
@@ -417,6 +460,13 @@ public class MesenActivity extends SDLActivity {
         overlay.findViewById(R.id.btn_bug_capture).setOnClickListener(v -> toggleBugCategories());
         overlay.findViewById(R.id.btn_checkpoints).setOnClickListener(v -> toggleCheckpoints());
         overlay.findViewById(R.id.btn_restore_checkpoint).setOnClickListener(v -> restoreCheckpoint());
+        overlay.findViewById(R.id.btn_states).setOnClickListener(v -> toggleSaveStates());
+        mStateSave.setOnClickListener(v -> saveSelectedState());
+        mStateLoad.setOnClickListener(v -> loadSelectedState());
+        overlay.findViewById(R.id.btn_cancel_state).setOnClickListener(v -> {
+            closeArtifactPanels();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_states));
+        });
         overlay.findViewById(R.id.btn_cancel_restore).setOnClickListener(v -> {
             closeArtifactPanels();
             focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoints));
@@ -428,6 +478,9 @@ public class MesenActivity extends SDLActivity {
         if (mChipFit != null) {
             mChipFit.setOnClickListener(v -> setFillScreen(!mFillScreen));
         }
+        if (mChipPlay != null) {
+            mChipPlay.setOnClickListener(v -> setSmoothPlay(!mSmoothPlay));
+        }
         applyChipState();
         applyPresentMode();
     }
@@ -435,6 +488,7 @@ public class MesenActivity extends SDLActivity {
     private void markNativeReady() {
         mNativeReady = true;
         applyPresentMode();
+        applyPerformanceMode();
         refreshHud();
         mHandler.removeCallbacks(mStatusPoller);
         mHandler.post(mStatusPoller);
@@ -474,16 +528,47 @@ public class MesenActivity extends SDLActivity {
 
     private void togglePauseMenu() {
         if (mPauseVisible) {
-            hidePauseMenu();
+            handlePauseBack();
         } else {
             showPauseMenu();
         }
+    }
+
+    private void handlePauseBack() {
+        if (mArtifactBusy) {
+            return;
+        }
+        if ((mStateReview != null && mStateReview.getVisibility() == View.VISIBLE)
+                || (mStateScroller != null && mStateScroller.getVisibility() == View.VISIBLE)) {
+            closeArtifactPanels();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_states));
+            return;
+        }
+        if ((mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE)
+                || (mCheckpointScroller != null
+                        && mCheckpointScroller.getVisibility() == View.VISIBLE)) {
+            closeArtifactPanels();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoints));
+            return;
+        }
+        if (mBugCategories != null && mBugCategories.getVisibility() == View.VISIBLE) {
+            closeArtifactPanels();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_bug_capture));
+            return;
+        }
+        if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE) {
+            closeRomList();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_roms));
+            return;
+        }
+        hidePauseMenu();
     }
 
     private void showPauseMenu() {
         if (mPauseScrim == null) {
             return;
         }
+        clearFastForward();
         mPauseVisible = true;
         setSurfaceFocusable(false);
         mPauseScrim.setVisibility(View.VISIBLE);
@@ -586,6 +671,7 @@ public class MesenActivity extends SDLActivity {
                 }
                 if (mNativeReady && MesenNative.loadRom(rom.getAbsolutePath())) {
                     rememberRom(rom.getAbsolutePath());
+                    applyPerformanceMode();
                     hidePauseMenu();
                     refreshHud();
                 }
@@ -699,6 +785,9 @@ public class MesenActivity extends SDLActivity {
     }
 
     private void closeArtifactPanels() {
+        if (mArtifactStatus != null) {
+            mArtifactStatus.setVisibility(View.GONE);
+        }
         if (mBugCategories != null) {
             mBugCategories.setVisibility(View.GONE);
         }
@@ -708,13 +797,116 @@ public class MesenActivity extends SDLActivity {
         if (mRestoreReview != null) {
             mRestoreReview.setVisibility(View.GONE);
         }
+        if (mStateScroller != null) {
+            mStateScroller.setVisibility(View.GONE);
+        }
+        if (mStateReview != null) {
+            mStateReview.setVisibility(View.GONE);
+        }
         mSelectedCheckpoint = null;
+        mSelectedState = null;
     }
 
     private void closeRomList() {
         if (mRomScroller != null) {
             mRomScroller.setVisibility(View.GONE);
         }
+    }
+
+    private void toggleSaveStates() {
+        if (mArtifactBusy) {
+            return;
+        }
+        boolean wasVisible = mStateScroller.getVisibility() == View.VISIBLE
+                || mStateReview.getVisibility() == View.VISIBLE;
+        closeArtifactPanels();
+        closeRomList();
+        if (!wasVisible) {
+            showSaveStates();
+        }
+    }
+
+    private void showSaveStates() {
+        mStateList.removeAllViews();
+        View first = null;
+        boolean pathsAvailable = false;
+        for (int slot = 1; slot <= SaveStateSlots.SLOT_COUNT; slot++) {
+            SaveStateSlots.Entry entry = SaveStateSlots.inspect(
+                    slot, MesenNative.saveStatePath(slot));
+            pathsAvailable |= entry.file != null;
+            Button row = artifactButton(entry.title());
+            if (entry.occupied) {
+                row.setTextColor(GOLD);
+            }
+            row.setOnClickListener(v -> reviewSaveState(entry));
+            mStateList.addView(row);
+            if (first == null) {
+                first = row;
+            }
+        }
+        if (!pathsAvailable) {
+            setArtifactStatus(getString(R.string.states_empty), true);
+            return;
+        }
+        mStateScroller.setVisibility(View.VISIBLE);
+        setArtifactStatus(getString(R.string.states_choose), false);
+        focusPauseView(first);
+    }
+
+    private void reviewSaveState(SaveStateSlots.Entry entry) {
+        if (mArtifactBusy || entry.file == null) {
+            return;
+        }
+        closeArtifactPanels();
+        mSelectedState = entry;
+        mStateDescription.setText(entry.occupied
+                ? getString(R.string.state_review_occupied, entry.title())
+                : getString(R.string.state_review_empty, entry.slot));
+        mStateSave.setText(entry.occupied ? R.string.state_overwrite : R.string.state_save);
+        mStateLoad.setEnabled(entry.occupied);
+        mStateLoad.setFocusable(entry.occupied);
+        mStateLoad.setFocusableInTouchMode(entry.occupied);
+        mStateReview.setVisibility(View.VISIBLE);
+        focusPauseView(mPauseScrim.findViewById(R.id.btn_cancel_state));
+    }
+
+    private void saveSelectedState() {
+        SaveStateSlots.Entry entry = mSelectedState;
+        if (mArtifactBusy || entry == null) {
+            return;
+        }
+        int slot = entry.slot;
+        closeArtifactPanels();
+        runArtifactTask(R.string.state_saving, R.string.state_save_failed,
+                R.id.btn_states, () -> {
+                    if (!MesenNative.saveState(slot)) {
+                        throw new IllegalStateException("native save failed");
+                    }
+                    return slot;
+                }, savedSlot -> {
+                    showSaveStates();
+                    setArtifactStatus(getString(R.string.state_saved, savedSlot), true);
+                });
+    }
+
+    private void loadSelectedState() {
+        SaveStateSlots.Entry entry = mSelectedState;
+        if (mArtifactBusy || entry == null || !entry.occupied) {
+            return;
+        }
+        int slot = entry.slot;
+        closeArtifactPanels();
+        runArtifactTask(R.string.state_loading, R.string.state_load_failed,
+                R.id.btn_states, () -> {
+                    if (!MesenNative.loadState(slot)) {
+                        throw new IllegalStateException("native load failed");
+                    }
+                    return slot;
+                }, loadedSlot -> {
+                    showSaveStates();
+                    setArtifactStatus(getString(R.string.state_loaded, loadedSlot), true);
+                    refreshHud();
+                });
     }
 
     private void saveCheckpoint() {
@@ -877,6 +1069,11 @@ public class MesenActivity extends SDLActivity {
     private static void focusPauseView(View view) {
         if (view != null && view.isEnabled() && view.isShown()) {
             view.requestFocus();
+            view.post(() -> {
+                Rect bounds = new Rect();
+                view.getDrawingRect(bounds);
+                view.requestRectangleOnScreen(bounds, false);
+            });
         }
     }
 
@@ -959,6 +1156,12 @@ public class MesenActivity extends SDLActivity {
                     rom, json.optLong("frames", -1), paused,
                     SystemClock.elapsedRealtime());
             String performance = performanceLabel(paused, observedFps);
+            if (json.optBoolean("fastForward", mFastForwardHeld)) {
+                performance += " · FF";
+            }
+            if (json.optBoolean("performanceMode", mSmoothPlay)) {
+                performance += " · SMOOTH";
+            }
             json.put("observedFps",
                     observedFps == null ? JSONObject.NULL : observedFps);
             json.put("observedFpsState",
@@ -1057,6 +1260,50 @@ public class MesenActivity extends SDLActivity {
         applyPresentMode();
     }
 
+    private void setSmoothPlay(boolean enabled) {
+        mSmoothPlay = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_PLAY, enabled).apply();
+        applyChipState();
+        applyPerformanceMode();
+        refreshHud();
+    }
+
+    private void setFastForwardKeyHeld(boolean enabled) {
+        mFastForwardKeyHeld = enabled;
+        updateFastForward();
+    }
+
+    private void setFastForwardTriggerHeld(boolean enabled) {
+        mFastForwardTriggerHeld = enabled;
+        updateFastForward();
+    }
+
+    private void clearFastForward() {
+        mFastForwardKeyHeld = false;
+        mFastForwardTriggerHeld = false;
+        updateFastForward();
+    }
+
+    private void updateFastForward() {
+        setFastForwardHeld(mFastForwardKeyHeld || mFastForwardTriggerHeld);
+    }
+
+    private void setFastForwardHeld(boolean enabled) {
+        if (mFastForwardHeld == enabled) {
+            return;
+        }
+        mFastForwardHeld = enabled;
+        if (mNativeReady) {
+            MesenNative.setFastForward(enabled);
+        }
+        if (enabled) {
+            showHudBar();
+        } else if (!mPauseVisible) {
+            mHandler.postDelayed(this::hideHudBar, 800);
+        }
+        refreshHud();
+    }
+
     private void applyChipState() {
         if (mChipHud != null) {
             mChipHud.setSelected(mKeepHud);
@@ -1065,6 +1312,10 @@ public class MesenActivity extends SDLActivity {
         if (mChipFit != null) {
             mChipFit.setSelected(mFillScreen);
             mChipFit.setTextColor(mFillScreen ? GOLD : PARCHMENT);
+        }
+        if (mChipPlay != null) {
+            mChipPlay.setSelected(mSmoothPlay);
+            mChipPlay.setTextColor(mSmoothPlay ? GOLD : PARCHMENT);
         }
     }
 
@@ -1078,11 +1329,20 @@ public class MesenActivity extends SDLActivity {
         if (intent.hasExtra("fill_screen")) {
             setFillScreen(intent.getBooleanExtra("fill_screen", false));
         }
+        if (intent.hasExtra("smooth_play")) {
+            setSmoothPlay(intent.getBooleanExtra("smooth_play", true));
+        }
     }
 
     private void applyPresentMode() {
         if (mNativeReady) {
             MesenNative.setPresentMode(mFillScreen ? 1 : 0);
+        }
+    }
+
+    private void applyPerformanceMode() {
+        if (mNativeReady) {
+            MesenNative.setPerformanceMode(mSmoothPlay);
         }
     }
 
@@ -1164,7 +1424,18 @@ public class MesenActivity extends SDLActivity {
 
     private void movePauseFocusHorizontal(boolean left) {
         View focused = getCurrentFocus();
-        if (mPauseScrim != null && focused == mPauseScrim.findViewById(R.id.btn_checkpoint_save)
+        View stateCancel = mPauseScrim == null
+                ? null : mPauseScrim.findViewById(R.id.btn_cancel_state);
+        if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE
+                && focused == mStateSave && !left) {
+            focusPauseView(mStateLoad.isEnabled() ? mStateLoad : stateCancel);
+        } else if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE
+                && focused == mStateLoad) {
+            focusPauseView(left ? mStateSave : stateCancel);
+        } else if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE
+                && focused == stateCancel && left) {
+            focusPauseView(mStateLoad.isEnabled() ? mStateLoad : mStateSave);
+        } else if (mPauseScrim != null && focused == mPauseScrim.findViewById(R.id.btn_checkpoint_save)
                 && !left) {
             focusPauseView(mPauseScrim.findViewById(R.id.btn_bug_capture));
         } else if (mPauseScrim != null && focused == mPauseScrim.findViewById(R.id.btn_bug_capture)
@@ -1178,8 +1449,10 @@ public class MesenActivity extends SDLActivity {
             focusPauseView(mPauseScrim.findViewById(R.id.btn_restore_checkpoint));
         } else if (focused == mChipHud && !left && mChipFit != null) {
             mChipFit.requestFocus();
-        } else if (focused == mChipFit && left && mChipHud != null) {
-            mChipHud.requestFocus();
+        } else if (focused == mChipFit) {
+            focusPauseView(left ? mChipHud : mChipPlay);
+        } else if (focused == mChipPlay && left) {
+            focusPauseView(mChipFit);
         }
     }
 
@@ -1189,6 +1462,17 @@ public class MesenActivity extends SDLActivity {
             return views;
         }
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_continue));
+        addFocusable(views, mPauseScrim.findViewById(R.id.btn_states));
+        if (mStateScroller != null && mStateScroller.getVisibility() == View.VISIBLE) {
+            for (int i = 0; i < mStateList.getChildCount(); i++) {
+                addFocusable(views, mStateList.getChildAt(i));
+            }
+        }
+        if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE) {
+            addFocusable(views, mStateSave);
+            addFocusable(views, mStateLoad);
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_cancel_state));
+        }
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_checkpoint_save));
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_bug_capture));
         if (mBugCategories != null && mBugCategories.getVisibility() == View.VISIBLE) {
@@ -1215,6 +1499,7 @@ public class MesenActivity extends SDLActivity {
         }
         addFocusable(views, mChipHud);
         addFocusable(views, mChipFit);
+        addFocusable(views, mChipPlay);
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_home));
         return views;
     }

@@ -400,7 +400,7 @@ void SnesCpu::JML()
 	uint8_t newK = (_operand >> 16) & 0xFF;
 	uint16_t newPc = (uint16_t)_operand;
 	bool invalidPc = newPc < 0x8000;
-	if (_emu && (newK != prevK || invalidPc)) {
+	if (_emu && _emu->IsDebugging() && (newK != prevK || invalidPc)) {
 		uint32_t from = ((uint32_t)prevK << 16) | prevPc;
 		uint32_t target = ((uint32_t)newK << 16) | newPc;
 		_emu->DebugLog(
@@ -440,7 +440,7 @@ void SnesCpu::JSL()
 	uint8_t newK = b3;
 	uint16_t newPc = b1 | (b2 << 8);
 	bool invalidPc = newPc < 0x8000;
-	if (_emu && (newK != prevK || invalidPc)) {
+	if (_emu && _emu->IsDebugging() && (newK != prevK || invalidPc)) {
 		uint32_t target = ((uint32_t)newK << 16) | newPc;
 		uint32_t ret = ((uint32_t)prevK << 16) | (_state.PC - 1);
 		_emu->DebugLog(
@@ -510,7 +510,7 @@ void SnesCpu::RTI()
 		uint8_t newPs = PopByte() | ProcFlags::MemoryMode8 | ProcFlags::IndexMode8;
 		uint16_t newPc = PopWord();
 		bool invalidPc = newPc < 0x8000;
-		if (_emu && invalidPc && !_invalidRtiLogged) {
+		if (_emu && _emu->IsDebugging() && invalidPc && !_invalidRtiLogged) {
 			uint32_t from = ((uint32_t)_state.K << 16) | _state.PC;
 			uint32_t to = ((uint32_t)_state.K << 16) | newPc;
 			_emu->DebugLog(
@@ -530,7 +530,7 @@ void SnesCpu::RTI()
 		uint8_t newK = PopByte();
 		uint8_t prevK = _state.K;
 		bool invalidPc = newPc < 0x8000;
-		if (_emu && (newK != prevK || invalidPc) && !_invalidRtiLogged) {
+		if (_emu && _emu->IsDebugging() && (newK != prevK || invalidPc) && !_invalidRtiLogged) {
 			uint32_t from = ((uint32_t)prevK << 16) | _state.PC;
 			uint32_t to = ((uint32_t)newK << 16) | newPc;
 			_emu->DebugLog(
@@ -558,7 +558,7 @@ void SnesCpu::RTL()
 	uint8_t newK = PopByte(false);
 	uint16_t finalPc = newPc + 1;
 	bool invalidPc = finalPc < 0x8000;
-	if (_emu && (newK != _state.K || invalidPc)) {
+	if (_emu && _emu->IsDebugging() && (newK != _state.K || invalidPc)) {
 		uint32_t from = ((uint32_t)_state.K << 16) | _state.PC;
 		uint32_t to = ((uint32_t)newK << 16) | finalPc;
 		_emu->DebugLog(
@@ -1165,7 +1165,7 @@ void SnesCpu::TCD()
 
 void SnesCpu::TCS()
 {
-	if(_emu && _state.SP < 0x2000 && _state.A >= 0x2000) {
+	if(_emu && _emu->IsDebugging() && _state.SP < 0x2000 && _state.A >= 0x2000) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] TCS PC=" + HexUtilities::ToHex(pc) +
@@ -1201,7 +1201,7 @@ void SnesCpu::TXA()
 
 void SnesCpu::TXS()
 {
-	if(_emu && _state.SP < 0x2000 && _state.X >= 0x2000) {
+	if(_emu && _emu->IsDebugging() && _state.SP < 0x2000 && _state.X >= 0x2000) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] TXS PC=" + HexUtilities::ToHex(pc) +

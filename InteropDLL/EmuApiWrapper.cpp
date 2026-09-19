@@ -22,6 +22,7 @@
 #include "InteropLifecycle.h"
 #include "InteropNotificationListeners.h"
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 
@@ -461,6 +462,20 @@ extern "C" {
 	DllExport void __stdcall ApplyHandheldSnesDefaults()
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
+		PreferencesConfig preferences = _emu->GetSettings()->GetPreferences();
+		preferences.RewindBufferSize = 0;
+		preferences.SaveStateSlotCount = 10;
+		_emu->GetSettings()->SetPreferences(preferences);
+
+		AudioConfig audio = _emu->GetSettings()->GetAudioConfig();
+		audio.ReduceSoundInFastForward = true;
+		audio.VolumeReduction = 100;
+		_emu->GetSettings()->SetAudioConfig(audio);
+
+		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
+		emulation.TurboSpeed = 300;
+		_emu->GetSettings()->SetEmulationConfig(emulation);
+
 		SnesConfig cfg = _emu->GetSettings()->GetSnesConfig();
 		cfg.Port1.Type = ControllerType::SnesController;
 		auto mapKey = [](const char* name) -> uint16_t {
@@ -495,6 +510,76 @@ extern "C" {
 		cfg.Port1.Keys.Mapping2.Left = mapKey("Left Arrow");
 		cfg.Port1.Keys.Mapping2.Right = mapKey("Right Arrow");
 		_emu->GetSettings()->SetSnesConfig(cfg);
+	}
+
+	DllExport void __stdcall HandheldSetFastForward(bool enabled)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, enabled);
+	}
+
+	DllExport bool __stdcall HandheldIsFastForward()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetSettings()->CheckFlag(EmulationFlags::Turbo);
+	}
+
+	DllExport void __stdcall HandheldSetPerformanceMode(bool enabled)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->GetSettings()->SetFlagState(EmulationFlags::HandheldPerformance, enabled);
+	}
+
+	DllExport bool __stdcall HandheldIsPerformanceMode()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetSettings()->CheckFlag(EmulationFlags::HandheldPerformance);
+	}
+
+	DllExport bool __stdcall HandheldSaveState(uint32_t stateIndex)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			return false;
+		}
+
+		SaveStateManager* states = _emu->GetSaveStateManager();
+		string path = states->GetStateFilepath(stateIndex);
+		string temporaryPath = path + ".tmp";
+		if(!states->SaveState(temporaryPath, false)) {
+			return false;
+		}
+		if(std::rename(temporaryPath.c_str(), path.c_str()) != 0) {
+			std::remove(temporaryPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldLoadState(uint32_t stateIndex)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			return false;
+		}
+		return _emu->GetSaveStateManager()->LoadState(stateIndex);
+	}
+
+	DllExport void __stdcall HandheldGetSaveStatePath(
+		uint32_t stateIndex,
+		char* outBuffer,
+		uint32_t maxLength
+	) {
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
+			return;
+		}
+		StringUtilities::CopyToBuffer(
+			_emu->GetSaveStateManager()->GetStateFilepath(stateIndex),
+			outBuffer,
+			maxLength
+		);
 	}
 
 	DllExport void __stdcall HandheldReset()

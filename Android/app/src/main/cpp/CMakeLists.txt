@@ -51,12 +51,13 @@ target_include_directories(main PRIVATE
 
 target_compile_definitions(main PRIVATE
     __ANDROID__
+    HAVE_LTO
     LUA_USE_POSIX
+    MESENRELEASE
 )
 
 target_compile_options(main PRIVATE
     -fPIC
-    -O2
     -Wno-unused-parameter
     -Wno-unused-variable
     -Wno-unused-function

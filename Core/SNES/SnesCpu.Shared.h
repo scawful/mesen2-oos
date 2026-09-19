@@ -378,7 +378,7 @@ uint8_t SnesCpu::GetOpCode()
 	uint32_t pcFull = ((uint32_t)_state.K << 16) | _state.PC;
 	bool invalidPcRegion = (_state.K == 0x1D && _state.PC < 0x8000);
 	bool invalidSpRegion = _state.SP >= 0x2000;
-	if (_emu) {
+	if (_emu && _emu->IsDebugging()) {
 		if (invalidPcRegion && !_invalidPcLogged) {
 			_emu->DebugLog(
 				"[K] Invalid PC prev=" + HexUtilities::ToHex(_lastExecPc) +
@@ -592,7 +592,7 @@ void SnesCpu::SetSP(uint16_t sp, bool allowEmulationMode)
 		_state.SP = sp;
 	}
 	bool crossedToIo = (prevSp < 0x2000 && _state.SP >= 0x2000);
-	if(_emu && crossedToIo) {
+	if(_emu && _emu->IsDebugging() && crossedToIo) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[SP] SetSP PC=" + HexUtilities::ToHex(pc) +

@@ -136,7 +136,7 @@
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:focusedByDefault="true"
-                    android:nextFocusDown="@id/btn_checkpoint_save"
+                    android:nextFocusDown="@id/btn_states"
                     android:text="@string/pause_continue" />
 
                 <TextView
@@ -149,6 +149,86 @@
                     android:text="@string/artifact_no_rom"
                     android:textColor="@color/parchment"
                     android:textSize="10sp" />
+
+                <Button
+                    android:id="@+id/btn_states"
+                    style="@style/OracleMenuButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nextFocusDown="@id/btn_checkpoint_save"
+                    android:nextFocusUp="@id/btn_continue"
+                    android:text="@string/states" />
+
+                <ScrollView
+                    android:id="@+id/state_scroller"
+                    android:layout_width="match_parent"
+                    android:layout_height="144dp"
+                    android:layout_marginTop="4dp"
+                    android:descendantFocusability="afterDescendants"
+                    android:fillViewport="true"
+                    android:focusable="false"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/state_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+
+                <LinearLayout
+                    android:id="@+id/state_review"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/state_description"
+                        style="@style/OracleHudText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:textColor="@color/parchment" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btn_state_save"
+                            style="@style/OracleMenuButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="4dp"
+                            android:layout_weight="1"
+                            android:minHeight="44dp"
+                            android:text="@string/state_save" />
+
+                        <Button
+                            android:id="@+id/btn_state_load"
+                            style="@style/OracleMenuButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginEnd="4dp"
+                            android:layout_weight="1"
+                            android:minHeight="44dp"
+                            android:text="@string/state_load" />
+
+                        <Button
+                            android:id="@+id/btn_cancel_state"
+                            style="@style/OracleMenuButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_weight="1"
+                            android:minHeight="44dp"
+                            android:text="@string/artifact_cancel" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <EditText
                     android:id="@+id/artifact_title"
@@ -418,10 +498,31 @@
                         android:minHeight="0dp"
                         android:nextFocusDown="@id/btn_home"
                         android:nextFocusLeft="@id/btn_hud"
+                        android:nextFocusRight="@id/btn_play"
                         android:nextFocusUp="@id/btn_hud"
                         android:paddingTop="6dp"
                         android:paddingBottom="6dp"
                         android:text="@string/chip_fit"
+                        android:textColor="@color/parchment"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/btn_play"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/chip"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:fontFamily="serif"
+                        android:minHeight="0dp"
+                        android:nextFocusDown="@id/btn_home"
+                        android:nextFocusLeft="@id/btn_fit"
+                        android:nextFocusUp="@id/btn_fit"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:text="@string/chip_play"
                         android:textColor="@color/parchment"
                         android:textSize="12sp" />
                 </LinearLayout>

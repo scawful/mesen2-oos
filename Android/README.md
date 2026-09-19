@@ -2,6 +2,39 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Installed candidate — 0.1.11-handheld
+
+Version code 12 / APK SHA256 `366c064710c137c5d392acc52bac9f1e416e56ae990572b720152e32cbd003f1`
+adds a handheld release profile, controller fast-forward, controller-friendly
+submenu Back behavior, a ten-slot ordinary save-state menu, and **Smooth play**.
+Smooth play uses Mesen's existing safe frame-skip path when the full renderer
+cannot keep up; game logic and audio stay near NTSC speed while fewer visual
+frames are presented. Disable the menu chip for full-render debugging. Hold R2
+during gameplay for 3x fast-forward.
+
+The native build now uses `-O3`, Cortex-A55 scheduling, ThinLTO,
+`HAVE_LTO`, `MESENRELEASE`, `NDEBUG`, and section garbage collection for both
+the Mesen core and SDL while retaining stack protection and FORTIFY. It also
+ports upstream SNES clock/DMA dispatch optimizations, avoids constructing
+detailed CPU diagnostic strings unless a debugger exists, and disables rewind
+history on the handheld. Normal autosaves remain enabled.
+
+On the matched `perf-baseline-20260916.mss` scene, the final installed APK
+advanced 598 emulator frames in 10.00 seconds (59.8 FPS), versus roughly 42 FPS
+for 0.1.10. The intermediate full-render optimized build measured about 48 FPS.
+Final status reported `observedFps=60.40`, `renderErrors=0`, and one healthy
+surface rebuild. Smooth play trades visual frame rate for correct game speed;
+sustained gameplay, physical R2 feel, and audio remain manual acceptance checks.
+
+Ordinary save states are separate from Workshop checkpoints. The menu lists ten
+slots with timestamps, sizes, and optional desktop labels. Save replacement is
+written to a temporary file and atomically renamed; load remains explicit and
+keeps Workshop paused. Validation opened and navigated the slot menu without
+creating a state. Before installation, device saves were backed up under
+`Roms/device-saves/backup-pre-011-performance-ui-20260919T164221Z-z150valh`.
+After deployment, internal SRAM, auto-state, SD SRAM, and the matched benchmark
+state retained their preinstall SHA256 hashes.
+
 ## Installed — 0.1.10-workshop
 
 Version code 11 / APK SHA256 `967e1184063bc9c37075e19d7bf4379ff987bd8ffd140a9f6b9f8d3fb9d503f0` closes direct LAN access to the privileged emulator-control protocol. Android now binds only `127.0.0.1:27015`; Mac tools connect through an explicit USB `adb forward`. Workshop publishes `bind=127.0.0.1` and `transport=adb-forward`, no longer advertises an NSD service or LAN endpoint, and no longer holds Wi-Fi or multicast locks for remote control. The manifest drops the four now-unused network/wake permissions while retaining `INTERNET` for the loopback socket.

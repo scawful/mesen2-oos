@@ -25,6 +25,13 @@ extern "C" {
 	void InitializeEmu(const char* homeFolder, void* windowHandle, void* viewerHandle, bool softwareRenderer, bool noAudio, bool noVideo, bool noInput);
 	bool LoadRom(char* filename, char* patchFile);
 	void ApplyHandheldSnesDefaults();
+	void HandheldSetFastForward(bool enabled);
+	bool HandheldIsFastForward();
+	void HandheldSetPerformanceMode(bool enabled);
+	bool HandheldIsPerformanceMode();
+	bool HandheldSaveState(uint32_t stateIndex);
+	bool HandheldLoadState(uint32_t stateIndex);
+	void HandheldGetSaveStatePath(uint32_t stateIndex, char* outBuffer, uint32_t maxLength);
 	void HandheldReset();
 	bool HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot);
 	void Pause();
@@ -379,6 +386,7 @@ extern "C" int SDL_main(int argc, char* argv[])
 	void* pendingWindow = &pendingWindowSentinel;
 	InitializeEmu(home, pendingWindow, pendingWindow, true, false, false, false);
 	ApplyHandheldSnesDefaults();
+	HandheldSetPerformanceMode(true);
 	RegisterNotificationCallback(OnEmuNotification);
 
 	std::string rom = FindRom(argc, argv, home);
@@ -597,6 +605,60 @@ extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_resetEmu(JNIEnv*
 	HandheldReset();
 }
 
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setFastForward(
+	JNIEnv*,
+	jclass,
+	jboolean enabled
+) {
+	HandheldSetFastForward(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isFastForward(JNIEnv*, jclass)
+{
+	return HandheldIsFastForward() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setPerformanceMode(
+	JNIEnv*,
+	jclass,
+	jboolean enabled
+) {
+	HandheldSetPerformanceMode(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isPerformanceMode(
+	JNIEnv*,
+	jclass
+) {
+	return HandheldIsPerformanceMode() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_saveState(
+	JNIEnv*,
+	jclass,
+	jint slot
+) {
+	return HandheldSaveState(static_cast<uint32_t>(slot)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadState(
+	JNIEnv*,
+	jclass,
+	jint slot
+) {
+	return HandheldLoadState(static_cast<uint32_t>(slot)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_saveStatePath(
+	JNIEnv* env,
+	jclass,
+	jint slot
+) {
+	char path[4096] = {};
+	HandheldGetSaveStatePath(static_cast<uint32_t>(slot), path, sizeof(path));
+	return env->NewStringUTF(path);
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadRom(JNIEnv* env, jclass, jstring path)
 {
 	if(!env || !path) {
@@ -672,6 +734,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 		+ ",\"padName\":\"" + jsonEscape(padName)
 		+ "\",\"buttons\":\"" + jsonEscape(buttons)
 		+ "\",\"paused\":" + (runtime.Paused ? "true" : "false")
+		+ ",\"fastForward\":" + (HandheldIsFastForward() ? "true" : "false")
+		+ ",\"performanceMode\":" + (HandheldIsPerformanceMode() ? "true" : "false")
 		+ ",\"sha1\":\"" + jsonEscape(runtime.RomSha1)
 		+ "\",\"frames\":" + std::to_string(runtime.FrameCount)
 		+ ",\"mode\":" + std::to_string(runtime.Mode)

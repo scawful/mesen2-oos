@@ -491,12 +491,16 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			_timeOver = false;
 			_emu->ProcessEvent(EventType::StartFrame);
 
+			uint32_t emulationSpeed = _settings->GetEmulationSpeed();
+			bool handheldFrameSkipping =
+				_settings->CheckFlag(EmulationFlags::HandheldPerformance) &&
+				!_emu->IsDebugging();
 			_skipRender = (
 				!_settings->GetSnesConfig().DisableFrameSkipping &&
 				(!_interlacedFrame || (_frameCount & 0x02)) &&
 				!_emu->GetRewindManager()->IsRewinding() &&
 				!_emu->GetVideoRenderer()->IsRecording() &&
-				(_settings->GetEmulationSpeed() == 0 || _settings->GetEmulationSpeed() > 150) &&
+				(emulationSpeed == 0 || emulationSpeed > 150 || handheldFrameSkipping) &&
 				_frameSkipTimer.GetElapsedMS() < 10
 			);
 			

@@ -159,7 +159,7 @@ void SnesCpu::Write(uint32_t addr, uint8_t value, MemoryOperationType type)
 {
 	_memoryManager->SetCpuSpeed(_memoryManager->GetCpuSpeed(addr));
 	ProcessCpuCycle();
-	if (_emu && addr >= 0x01F0 && addr <= 0x01F3) {
+	if (_emu && _emu->IsDebugging() && addr >= 0x01F0 && addr <= 0x01F3) {
 		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
 		_emu->DebugLog(
 			"[STACK] write addr=" + HexUtilities::ToHex(addr) +
