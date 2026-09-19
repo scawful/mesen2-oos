@@ -316,11 +316,11 @@ public class MesenActivity extends SDLActivity {
             // handleKeyEvent. Forward them ourselves for the live readout.
             forwardPadToSdl(event);
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                if (code == KeyEvent.KEYCODE_BUTTON_A || code == KeyEvent.KEYCODE_ESCAPE) {
+                if (code == KeyEvent.KEYCODE_BUTTON_B || code == KeyEvent.KEYCODE_ESCAPE) {
                     handlePauseBack();
                     return true;
                 }
-                if (code == KeyEvent.KEYCODE_BUTTON_B
+                if (code == KeyEvent.KEYCODE_BUTTON_A
                         || code == KeyEvent.KEYCODE_ENTER
                         || code == KeyEvent.KEYCODE_DPAD_CENTER) {
                     View focused = getCurrentFocus();

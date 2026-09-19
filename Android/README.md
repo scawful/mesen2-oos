@@ -2,9 +2,9 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
-## Installed candidate — 0.1.11-handheld
+## Installed candidate — 0.1.12-handheld
 
-Version code 12 / APK SHA256 `366c064710c137c5d392acc52bac9f1e416e56ae990572b720152e32cbd003f1`
+Version code 13 / APK SHA256 `f7fb4fe0ae9589af5a3331c8dce642539a83e33d2485fad2343c0105b077fee7`
 adds a handheld release profile, controller fast-forward, controller-friendly
 submenu Back behavior, a ten-slot ordinary save-state menu, and **Smooth play**.
 Smooth play uses Mesen's existing safe frame-skip path when the full renderer
@@ -34,6 +34,9 @@ creating a state. Before installation, device saves were backed up under
 `Roms/device-saves/backup-pre-011-performance-ui-20260919T164221Z-z150valh`.
 After deployment, internal SRAM, auto-state, SD SRAM, and the matched benchmark
 state retained their preinstall SHA256 hashes.
+
+RG353P face buttons follow their printed labels: physical A maps to SNES A and
+confirms Workshop actions; physical B maps to SNES B and goes back.
 
 ## Installed — 0.1.10-workshop
 

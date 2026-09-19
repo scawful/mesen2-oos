@@ -485,8 +485,8 @@ extern "C" {
 		if(!selectKey) {
 			selectKey = mapKey("Pad1 Back");
 		}
-		cfg.Port1.Keys.Mapping1.A = mapKey("Pad1 B");
-		cfg.Port1.Keys.Mapping1.B = mapKey("Pad1 A");
+		cfg.Port1.Keys.Mapping1.A = mapKey("Pad1 A");
+		cfg.Port1.Keys.Mapping1.B = mapKey("Pad1 B");
 		cfg.Port1.Keys.Mapping1.X = mapKey("Pad1 Y");
 		cfg.Port1.Keys.Mapping1.Y = mapKey("Pad1 X");
 		cfg.Port1.Keys.Mapping1.L = mapKey("Pad1 L1");
