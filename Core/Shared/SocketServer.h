@@ -296,6 +296,7 @@ private:
 	static SocketResponse HandleHealth(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandlePause(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleResume(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleStopDebugger(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleReset(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadRom(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRead(Emulator* emu, const SocketCommand& cmd);

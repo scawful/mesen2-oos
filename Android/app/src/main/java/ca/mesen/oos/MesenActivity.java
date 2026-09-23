@@ -1,11 +1,13 @@
 package ca.mesen.oos;
 
+import android.Manifest;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Color;
@@ -13,7 +15,11 @@ import android.graphics.Rect;
 import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.os.Build;
+import android.widget.Toast;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -131,12 +137,32 @@ public class MesenActivity extends SDLActivity {
     private TextView mStateDescription;
     private Button mStateSave;
     private Button mStateLoad;
+    private Button mTabPlay;
+    private Button mTabStates;
+    private Button mTabCapture;
+    private Button mTabCheats;
+    private Button mTabSetup;
+    private View mPanelPlay;
+    private View mPanelStates;
+    private View mPanelCheats;
+    private View mPanelCapture;
+    private View mPanelSetup;
+    private LinearLayout mCheatGroups;
+    private LinearLayout mCheatList;
+    private TextView mCheatStatus;
+    private String mCheatGroup = WorkshopCheats.GROUP_QUICK;
+    private Button mVoiceButton;
+    private WorkshopVoiceRecorder mVoiceRecorder;
+    private WorkshopVoiceNote.Session mVoiceSession;
+    private final Runnable mVoiceAutoStop = this::stopVoiceNote;
+    private static final int REQ_RECORD_AUDIO = 4401;
     private WorkshopArtifacts mArtifacts;
     private WorkshopArtifacts.Entry mSelectedCheckpoint;
     private SaveStateSlots.Entry mSelectedState;
     private boolean mArtifactBusy;
     private boolean mDestroyed;
     private boolean mPauseVisible;
+    private int mPauseTab;
     private boolean mNativeReady;
     private boolean mKeepHud;
     private boolean mFillScreen;
@@ -148,8 +174,16 @@ public class MesenActivity extends SDLActivity {
     private int mPauseHatLatch;
     private int mPauseHatXLatch;
     private final FrameRateTracker mFrameRateTracker = new FrameRateTracker();
+    private final FrameRateTracker mPresentRateTracker = new FrameRateTracker();
     private WorkshopLink mWorkshop;
+    private static final String ACTION_DUMP_PGO = "ca.mesen.oos.DUMP_PGO";
+    private static final int TAB_PLAY = 0;
+    private static final int TAB_STATES = 1;
+    private static final int TAB_CHEATS = 2;
+    private static final int TAB_CAPTURE = 3;
+    private static final int TAB_SETUP = 4;
     private boolean mHomeReceiverRegistered;
+    private boolean mPgoDumpReceiverRegistered;
     private String mHomeRequestToken;
     private final BroadcastReceiver mHomeReceiver = new BroadcastReceiver() {
         @Override
@@ -158,6 +192,18 @@ public class MesenActivity extends SDLActivity {
                     && mHomeRequestToken.equals(intent.getStringExtra(HOME_REQUEST_TOKEN))) {
                 mHomeRequestToken = null;
                 setHomeStatus(R.string.home_added);
+            }
+        }
+    };
+    private final BroadcastReceiver mPgoDumpReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ACTION_DUMP_PGO.equals(intent.getAction()) || !mNativeReady) {
+                return;
+            }
+            try {
+                MesenNative.dumpPgoProfile();
+            } catch (UnsatisfiedLinkError ignored) {
             }
         }
     };
@@ -204,16 +250,27 @@ public class MesenActivity extends SDLActivity {
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
         attachOverlay();
         applyIntentPrefs(getIntent());
+        // Do not collapse the shade here — StatusBarManager.collapsePanels during
+        // first resume races WindowManager and pauses the activity before the
+        // SDL SurfaceView ever receives surfaceChanged.
         startNativeIfNeeded();
+        mHandler.post(this::startNativeIfNeeded);
+        for (int delayMs : new int[] {250, 500, 1000, 2000, 4000}) {
+            mHandler.postDelayed(this::startNativeIfNeeded, delayMs);
+        }
+        // Collapse after the surface has had time to bind.
+        mHandler.postDelayed(this::collapseNotificationShade, 600);
         mHandler.postDelayed(this::markNativeReady, 1200);
         mHandler.postDelayed(this::refreshHud, 1500);
         mHandler.postDelayed(this::hideHudBar, 4500);
         keepVisibleScreenOn();
+        registerPgoDumpReceiver();
     }
 
     @Override
     protected void onDestroy() {
         mDestroyed = true;
+        cancelVoiceNote(false);
         // Let an in-flight artifact finish writing; never interrupt a state save.
         mArtifactExecutor.shutdown();
         if (sInstance == this) {
@@ -223,6 +280,10 @@ public class MesenActivity extends SDLActivity {
         if (mHomeReceiverRegistered) {
             unregisterReceiver(mHomeReceiver);
             mHomeReceiverRegistered = false;
+        }
+        if (mPgoDumpReceiverRegistered) {
+            unregisterReceiver(mPgoDumpReceiver);
+            mPgoDumpReceiverRegistered = false;
         }
         mHomeRequestToken = null;
         super.onDestroy();
@@ -234,6 +295,7 @@ public class MesenActivity extends SDLActivity {
         if (hasFocus) {
             applyImmersive();
             startNativeIfNeeded();
+            mHandler.postDelayed(this::collapseNotificationShade, 300);
         }
     }
 
@@ -241,6 +303,10 @@ public class MesenActivity extends SDLActivity {
     protected void onResume() {
         super.onResume();
         keepVisibleScreenOn();
+        applyImmersive();
+        startNativeIfNeeded();
+        // Delay shade collapse so the first SurfaceView bind can complete.
+        mHandler.postDelayed(this::collapseNotificationShade, 400);
         if (mWorkshop != null) {
             mWorkshop.refresh(true);
         }
@@ -249,12 +315,25 @@ public class MesenActivity extends SDLActivity {
     @Override
     protected void onPause() {
         clearFastForward();
+        if (mNativeReady) {
+            try {
+                MesenNative.dumpPgoProfile();
+            } catch (UnsatisfiedLinkError ignored) {
+                // Non-instrumented builds omit the symbol.
+            }
+        }
         super.onPause();
     }
 
     @Override
     protected void onStop() {
         clearFastForward();
+        if (mNativeReady) {
+            try {
+                MesenNative.dumpPgoProfile();
+            } catch (UnsatisfiedLinkError ignored) {
+            }
+        }
         super.onStop();
     }
 
@@ -330,6 +409,17 @@ public class MesenActivity extends SDLActivity {
                     View focused = getCurrentFocus();
                     if (focused != null && event.getRepeatCount() == 0) {
                         focused.performClick();
+                    }
+                    return true;
+                }
+                if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
+                    if (event.getRepeatCount() == 0) {
+                        boolean left = code == KeyEvent.KEYCODE_BUTTON_L1;
+                        if (mPauseTab == TAB_CHEATS) {
+                            cycleCheatGroup(left);
+                        } else {
+                            cyclePauseTab(left);
+                        }
                     }
                     return true;
                 }
@@ -447,6 +537,19 @@ public class MesenActivity extends SDLActivity {
         mStateDescription = overlay.findViewById(R.id.state_description);
         mStateSave = overlay.findViewById(R.id.btn_state_save);
         mStateLoad = overlay.findViewById(R.id.btn_state_load);
+        mTabPlay = overlay.findViewById(R.id.tab_play);
+        mTabStates = overlay.findViewById(R.id.tab_states);
+        mTabCheats = overlay.findViewById(R.id.tab_cheats);
+        mTabCapture = overlay.findViewById(R.id.tab_capture);
+        mTabSetup = overlay.findViewById(R.id.tab_setup);
+        mPanelPlay = overlay.findViewById(R.id.panel_play);
+        mPanelStates = overlay.findViewById(R.id.panel_states);
+        mPanelCheats = overlay.findViewById(R.id.panel_cheats);
+        mPanelCapture = overlay.findViewById(R.id.panel_capture);
+        mPanelSetup = overlay.findViewById(R.id.panel_setup);
+        mCheatGroups = overlay.findViewById(R.id.cheat_groups);
+        mCheatList = overlay.findViewById(R.id.cheat_list);
+        mCheatStatus = overlay.findViewById(R.id.cheat_status);
 
         overlay.findViewById(R.id.oracle_hud).setOnClickListener(v -> togglePauseMenu());
         overlay.findViewById(R.id.btn_continue).setOnClickListener(v -> hidePauseMenu());
@@ -463,14 +566,23 @@ public class MesenActivity extends SDLActivity {
         overlay.findViewById(R.id.btn_home).setOnClickListener(v -> requestHomeShortcut());
         overlay.findViewById(R.id.btn_checkpoint_save).setOnClickListener(v -> saveCheckpoint());
         overlay.findViewById(R.id.btn_bug_capture).setOnClickListener(v -> toggleBugCategories());
+        mVoiceButton = overlay.findViewById(R.id.btn_voice_note);
+        if (mVoiceButton != null) {
+            mVoiceButton.setOnClickListener(v -> toggleVoiceNote());
+        }
         overlay.findViewById(R.id.btn_checkpoints).setOnClickListener(v -> toggleCheckpoints());
         overlay.findViewById(R.id.btn_restore_checkpoint).setOnClickListener(v -> restoreCheckpoint());
-        overlay.findViewById(R.id.btn_states).setOnClickListener(v -> toggleSaveStates());
+        mTabPlay.setOnClickListener(v -> selectPauseTab(TAB_PLAY, true));
+        mTabStates.setOnClickListener(v -> selectPauseTab(TAB_STATES, true));
+        mTabCheats.setOnClickListener(v -> selectPauseTab(TAB_CHEATS, true));
+        mTabCapture.setOnClickListener(v -> selectPauseTab(TAB_CAPTURE, true));
+        mTabSetup.setOnClickListener(v -> selectPauseTab(TAB_SETUP, true));
+        populateCheatGroups();
         mStateSave.setOnClickListener(v -> saveSelectedState());
         mStateLoad.setOnClickListener(v -> loadSelectedState());
         overlay.findViewById(R.id.btn_cancel_state).setOnClickListener(v -> {
             closeArtifactPanels();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_states));
+            showSaveStates();
         });
         overlay.findViewById(R.id.btn_cancel_restore).setOnClickListener(v -> {
             closeArtifactPanels();
@@ -508,11 +620,26 @@ public class MesenActivity extends SDLActivity {
 
     private void keepVisibleScreenOn() {
         Window window = getWindow();
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
         // SDL may also update the window flag asynchronously. A visible-view
         // request remains part of Android's effective window attributes and
         // stops applying when this app's window is no longer visible.
         window.getDecorView().setKeepScreenOn(true);
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
+        try {
+            android.app.KeyguardManager km =
+                    (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+            if (km != null && Build.VERSION.SDK_INT >= 26) {
+                km.requestDismissKeyguard(this, null);
+            }
+        } catch (RuntimeException ignored) {
+        }
     }
 
     private void applyImmersive() {
@@ -535,6 +662,33 @@ public class MesenActivity extends SDLActivity {
         }
     }
 
+    /** Best-effort collapse of the RG353P notification shade during adb sessions. */
+    private void collapseNotificationShade() {
+        try {
+            Object statusBar = getSystemService("statusbar");
+            if (statusBar == null) {
+                return;
+            }
+            java.lang.reflect.Method collapse = statusBar.getClass()
+                    .getMethod(Build.VERSION.SDK_INT >= 17 ? "collapsePanels" : "collapse");
+            collapse.invoke(statusBar);
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+    }
+
+    private void registerPgoDumpReceiver() {
+        if (mPgoDumpReceiverRegistered) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(ACTION_DUMP_PGO);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(mPgoDumpReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(mPgoDumpReceiver, filter);
+        }
+        mPgoDumpReceiverRegistered = true;
+    }
+
     private void togglePauseMenu() {
         if (mPauseVisible) {
             handlePauseBack();
@@ -547,15 +701,17 @@ public class MesenActivity extends SDLActivity {
         if (mArtifactBusy) {
             return;
         }
-        if ((mStateReview != null && mStateReview.getVisibility() == View.VISIBLE)
-                || (mStateScroller != null && mStateScroller.getVisibility() == View.VISIBLE)) {
+        if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE) {
             closeArtifactPanels();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_states));
+            showSaveStates();
             return;
         }
-        if ((mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE)
-                || (mCheckpointScroller != null
-                        && mCheckpointScroller.getVisibility() == View.VISIBLE)) {
+        if (mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE) {
+            closeArtifactPanels();
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoints));
+            return;
+        }
+        if (mCheckpointScroller != null && mCheckpointScroller.getVisibility() == View.VISIBLE) {
             closeArtifactPanels();
             focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoints));
             return;
@@ -565,9 +721,14 @@ public class MesenActivity extends SDLActivity {
             focusPauseView(mPauseScrim.findViewById(R.id.btn_bug_capture));
             return;
         }
-        if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE) {
+        if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE
+                && mPauseTab == TAB_SETUP) {
             closeRomList();
             focusPauseView(mPauseScrim.findViewById(R.id.btn_roms));
+            return;
+        }
+        if (mPauseTab != TAB_PLAY) {
+            selectPauseTab(TAB_PLAY, true);
             return;
         }
         hidePauseMenu();
@@ -582,6 +743,7 @@ public class MesenActivity extends SDLActivity {
         setSurfaceFocusable(false);
         mPauseScrim.setVisibility(View.VISIBLE);
         showHudBar();
+        selectPauseTab(TAB_PLAY, false);
         View continueBtn = mPauseScrim.findViewById(R.id.btn_continue);
         if (continueBtn != null) {
             continueBtn.requestFocus();
@@ -599,9 +761,290 @@ public class MesenActivity extends SDLActivity {
         mHandler.post(mPadPoller);
     }
 
+    private void selectPauseTab(int tab, boolean focusContent) {
+        if (mPauseScrim == null || mArtifactBusy) {
+            return;
+        }
+        if (tab < TAB_PLAY || tab > TAB_SETUP) {
+            tab = TAB_PLAY;
+        }
+        mPauseTab = tab;
+        if (mPanelPlay != null) {
+            mPanelPlay.setVisibility(tab == TAB_PLAY ? View.VISIBLE : View.GONE);
+        }
+        if (mPanelStates != null) {
+            mPanelStates.setVisibility(tab == TAB_STATES ? View.VISIBLE : View.GONE);
+        }
+        if (mPanelCheats != null) {
+            mPanelCheats.setVisibility(tab == TAB_CHEATS ? View.VISIBLE : View.GONE);
+        }
+        if (mPanelCapture != null) {
+            mPanelCapture.setVisibility(tab == TAB_CAPTURE ? View.VISIBLE : View.GONE);
+        }
+        if (mPanelSetup != null) {
+            mPanelSetup.setVisibility(tab == TAB_SETUP ? View.VISIBLE : View.GONE);
+        }
+        setTabSelected(mTabPlay, tab == TAB_PLAY);
+        setTabSelected(mTabStates, tab == TAB_STATES);
+        setTabSelected(mTabCheats, tab == TAB_CHEATS);
+        setTabSelected(mTabCapture, tab == TAB_CAPTURE);
+        setTabSelected(mTabSetup, tab == TAB_SETUP);
+
+        closeArtifactPanels();
+        closeRomList();
+        if (tab == TAB_STATES) {
+            showSaveStates();
+        } else if (tab == TAB_CHEATS) {
+            showCheatGroup(mCheatGroup);
+        } else if (tab == TAB_SETUP) {
+            populateRoms();
+            if (mRomScroller != null) {
+                mRomScroller.setVisibility(View.VISIBLE);
+            }
+        }
+
+        if (!focusContent) {
+            return;
+        }
+        if (tab == TAB_PLAY) {
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_continue));
+        } else if (tab == TAB_STATES) {
+            if (mStateList == null || mStateList.getChildCount() == 0) {
+                focusPauseView(mTabStates);
+            }
+        } else if (tab == TAB_CHEATS) {
+            if (mCheatList != null && mCheatList.getChildCount() > 0) {
+                focusPauseView(mCheatList.getChildAt(0));
+            } else {
+                focusPauseView(mTabCheats);
+            }
+        } else if (tab == TAB_CAPTURE) {
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoint_save));
+        } else {
+            focusPauseView(mPauseScrim.findViewById(R.id.btn_roms));
+        }
+    }
+
+    private static void setTabSelected(Button tab, boolean selected) {
+        if (tab == null) {
+            return;
+        }
+        tab.setSelected(selected);
+        tab.setTextColor(selected ? GOLD : PARCHMENT);
+    }
+
+    private void populateCheatGroups() {
+        if (mCheatGroups == null) {
+            return;
+        }
+        mCheatGroups.removeAllViews();
+        for (String group : WorkshopCheats.groups()) {
+            Button chip = new Button(this);
+            chip.setText(group);
+            chip.setBackgroundResource(R.drawable.chip);
+            chip.setTextColor(PARCHMENT);
+            chip.setTextSize(12);
+            chip.setTypeface(android.graphics.Typeface.SERIF);
+            chip.setMinHeight(0);
+            chip.setPadding(dp(10), dp(6), dp(10), dp(6));
+            chip.setFocusable(true);
+            chip.setFocusableInTouchMode(true);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, dp(4), 0);
+            chip.setLayoutParams(lp);
+            String selected = group;
+            chip.setOnClickListener(v -> showCheatGroup(selected));
+            mCheatGroups.addView(chip);
+        }
+    }
+
+    private void showCheatGroup(String group) {
+        if (mCheatList == null) {
+            return;
+        }
+        mCheatGroup = group == null ? WorkshopCheats.GROUP_QUICK : group;
+        if (mCheatGroups != null) {
+            for (int i = 0; i < mCheatGroups.getChildCount(); i++) {
+                View child = mCheatGroups.getChildAt(i);
+                if (child instanceof Button) {
+                    Button chip = (Button) child;
+                    boolean selected = mCheatGroup.equals(chip.getText().toString());
+                    chip.setSelected(selected);
+                    chip.setTextColor(selected ? GOLD : PARCHMENT);
+                }
+            }
+        }
+        mCheatList.removeAllViews();
+        if (!mNativeReady) {
+            if (mCheatStatus != null) {
+                mCheatStatus.setText(R.string.cheats_need_rom);
+            }
+            return;
+        }
+        if (mCheatStatus != null) {
+            mCheatStatus.setText(R.string.cheats_hint);
+        }
+        View first = null;
+        for (WorkshopCheats.Action action : WorkshopCheats.forGroup(mCheatGroup)) {
+            Button row = artifactButton(action.label);
+            row.setOnClickListener(v -> applyCheat(action));
+            mCheatList.addView(row);
+            if (first == null) {
+                first = row;
+            }
+        }
+        if (first != null && mPauseTab == TAB_CHEATS) {
+            focusPauseView(first);
+        }
+    }
+
+    private void applyCheat(WorkshopCheats.Action action) {
+        if (mArtifactBusy || !mNativeReady) {
+            return;
+        }
+        String result = WorkshopCheats.apply(action);
+        if (mCheatStatus != null) {
+            mCheatStatus.setText(result);
+            mCheatStatus.setVisibility(View.VISIBLE);
+        }
+        Toast.makeText(this, result, Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean isVoiceRecording() {
+        return mVoiceRecorder != null && mVoiceRecorder.isRecording();
+    }
+
+    private void toggleVoiceNote() {
+        if (mArtifactBusy) {
+            return;
+        }
+        if (isVoiceRecording()) {
+            stopVoiceNote();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_RECORD_AUDIO);
+            setArtifactStatus(getString(R.string.voice_need_mic), true);
+            return;
+        }
+        startVoiceNote();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_RECORD_AUDIO) {
+            return;
+        }
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startVoiceNote();
+        } else {
+            setArtifactStatus(getString(R.string.voice_need_mic), true);
+        }
+    }
+
+    private void startVoiceNote() {
+        if (mDestroyed || isVoiceRecording() || mArtifactBusy) {
+            return;
+        }
+        try {
+            JSONObject status = null;
+            if (mNativeReady) {
+                status = new JSONObject(MesenNative.statusJson(true));
+            }
+            String input = voiceInputHint();
+            WorkshopVoiceNote.Stamp stamp = WorkshopVoiceNote.stampFromStatus(status, input);
+            File workshopRoot = new File(getFilesDir(), "Workshop");
+            WorkshopVoiceNote.Session session = WorkshopVoiceNote.begin(
+                    workshopRoot, stamp, System.currentTimeMillis());
+            WorkshopVoiceRecorder recorder = new WorkshopVoiceRecorder();
+            recorder.start(session.audioFile);
+            mVoiceSession = session;
+            mVoiceRecorder = recorder;
+            mHandler.removeCallbacks(mVoiceAutoStop);
+            mHandler.postDelayed(mVoiceAutoStop, WorkshopVoiceNote.MAX_DURATION_MS);
+            updateVoiceButtonUi(true);
+            setArtifactStatus(getString(R.string.voice_recording), false);
+        } catch (Exception error) {
+            cancelVoiceNote(true);
+            setArtifactStatus(getString(R.string.voice_failed, error.getMessage()), true);
+        }
+    }
+
+    private void stopVoiceNote() {
+        mHandler.removeCallbacks(mVoiceAutoStop);
+        WorkshopVoiceNote.Session session = mVoiceSession;
+        WorkshopVoiceRecorder recorder = mVoiceRecorder;
+        mVoiceSession = null;
+        mVoiceRecorder = null;
+        updateVoiceButtonUi(false);
+        if (recorder == null || session == null) {
+            return;
+        }
+        try {
+            long durationMs = recorder.stop();
+            String digest = WorkshopArtifactFiles.sha256(session.audioFile);
+            long bytes = session.audioFile.length();
+            WorkshopVoiceNote.complete(session, durationMs, digest, bytes);
+            int seconds = Math.max(1, (int) ((durationMs + 500) / 1000));
+            setArtifactStatus(getString(R.string.voice_saved, seconds), true);
+            Toast.makeText(this, getString(R.string.voice_saved, seconds), Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            WorkshopVoiceNote.discard(session);
+            setArtifactStatus(getString(R.string.voice_failed, error.getMessage()), true);
+        }
+    }
+
+    private void cancelVoiceNote(boolean discardFiles) {
+        mHandler.removeCallbacks(mVoiceAutoStop);
+        WorkshopVoiceNote.Session session = mVoiceSession;
+        WorkshopVoiceRecorder recorder = mVoiceRecorder;
+        mVoiceSession = null;
+        mVoiceRecorder = null;
+        if (recorder != null) {
+            recorder.cancel();
+        }
+        if (discardFiles && session != null) {
+            WorkshopVoiceNote.discard(session);
+        }
+        updateVoiceButtonUi(false);
+    }
+
+    private void updateVoiceButtonUi(boolean recording) {
+        if (mVoiceButton == null) {
+            return;
+        }
+        mVoiceButton.setText(recording ? R.string.voice_recording : R.string.voice_note);
+        mVoiceButton.setTextColor(recording ? Color.parseColor("#E8B84A") : Color.parseColor("#E8DCC8"));
+    }
+
+    private String voiceInputHint() {
+        try {
+            AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (audio != null && audio.isBluetoothScoOn()) {
+                return "bluetooth-sco";
+            }
+            if (audio != null && audio.isWiredHeadsetOn()) {
+                return "wired-headset";
+            }
+        } catch (Exception ignored) {
+        }
+        return "mic";
+    }
+
+    private static int dp(int value) {
+        return Math.round(value * android.content.res.Resources.getSystem().getDisplayMetrics().density);
+    }
+
     private void hidePauseMenu() {
         if (mPauseScrim == null || mArtifactBusy) {
             return;
+        }
+        if (isVoiceRecording()) {
+            stopVoiceNote();
         }
         mPauseVisible = false;
         mPauseHatLatch = 0;
@@ -822,19 +1265,6 @@ public class MesenActivity extends SDLActivity {
         }
     }
 
-    private void toggleSaveStates() {
-        if (mArtifactBusy) {
-            return;
-        }
-        boolean wasVisible = mStateScroller.getVisibility() == View.VISIBLE
-                || mStateReview.getVisibility() == View.VISIBLE;
-        closeArtifactPanels();
-        closeRomList();
-        if (!wasVisible) {
-            showSaveStates();
-        }
-    }
-
     private void showSaveStates() {
         mStateList.removeAllViews();
         View first = null;
@@ -887,7 +1317,7 @@ public class MesenActivity extends SDLActivity {
         int slot = entry.slot;
         closeArtifactPanels();
         runArtifactTask(R.string.state_saving, R.string.state_save_failed,
-                R.id.btn_states, () -> {
+                R.id.tab_states, () -> {
                     if (!MesenNative.saveState(slot)) {
                         throw new IllegalStateException("native save failed");
                     }
@@ -906,7 +1336,7 @@ public class MesenActivity extends SDLActivity {
         int slot = entry.slot;
         closeArtifactPanels();
         runArtifactTask(R.string.state_loading, R.string.state_load_failed,
-                R.id.btn_states, () -> {
+                R.id.tab_states, () -> {
                     if (!MesenNative.loadState(slot)) {
                         throw new IllegalStateException("native load failed");
                     }
@@ -1151,7 +1581,9 @@ public class MesenActivity extends SDLActivity {
             return;
         }
         try {
-            JSONObject json = new JSONObject(MesenNative.statusJson());
+            // Full pad/key scan only when the pause menu or Keep HUD needs it.
+            // Workshop telemetry still gets frames/render counters via the lite path.
+            JSONObject json = new JSONObject(MesenNative.statusJson(mPauseVisible || mKeepHud));
             String rom = json.optString("rom", "");
             mHudRom.setText(rom.isEmpty() ? getString(R.string.hud_waiting) : rom);
             String socket = json.optString("socket", "tcp:27015");
@@ -1163,6 +1595,9 @@ public class MesenActivity extends SDLActivity {
             boolean paused = json.optBoolean("paused", false);
             Double observedFps = mFrameRateTracker.sample(
                     rom, json.optLong("frames", -1), paused,
+                    SystemClock.elapsedRealtime());
+            Double presentFps = mPresentRateTracker.sample(
+                    rom, json.optLong("renderPresents", -1), paused,
                     SystemClock.elapsedRealtime());
             String performance = performanceLabel(paused, observedFps);
             if (json.optBoolean("fastForward", mFastForwardHeld)) {
@@ -1176,8 +1611,18 @@ public class MesenActivity extends SDLActivity {
             } else if (json.optBoolean("preferAccelerated", mPreferGpu)) {
                 performance += " · SW";
             }
+            String presentLabel = FrameRateTracker.formatPresentLabel(presentFps);
+            if (presentLabel != null) {
+                performance += " · " + presentLabel;
+            }
+            String romId = FrameRateTracker.romIdentityLabel(sha1);
+            if (romId != null) {
+                performance += " · " + romId;
+            }
             json.put("observedFps",
                     observedFps == null ? JSONObject.NULL : observedFps);
+            json.put("presentFps",
+                    presentFps == null ? JSONObject.NULL : presentFps);
             json.put("observedFpsState",
                     paused ? (observedFps == null ? "paused" : "last_running")
                             : (observedFps == null ? "measuring" : "live"));
@@ -1222,21 +1667,51 @@ public class MesenActivity extends SDLActivity {
         }
     }
 
+    private static boolean isSdlSurfaceReady() {
+        if (SDLActivity.mSurface == null) {
+            return false;
+        }
+        if (SDLActivity.mSurface.mIsSurfaceReady) {
+            return true;
+        }
+        try {
+            android.view.SurfaceHolder holder = SDLActivity.mSurface.getHolder();
+            return holder != null
+                    && holder.getSurface() != null
+                    && holder.getSurface().isValid();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
     private void startNativeIfNeeded() {
+        // NotificationShade / adb can clear focus on the RG353P. Force the
+        // resume flags so SDL's normal gate can proceed — but never start the
+        // native thread before SDLSurface reports ready. Creating the SDL
+        // window without an ANativeWindow leaves renderDriver=none forever.
         SDLActivity.mHasFocus = true;
         SDLActivity.mIsResumedCalled = true;
+        if (SDLActivity.mSurface == null || !isSdlSurfaceReady()) {
+            Log.v(TAG, "deferring SDL thread start until surface ready");
+            return;
+        }
         resumeNativeThread();
         if (SDLActivity.mSDLThread != null) {
             return;
         }
-        Log.v(TAG, "forcing SDL thread start");
-        Thread thread = new Thread(() -> {
-            Log.v(TAG, "starting native SDL_main");
-            SDLActivity.nativeRunMain(getMainSharedObject(), getMainFunction(), getArguments());
-            Log.v(TAG, "native SDL_main finished");
-        }, "SDLThread");
-        SDLActivity.mSDLThread = thread;
-        thread.start();
+        Log.v(TAG, "starting SDL thread (surface ready)");
+        SDLActivity.mNextNativeState = SDLActivity.NativeState.RESUMED;
+        SDLActivity.handleNativeState();
+        if (SDLActivity.mSDLThread == null) {
+            Log.w(TAG, "handleNativeState did not start SDLThread; forcing");
+            Thread thread = new Thread(() -> {
+                Log.v(TAG, "starting native SDL_main");
+                SDLActivity.nativeRunMain(getMainSharedObject(), getMainFunction(), getArguments());
+                Log.v(TAG, "native SDL_main finished");
+            }, "SDLThread");
+            SDLActivity.mSDLThread = thread;
+            thread.start();
+        }
     }
 
     private void requestPlaybackFocus() {
@@ -1457,8 +1932,48 @@ public class MesenActivity extends SDLActivity {
         focusPauseView(views.get(next));
     }
 
+    private void cyclePauseTab(boolean left) {
+        int next = mPauseTab + (left ? -1 : 1);
+        if (next < TAB_PLAY) {
+            next = TAB_SETUP;
+        } else if (next > TAB_SETUP) {
+            next = TAB_PLAY;
+        }
+        selectPauseTab(next, true);
+    }
+
+    private void cycleCheatGroup(boolean left) {
+        List<String> groups = WorkshopCheats.groups();
+        if (groups.isEmpty()) {
+            return;
+        }
+        int idx = groups.indexOf(mCheatGroup);
+        if (idx < 0) {
+            idx = 0;
+        }
+        int next = idx + (left ? -1 : 1);
+        if (next < 0) {
+            next = groups.size() - 1;
+        } else if (next >= groups.size()) {
+            next = 0;
+        }
+        showCheatGroup(groups.get(next));
+    }
+
     private void movePauseFocusHorizontal(boolean left) {
         View focused = getCurrentFocus();
+        if (focused == mTabPlay || focused == mTabStates
+                || focused == mTabCheats || focused == mTabCapture || focused == mTabSetup
+                || focused == mPauseScrim.findViewById(R.id.btn_continue)) {
+            cyclePauseTab(left);
+            return;
+        }
+        // On Cheats, L/R always cycles Quick/Items/Gear/Story — even when a
+        // cheat row is focused (shoulder L1/R1 does the same).
+        if (mPauseTab == TAB_CHEATS) {
+            cycleCheatGroup(left);
+            return;
+        }
         View stateCancel = mPauseScrim == null
                 ? null : mPauseScrim.findViewById(R.id.btn_cancel_state);
         if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE
@@ -1490,6 +2005,9 @@ public class MesenActivity extends SDLActivity {
             focusPauseView(left ? mChipFit : mChipGpu);
         } else if (focused == mChipGpu && left) {
             focusPauseView(mChipPlay);
+        } else {
+            // L/R outside a horizontal control group cycles Workshop tabs.
+            cyclePauseTab(left);
         }
     }
 
@@ -1499,46 +2017,70 @@ public class MesenActivity extends SDLActivity {
             return views;
         }
         addFocusable(views, mPauseScrim.findViewById(R.id.btn_continue));
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_states));
-        if (mStateScroller != null && mStateScroller.getVisibility() == View.VISIBLE) {
-            for (int i = 0; i < mStateList.getChildCount(); i++) {
-                addFocusable(views, mStateList.getChildAt(i));
+        addFocusable(views, mTabPlay);
+        addFocusable(views, mTabStates);
+        addFocusable(views, mTabCheats);
+        addFocusable(views, mTabCapture);
+        addFocusable(views, mTabSetup);
+        if (mPauseTab == TAB_PLAY) {
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_reset));
+        } else if (mPauseTab == TAB_STATES) {
+            if (mStateScroller != null && mStateScroller.getVisibility() == View.VISIBLE
+                    && mStateList != null) {
+                for (int i = 0; i < mStateList.getChildCount(); i++) {
+                    addFocusable(views, mStateList.getChildAt(i));
+                }
             }
-        }
-        if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE) {
-            addFocusable(views, mStateSave);
-            addFocusable(views, mStateLoad);
-            addFocusable(views, mPauseScrim.findViewById(R.id.btn_cancel_state));
-        }
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_checkpoint_save));
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_bug_capture));
-        if (mBugCategories != null && mBugCategories.getVisibility() == View.VISIBLE) {
-            for (int i = 0; i < mBugCategories.getChildCount(); i++) {
-                addFocusable(views, mBugCategories.getChildAt(i));
+            if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE) {
+                addFocusable(views, mStateSave);
+                addFocusable(views, mStateLoad);
+                addFocusable(views, mPauseScrim.findViewById(R.id.btn_cancel_state));
             }
-        }
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_checkpoints));
-        if (mCheckpointScroller != null && mCheckpointScroller.getVisibility() == View.VISIBLE) {
-            for (int i = 0; i < mCheckpointList.getChildCount(); i++) {
-                addFocusable(views, mCheckpointList.getChildAt(i));
+        } else if (mPauseTab == TAB_CHEATS) {
+            if (mCheatGroups != null) {
+                for (int i = 0; i < mCheatGroups.getChildCount(); i++) {
+                    addFocusable(views, mCheatGroups.getChildAt(i));
+                }
             }
-        }
-        if (mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE) {
-            addFocusable(views, mPauseScrim.findViewById(R.id.btn_restore_checkpoint));
-            addFocusable(views, mPauseScrim.findViewById(R.id.btn_cancel_restore));
-        }
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_reset));
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_roms));
-        if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE && mRomList != null) {
-            for (int i = 0; i < mRomList.getChildCount(); i++) {
-                addFocusable(views, mRomList.getChildAt(i));
+            if (mCheatList != null) {
+                for (int i = 0; i < mCheatList.getChildCount(); i++) {
+                    addFocusable(views, mCheatList.getChildAt(i));
+                }
             }
+        } else if (mPauseTab == TAB_CAPTURE) {
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_checkpoint_save));
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_bug_capture));
+            addFocusable(views, mVoiceButton);
+            if (mBugCategories != null && mBugCategories.getVisibility() == View.VISIBLE) {
+                for (int i = 0; i < mBugCategories.getChildCount(); i++) {
+                    addFocusable(views, mBugCategories.getChildAt(i));
+                }
+            }
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_checkpoints));
+            if (mCheckpointScroller != null && mCheckpointScroller.getVisibility() == View.VISIBLE
+                    && mCheckpointList != null) {
+                for (int i = 0; i < mCheckpointList.getChildCount(); i++) {
+                    addFocusable(views, mCheckpointList.getChildAt(i));
+                }
+            }
+            if (mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE) {
+                addFocusable(views, mPauseScrim.findViewById(R.id.btn_restore_checkpoint));
+                addFocusable(views, mPauseScrim.findViewById(R.id.btn_cancel_restore));
+            }
+        } else if (mPauseTab == TAB_SETUP) {
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_roms));
+            if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE
+                    && mRomList != null) {
+                for (int i = 0; i < mRomList.getChildCount(); i++) {
+                    addFocusable(views, mRomList.getChildAt(i));
+                }
+            }
+            addFocusable(views, mChipHud);
+            addFocusable(views, mChipFit);
+            addFocusable(views, mChipPlay);
+            addFocusable(views, mChipGpu);
+            addFocusable(views, mPauseScrim.findViewById(R.id.btn_home));
         }
-        addFocusable(views, mChipHud);
-        addFocusable(views, mChipFit);
-        addFocusable(views, mChipPlay);
-        addFocusable(views, mChipGpu);
-        addFocusable(views, mPauseScrim.findViewById(R.id.btn_home));
         return views;
     }
 

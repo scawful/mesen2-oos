@@ -28,6 +28,9 @@ private:
 	unique_ptr<CrossFeedFilter> _crossFeedFilter;
 	unique_ptr<ReverbFilter> _reverbFilter;
 
+	// Sticky so muted turbo does not call SDL_PauseAudioDevice every SPC frame.
+	bool _audioStoppedForMute = false;
+
 	void ProcessEqualizer(int16_t *samples, uint32_t sampleCount, uint32_t targetRate);
 
 public:
@@ -36,6 +39,8 @@ public:
 
 	void PlayAudioBuffer(int16_t *samples, uint32_t sampleCount, uint32_t sourceRate);
 	void StopAudio(bool clearBuffer = false);
+	/** True when PlayAudioBuffer would discard host output (muted turbo/background). */
+	bool ShouldDiscardHostAudio();
 
 	void RegisterAudioDevice(IAudioDevice *audioDevice);
 

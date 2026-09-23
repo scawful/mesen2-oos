@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Build the Mesen2-OOS Android SDL host APK (arm64-v8a).
+#
+# Optional PGO (see Android/pgo.sh):
+#   YAZE_ANDROID_PGO=generate ./Android/build.sh
+#   YAZE_ANDROID_PGO=optimize YAZE_PGO_PROFDATA=/abs/path.profdata ./Android/build.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,8 +70,20 @@ EOF
 echo "sdk.dir=${sdk_dir}"
 echo "ndk.dir=${ndk_dir}"
 echo "ndk.version=${ANDROID_NDK_VERSION:-unknown}"
+if [[ -n "${YAZE_ANDROID_PGO:-}" ]]; then
+  echo "pgo.mode=${YAZE_ANDROID_PGO}"
+fi
 cd "${ANDROID_DIR}"
-./gradlew :app:assembleDebug --quiet
+
+gradle_args=(:app:assembleDebug --quiet)
+if [[ -n "${YAZE_ANDROID_PGO:-}" ]]; then
+  gradle_args+=(-PYAZE_ANDROID_PGO="${YAZE_ANDROID_PGO}")
+fi
+if [[ -n "${YAZE_PGO_PROFDATA:-}" ]]; then
+  gradle_args+=(-PYAZE_PGO_PROFDATA="${YAZE_PGO_PROFDATA}")
+fi
+
+./gradlew "${gradle_args[@]}"
 apk="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
 [[ -f "${apk}" ]] || die "APK missing after build: ${apk}"
 echo "apk: ${apk}"

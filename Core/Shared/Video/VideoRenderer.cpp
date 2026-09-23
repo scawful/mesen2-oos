@@ -77,7 +77,11 @@ void VideoRenderer::RenderThread()
 
 	while(!_stopFlag.load()) {
 		//Wait until a frame is ready, or until 32ms have passed (to allow HUD to update at ~30fps when paused)
-		bool forceRender = !_waitForRender.Wait(32);
+		bool timedOut = !_waitForRender.Wait(32);
+		// The timeout path is for paused HUD only. During turbo/FF, PPU already
+		// cadence-limits presents (~96 ms); force-redrawing here spiked outdoor FF
+		// presents to ~30 Hz instead of the intended 10–12 Hz.
+		bool forceRender = timedOut && _emu->IsPaused();
 		if(_renderer) {
 			FrameInfo size = _emu->GetVideoDecoder()->GetBaseFrameInfo(true);
 			_scriptHudSurface.UpdateSize(size.Width * _scriptHudScale, size.Height * _scriptHudScale);

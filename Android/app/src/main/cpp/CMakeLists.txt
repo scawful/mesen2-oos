@@ -56,6 +56,31 @@ target_compile_definitions(main PRIVATE
     MESENRELEASE
 )
 
+# Optional Android PGO: -DYAZE_ANDROID_PGO=generate|optimize
+# Optimize builds also need -DYAZE_PGO_PROFDATA=/abs/path/to/merged.profdata
+set(YAZE_ANDROID_PGO "" CACHE STRING "Android PGO mode: generate, optimize, or empty")
+set(YAZE_PGO_PROFDATA "" CACHE FILEPATH "Merged LLVM profdata for optimize builds")
+
+if(YAZE_ANDROID_PGO STREQUAL "generate")
+    message(STATUS "Android PGO: instrumented generate")
+    target_compile_definitions(main PRIVATE YAZE_PGO_GENERATE=1)
+    target_compile_options(main PRIVATE -fprofile-instr-generate)
+    target_link_options(main PRIVATE -fprofile-instr-generate)
+elseif(YAZE_ANDROID_PGO STREQUAL "optimize")
+    if(NOT YAZE_PGO_PROFDATA OR NOT EXISTS "${YAZE_PGO_PROFDATA}")
+        message(FATAL_ERROR "YAZE_ANDROID_PGO=optimize requires YAZE_PGO_PROFDATA pointing at a merged .profdata")
+    endif()
+    message(STATUS "Android PGO: optimize with ${YAZE_PGO_PROFDATA}")
+    target_compile_options(main PRIVATE
+        "-fprofile-instr-use=${YAZE_PGO_PROFDATA}"
+        -Wno-profile-instr-out-of-date
+        -Wno-profile-instr-unprofiled
+    )
+    target_link_options(main PRIVATE
+        "-fprofile-instr-use=${YAZE_PGO_PROFDATA}"
+    )
+endif()
+
 target_compile_options(main PRIVATE
     -fPIC
     -Wno-unused-parameter

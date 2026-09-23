@@ -478,9 +478,16 @@ extern "C" {
 
 		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
 		// Unlimited turbo while R2 is held. Visual cadence is capped by the
-		// PPU skip window (~48 ms). Audio stays muted via EmulationFlags::Turbo.
+		// PPU skip window (~96 ms). Audio stays muted via EmulationFlags::Turbo.
 		emulation.TurboSpeed = 0;
 		_emu->GetSettings()->SetEmulationConfig(emulation);
+
+		VideoConfig video = _emu->GetSettings()->GetVideoConfig();
+		video.VideoFilter = VideoFilterType::None;
+		video.ScanlineIntensity = 0;
+		video.VerticalSync = false;
+		video.UseBilinearInterpolation = false;
+		_emu->GetSettings()->SetVideoConfig(video);
 
 		SnesConfig cfg = _emu->GetSettings()->GetSnesConfig();
 		cfg.Port1.Type = ControllerType::SnesController;
@@ -596,6 +603,66 @@ extern "C" {
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
 		_emu->PowerCycle();
+	}
+
+	static bool HandheldMapWram(Emulator* emu, uint32_t cpuAddr, uint8_t*& outBytes, uint32_t& outOffset)
+	{
+		outBytes = nullptr;
+		outOffset = 0;
+		if(!emu || !emu->IsRunning()) {
+			return false;
+		}
+		const uint32_t bank = (cpuAddr >> 16) & 0xFF;
+		if(bank != 0x7E && bank != 0x7F) {
+			return false;
+		}
+		ConsoleMemoryInfo wram = emu->GetMemory(MemoryType::SnesWorkRam);
+		const uint32_t offset = cpuAddr & 0x1FFFF;
+		if(!wram.Memory || offset >= wram.Size) {
+			return false;
+		}
+		outBytes = static_cast<uint8_t*>(wram.Memory);
+		outOffset = offset;
+		return true;
+	}
+
+	// Direct WRAM poke for Workshop cheats. Avoids GetDebugger(true) so the
+	// handheld FPS path stays clean after applying items/flags.
+	DllExport bool __stdcall HandheldWriteByte(uint32_t cpuAddr, uint8_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset)) {
+			return false;
+		}
+		bytes[offset] = value;
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldWriteWord(uint32_t cpuAddr, uint16_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		ConsoleMemoryInfo wram = _emu->GetMemory(MemoryType::SnesWorkRam);
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset) || !wram.Memory || offset + 1 >= wram.Size) {
+			return false;
+		}
+		bytes[offset] = static_cast<uint8_t>(value & 0xFF);
+		bytes[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+		return true;
+	}
+
+	DllExport int __stdcall HandheldReadByte(uint32_t cpuAddr)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset)) {
+			return -1;
+		}
+		return bytes[offset];
 	}
 
 	DllExport bool __stdcall HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot)

@@ -381,7 +381,16 @@ void Spc::ProcessEndFrame()
 
 	uint16_t sampleCount = _dsp->GetSampleCount();
 	if(sampleCount != 0) {
-		_emu->GetSoundMixer()->PlayAudioBuffer(_dsp->GetSamples(), sampleCount / 2, _spcSampleRate);
+		SoundMixer* mixer = _emu->GetSoundMixer();
+		// SPC/DSP still run for game logic; skip host mix/resample when turbo
+		// mute would discard the buffer anyway.
+		if(!mixer->ShouldDiscardHostAudio()) {
+			mixer->PlayAudioBuffer(_dsp->GetSamples(), sampleCount / 2, _spcSampleRate);
+		} else {
+			// Keep left/right sample probes quiet and ensure the device ring is cleared once.
+			int16_t silence[2] = { 0, 0 };
+			mixer->PlayAudioBuffer(silence, 1, _spcSampleRate);
+		}
 	}
 	_dsp->ResetOutput();
 }

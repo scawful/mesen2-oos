@@ -198,3 +198,10 @@ __pycache__/
 build-cmake/*
 build-codex/
 *.code-workspace
+
+# Android PGO profiles
+Android/pgo-data/
+
+# Android local SDK path
+Android/local.properties
+Android/.gradle/

@@ -332,6 +332,7 @@ void SocketServer::InitializeValidationRules() {
 	SocketServer::_validationRules["HEALTH"] = defaultRule;
 	SocketServer::_validationRules["PAUSE"] = defaultRule;
 	SocketServer::_validationRules["RESUME"] = defaultRule;
+	SocketServer::_validationRules["STOP_DEBUGGER"] = defaultRule;
 	SocketServer::_validationRules["RESET"] = defaultRule;
 	CommandValidation loadRomRule = defaultRule;
 	loadRomRule.requiredParams.insert("path");
@@ -351,6 +352,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["HEALTH"] = HandleHealth;
 	_handlers["PAUSE"] = HandlePause;
 	_handlers["RESUME"] = HandleResume;
+	_handlers["STOP_DEBUGGER"] = HandleStopDebugger;
 	_handlers["RESET"] = HandleReset;
 	_handlers["LOADROM"] = HandleLoadRom;
 	_handlers["READ"] = HandleRead;
@@ -993,15 +995,7 @@ SocketResponse SocketServer::HandleState(Emulator* emu, const SocketCommand& cmd
 	ss << "\"frame\":" << emu->GetFrameCount() << ",";
 	ss << "\"fps\":" << fixed << setprecision(2) << emu->GetFps() << ",";
 	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
-
-	// If debugging, get more state
-	if (emu->IsDebugging()) {
-		auto dbg = emu->GetDebugger(false);
-		if (dbg.GetDebugger()) {
-			// Could add breakpoint count, etc.
-			ss << ",\"debugging\":true";
-		}
-	}
+	ss << ",\"debugging\":" << (emu->IsDebugging() ? "true" : "false");
 
 	SaveLoadResult lastSave;
 	SaveLoadResult lastLoad;
@@ -1140,6 +1134,23 @@ SocketResponse SocketServer::HandleResume(Emulator* emu, const SocketCommand& cm
 	emu->Resume();
 	resp.success = true;
 	resp.data = "\"OK\"";
+	return resp;
+}
+
+// Handheld/agents: GAMESTATE/SPRITES/etc. call GetDebugger(true) and leave the
+// debugger attached, which tanks RG353P FPS. Allow an explicit detach without
+// resetting the game.
+SocketResponse SocketServer::HandleStopDebugger(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	const bool wasDebugging = emu->IsDebugging();
+	if(wasDebugging) {
+		emu->StopDebugger();
+	}
+	resp.success = true;
+	stringstream ss;
+	ss << "{\"wasDebugging\":" << (wasDebugging ? "true" : "false")
+		<< ",\"debugging\":" << (emu->IsDebugging() ? "true" : "false") << "}";
+	resp.data = ss.str();
 	return resp;
 }
 
@@ -2670,7 +2681,9 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 		}
 	}
 
-	// Set the input override via debugger
+	// Set the input override via debugger. INPUT attaches the debugger when
+	// it was not already running; use STOP_DEBUGGER after finite-frame presses
+	// (or mesen2_client press, which auto-detaches) to recover handheld FPS.
 	dbg.GetDebugger()->SetInputOverrides(playerIndex, state, frameCount);
 
 	resp.success = true;

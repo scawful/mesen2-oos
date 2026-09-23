@@ -20,6 +20,11 @@
 #include "Shared/Interfaces/INotificationListener.h"
 #include "Shared/KeyManager.h"
 
+#ifdef YAZE_PGO_GENERATE
+extern "C" int __llvm_profile_write_file(void);
+extern "C" void __llvm_profile_set_filename(const char*);
+#endif
+
 extern "C" {
 	void InitDll();
 	void InitializeEmu(const char* homeFolder, void* windowHandle, void* viewerHandle, bool softwareRenderer, bool noAudio, bool noVideo, bool noInput);
@@ -33,6 +38,9 @@ extern "C" {
 	bool HandheldLoadState(uint32_t stateIndex);
 	void HandheldGetSaveStatePath(uint32_t stateIndex, char* outBuffer, uint32_t maxLength);
 	void HandheldReset();
+	bool HandheldWriteByte(uint32_t cpuAddr, uint8_t value);
+	bool HandheldWriteWord(uint32_t cpuAddr, uint16_t value);
+	int HandheldReadByte(uint32_t cpuAddr);
 	bool HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot);
 	void Pause();
 	void Resume();
@@ -276,9 +284,10 @@ static void OnEmuNotification(int type, void* param)
 
 	auto* frame = static_cast<SoftwareRendererFrame*>(param);
 	g_renderCallbacks.fetch_add(1, std::memory_order_relaxed);
-	// SoftwareRenderer also notifies while paused, with IsDirty always true.
-	// Compare the pixels while the callback buffer is still valid.
-	if(g_frames.Publish(frame->Frame.Buffer, frame->Frame.Width, frame->Frame.Height)) {
+	// Live PPU frames almost always need a present; full ARGB memcmp was
+	// dropping outdoor idle/water to ~7 Hz presents and burning CPU. Keep
+	// generation bumps so the SDL thread wakes on every delivered frame.
+	if(g_frames.Publish(frame->Frame.Buffer, frame->Frame.Width, frame->Frame.Height, false)) {
 		g_renderNewFrames.fetch_add(1, std::memory_order_relaxed);
 		if(g_frameEvent != static_cast<uint32_t>(-1)) {
 			SDL_Event event{};
@@ -451,6 +460,14 @@ extern "C" int SDL_main(int argc, char* argv[])
 	std::string statusPath = std::string(home) + "/mesen2-tcp-27015.status";
 	setenv("MESEN2_STATUS_PATH", statusPath.c_str(), 1);
 	FolderUtilities::SetHomeFolder(home);
+#ifdef YAZE_PGO_GENERATE
+	{
+		// Writable app-private path for Clang instrumentation profiles.
+		std::string profilePath = std::string(home) + "/mesen_pgo.profraw";
+		setenv("LLVM_PROFILE_FILE", profilePath.c_str(), 1);
+		__llvm_profile_set_filename(profilePath.c_str());
+	}
+#endif
 
 	// Bind the debug socket before waiting on the Android window. SystemUI
 	// can steal focus on the RG353P during adb sessions; agents still need
@@ -633,23 +650,32 @@ extern "C" int SDL_main(int argc, char* argv[])
 				g_traceNextPresent = true;
 			}
 		}
-		const AndroidSurfaceBinding beforePresent = observeBinding();
 		if(renderer && surface.CanDraw()) {
-			const bool presented = PresentFrame(renderer, window, &texture, &texW, &texH, frame, presentation, presentMode);
-			const AndroidSurfaceBinding afterPresent = observeBinding();
-			if(!presented || !afterPresent.Complete() || !beforePresent.SamePair(afterPresent)) {
-				// A Java surface callback can race a successful-looking creation or
-				// draw. Retain pixels and redraw after a bounded resource retry.
-				if(!presented && g_renderAccelerated.load(std::memory_order_relaxed)) {
-					FallbackToSoftwareRenderer(window, &renderer, &texture, &texW, &texH, presentation);
+			// Drain the mailbox instead of presenting once then sleeping —
+			// outdoor FULL was stuck ~46 present/s with core at 60.
+			for(int drain = 0; drain < 3; ++drain) {
+				const AndroidSurfaceBinding beforeDrain = observeBinding();
+				const uint64_t genBefore = frame.Generation;
+				const bool presented = PresentFrame(
+					renderer, window, &texture, &texW, &texH, frame, presentation, presentMode);
+				const AndroidSurfaceBinding afterDrain = observeBinding();
+				if(!presented || !afterDrain.Complete() || !beforeDrain.SamePair(afterDrain)) {
+					if(!presented && g_renderAccelerated.load(std::memory_order_relaxed)) {
+						FallbackToSoftwareRenderer(window, &renderer, &texture, &texW, &texH, presentation);
+					}
+					presentation.RequestRedraw();
+					surface.Rebuilt(false, SDL_GetTicks64());
+					break;
 				}
-				presentation.RequestRedraw();
-				surface.Rebuilt(false, SDL_GetTicks64());
+				if(frame.Generation == genBefore || !g_frames.HasNewerThan(frame.Generation)) {
+					break;
+				}
 			}
 		}
-		// New pixels wake this wait immediately. The timeout also bounds input,
-		// presentation-mode changes and retries when a texture/surface is absent.
-		if(SDL_WaitEventTimeout(&event, 8)) {
+		// New pixels wake this wait immediately. Keep the timeout short when a
+		// frame is already queued so we do not add multi-ms lag per present.
+		const int waitMs = g_frames.HasNewerThan(frame.Generation) ? 0 : 2;
+		if(SDL_WaitEventTimeout(&event, waitMs)) {
 			handleEvent(event);
 		}
 	}
@@ -722,6 +748,34 @@ extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isPerformanc
 	return HandheldIsPerformanceMode() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_writeByte(
+	JNIEnv*,
+	jclass,
+	jint addr,
+	jint value
+) {
+	return HandheldWriteByte(static_cast<uint32_t>(addr), static_cast<uint8_t>(value & 0xFF))
+		? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_writeWord(
+	JNIEnv*,
+	jclass,
+	jint addr,
+	jint value
+) {
+	return HandheldWriteWord(static_cast<uint32_t>(addr), static_cast<uint16_t>(value & 0xFFFF))
+		? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_readByte(
+	JNIEnv*,
+	jclass,
+	jint addr
+) {
+	return HandheldReadByte(static_cast<uint32_t>(addr));
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_saveState(
 	JNIEnv*,
 	jclass,
@@ -766,38 +820,44 @@ extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadRom(JNIE
 	return ok ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JNIEnv* env, jclass)
+extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
+	JNIEnv* env,
+	jclass,
+	jboolean detailed
+)
 {
 	bool pad = false;
 	bool mapped = false;
 	std::string padName;
-	int n = SDL_NumJoysticks();
-	for(int i = 0; i < n; i++) {
-		const char* name = SDL_JoystickNameForIndex(i);
-		if(name && SDL_strcasestr(name, "touch_joypad")) {
-			continue;
-		}
-		if(name) {
-			pad = true;
-			if(padName.empty()) {
-				padName = name;
-			}
-			if(SDL_IsGameController(i)) {
-				mapped = true;
-			}
-		}
-	}
-	KeyManager::RefreshKeyState();
 	std::string buttons;
-	for(uint16_t key : KeyManager::GetPressedKeys()) {
-		std::string name = KeyManager::GetKeyName(key);
-		if(name.empty()) {
-			continue;
+	if(detailed) {
+		int n = SDL_NumJoysticks();
+		for(int i = 0; i < n; i++) {
+			const char* name = SDL_JoystickNameForIndex(i);
+			if(name && SDL_strcasestr(name, "touch_joypad")) {
+				continue;
+			}
+			if(name) {
+				pad = true;
+				if(padName.empty()) {
+					padName = name;
+				}
+				if(SDL_IsGameController(i)) {
+					mapped = true;
+				}
+			}
 		}
-		if(!buttons.empty()) {
-			buttons += ",";
+		KeyManager::RefreshKeyState();
+		for(uint16_t key : KeyManager::GetPressedKeys()) {
+			std::string name = KeyManager::GetKeyName(key);
+			if(name.empty()) {
+				continue;
+			}
+			if(!buttons.empty()) {
+				buttons += ",";
+			}
+			buttons += name;
 		}
-		buttons += name;
 	}
 	auto jsonEscape = [](const std::string& value) {
 		std::string out;
@@ -843,7 +903,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(JN
 		+ ",\"renderErrors\":" + std::to_string(g_renderErrors.load(std::memory_order_relaxed))
 		+ ",\"renderSurfaceRebuilds\":" + std::to_string(g_renderSurfaceRebuilds.load(std::memory_order_relaxed))
 		+ ",\"renderAccelFallbacks\":" + std::to_string(g_renderAccelFallbacks.load(std::memory_order_relaxed))
-		+ ",\"renderSurfaceDiagnostic\":" + surfaceDiagnostic
+		+ ",\"renderSurfaceDiagnostic\":" + (surfaceDiagnostic.empty() ? "null" : surfaceDiagnostic)
 		+ "}";
 	return env->NewStringUTF(json.c_str());
 }
@@ -874,5 +934,16 @@ extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isRenderAcce
 	jclass
 ) {
 	return g_renderAccelerated.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_dumpPgoProfile(
+	JNIEnv*,
+	jclass
+) {
+#ifdef YAZE_PGO_GENERATE
+	return __llvm_profile_write_file() == 0 ? JNI_TRUE : JNI_FALSE;
+#else
+	return JNI_FALSE;
+#endif
 }
 #endif

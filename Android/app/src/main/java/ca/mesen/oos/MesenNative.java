@@ -10,12 +10,18 @@ public final class MesenNative {
     public static native boolean isFastForward();
     public static native void setPerformanceMode(boolean enabled);
     public static native boolean isPerformanceMode();
+    public static native boolean writeByte(int addr, int value);
+    public static native boolean writeWord(int addr, int value);
+    /** @return unsigned byte 0..255, or -1 on failure */
+    public static native int readByte(int addr);
     public static native boolean saveState(int slot);
     public static native boolean loadState(int slot);
     public static native String saveStatePath(int slot);
     public static native boolean loadRom(String path);
-    public static native String statusJson();
+    public static native String statusJson(boolean detailed);
     public static native void setPresentMode(int mode);
     public static native void setPreferAccelerated(boolean enabled);
     public static native boolean isRenderAccelerated();
+    /** Writes Clang instrumentation profile when built with YAZE_PGO_GENERATE. */
+    public static native boolean dumpPgoProfile();
 }

@@ -9,6 +9,13 @@ import java.util.Locale;
 final class FrameRateTracker {
     private static final long MIN_SAMPLE_MS = 500;
     private static final double NTSC_FPS = 60.1;
+    /** Today's main handheld build (2026-09-19 14:01); includes the tree tile fix. */
+    static final String MAIN_ROM_SHA1 = "2671E543D83A96AD73F1D7D3CCB55580593DCA14";
+    /** Sep14 rain-fix + same 16-byte tree patch; tree tile16 matches MAIN. */
+    static final String TREEFIX_ROM_SHA1 = "B4F48B2133E0C43667370A3E4235B12844C4ED7A";
+    /** @deprecated Pre-tree-fix Weather outdoor build. */
+    @Deprecated
+    static final String WEATHER_ROM_SHA1 = "0E365616014911F7C6FFDA04D9A0CF718BB204C2";
 
     private String mRom = "";
     private long mFrames = -1;
@@ -59,13 +66,41 @@ final class FrameRateTracker {
         return String.format(Locale.US, "FF ×%.1f", observedFps / NTSC_FPS);
     }
 
+    /** Short present-rate chip for the HUD (unique uploads reaching SDL). */
+    static String formatPresentLabel(Double presentFps) {
+        if (presentFps == null || presentFps <= 0) {
+            return null;
+        }
+        return String.format(Locale.US, "P%.0f", presentFps);
+    }
+
+    /**
+     * Workshop ROM identity chip. Main is today's build with the tree fix.
+     * Treefix is an allowed alternate with identical tree tile16 data.
+     */
+    static String romIdentityLabel(String sha1) {
+        if (sha1 == null || sha1.isEmpty()) {
+            return null;
+        }
+        if (MAIN_ROM_SHA1.equalsIgnoreCase(sha1)) {
+            return "Main";
+        }
+        if (TREEFIX_ROM_SHA1.equalsIgnoreCase(sha1)) {
+            return "Treefix";
+        }
+        if (WEATHER_ROM_SHA1.equalsIgnoreCase(sha1)) {
+            return "Weather-old";
+        }
+        return "ROM≠";
+    }
+
     /**
      * Turbo visual-present interval used by the native PPU skip path.
-     * 48 ms targets roughly 20-21 presented frames per second while the core
+     * 96 ms targets roughly 10-12 presented frames per second while the core
      * advances as fast as the device allows.
      */
     static int turboVisualIntervalMs() {
-        return 48;
+        return 96;
     }
 
     /**
@@ -86,7 +121,7 @@ final class FrameRateTracker {
     /**
      * Whether the next emulated frame should skip the video pipeline given
      * elapsed ms since the last presented frame. Mirrors the native policy:
-     * turbo / unlimited / speed>1.5x use the 48 ms window; Smooth play uses 10.
+     * turbo / unlimited / speed>1.5x use the 96 ms window; Smooth play uses 10.
      */
     static boolean shouldSkipVisualFrame(boolean turboOrFastSpeed, boolean allowSkip,
             long elapsedMsSincePresent) {

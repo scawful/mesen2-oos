@@ -34,7 +34,7 @@ targets faster core headroom and a balanced R2 fast-forward policy.
 **Core changes**
 - Skipped PPU frames no longer re-enqueue the unchanged image into the video
   decoder (matching the PC Engine path).
-- Turbo / SPEED≠1x uses a 48 ms visual interval (~20 Hz present budget) while
+- Turbo / SPEED≠1x uses a 96 ms visual interval (~10-12 Hz present budget) while
   the core runs unlimited (`TurboSpeed=0`). Audio stays muted via
   `EmulationFlags::Turbo`, and muted handheld turbo skips resample/EQ/device
   work when rewind is disabled.

@@ -21,7 +21,7 @@ struct Frame
 class FrameMailbox
 {
 public:
-	bool Publish(const uint32_t* pixels, uint32_t width, uint32_t height)
+	bool Publish(const uint32_t* pixels, uint32_t width, uint32_t height, bool dedupePixels = true)
 	{
 		if(!pixels || width == 0 || height == 0
 			|| width > static_cast<uint32_t>(std::numeric_limits<int>::max() / sizeof(uint32_t))
@@ -31,7 +31,10 @@ public:
 		}
 		const size_t count = static_cast<size_t>(width) * height;
 		std::lock_guard<std::mutex> lock(_mutex);
-		if(width == _latest.Width && height == _latest.Height
+		// Live frames almost always differ; skip the full ARGB memcmp. Keep
+		// dedupe for paused Softwarerenderer repeats of an identical buffer.
+		if(dedupePixels
+			&& width == _latest.Width && height == _latest.Height
 			&& std::memcmp(_latest.Pixels.data(), pixels, count * sizeof(uint32_t)) == 0) {
 			return false;
 		}
@@ -55,8 +58,14 @@ public:
 		return true;
 	}
 
+	bool HasNewerThan(uint64_t generation) const
+	{
+		std::lock_guard<std::mutex> lock(_mutex);
+		return _latest.Generation != 0 && _latest.Generation != generation;
+	}
+
 private:
-	std::mutex _mutex;
+	mutable std::mutex _mutex;
 	Frame _latest;
 };
 

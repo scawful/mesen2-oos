@@ -51,6 +51,9 @@ static void TestRepeatedPausedCallbacks()
 	}
 	Check(snapshot.Generation == generation, "paused generation changed");
 	Check(snapshot.Pixels.data() == allocation, "paused staging allocation changed");
+	Check(mailbox.Publish(pixels, 2, 1, false), "forced publish must skip ARGB memcmp");
+	Check(mailbox.CopyLatest(snapshot), "forced publish without dedupe did not advance");
+	Check(snapshot.Generation == generation + 1, "forced publish generation stuck");
 }
 
 static void TestSameSizeStagingReusedAndLatestWins()
@@ -318,6 +321,21 @@ static void TestBindingPollingPreservesFailedPresentBackoff()
 	Check(surface.CanRebuild(110), "failed present never retried");
 }
 
+static void TestHasNewerThanTracksMailbox()
+{
+	FrameMailbox mailbox;
+	Frame snapshot;
+	Check(!mailbox.HasNewerThan(0), "empty mailbox reported newer frame");
+	const uint32_t pixels[] = {1, 2, 3, 4};
+	Check(mailbox.Publish(pixels, 2, 2, false), "publish failed");
+	Check(mailbox.HasNewerThan(0), "fresh publish not newer than 0");
+	Check(mailbox.CopyLatest(snapshot), "copy failed");
+	Check(!mailbox.HasNewerThan(snapshot.Generation), "matched generation still newer");
+	const uint32_t next[] = {5, 6, 7, 8};
+	Check(mailbox.Publish(next, 2, 2, false), "second publish failed");
+	Check(mailbox.HasNewerThan(snapshot.Generation), "second publish not newer");
+}
+
 int main()
 {
 	const std::pair<const char*, void(*)()> tests[] = {
@@ -334,6 +352,7 @@ int main()
 		{"bounded surface retry", TestSurfaceRetryIsBoundedAndCanResume},
 		{"surface restore retains paused pixels", TestSurfaceRestoreRetainsPausedFrame},
 		{"missing binding and bounded bootstrap", TestNullBindingAndBootstrapNeverAllowDrawing},
+		{"has newer than tracks mailbox", TestHasNewerThanTracksMailbox},
 		{"surface identity without lifecycle events", TestBindingChangesInvalidateWithoutLifecycleEvents},
 		{"stable binding preserves retry backoff", TestBindingPollingPreservesFailedPresentBackoff},
 	};

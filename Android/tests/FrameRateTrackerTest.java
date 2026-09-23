@@ -38,15 +38,32 @@ public final class FrameRateTrackerTest {
                 "120.2 FPS is reported as ×2.0 against NTSC");
         check("FF ×1.5".equals(FrameRateTracker.formatFastForwardLabel(90.15)),
                 "90.15 FPS is reported as ×1.5 against NTSC");
+        check(FrameRateTracker.formatPresentLabel(null) == null,
+                "missing present FPS hides the present chip");
+        check("P8".equals(FrameRateTracker.formatPresentLabel(7.6)),
+                "present rate rounds to a short P chip");
+        check("Weather-old".equals(FrameRateTracker.romIdentityLabel(
+                        FrameRateTracker.WEATHER_ROM_SHA1)),
+                "legacy Weather SHA1 labels as Weather-old");
+        check("Main".equals(FrameRateTracker.romIdentityLabel(
+                        FrameRateTracker.MAIN_ROM_SHA1)),
+                "today's main SHA1 labels as Main");
+        check("Treefix".equals(FrameRateTracker.romIdentityLabel(
+                        FrameRateTracker.TREEFIX_ROM_SHA1)),
+                "treefix alternate SHA1 labels as Treefix");
+        check("ROM≠".equals(FrameRateTracker.romIdentityLabel("DEADBEEF01234567")),
+                "mismatched SHA1 flags ROM drift");
+        check(FrameRateTracker.romIdentityLabel("") == null,
+                "empty SHA1 hides the identity chip");
 
-        check(FrameRateTracker.turboVisualIntervalMs() == 48,
-                "turbo targets a 48 ms visual interval (~21 FPS)");
+        check(FrameRateTracker.turboVisualIntervalMs() == 96,
+                "turbo targets a 96 ms visual interval (~10 FPS)");
         check(FrameRateTracker.smoothVisualIntervalMs() == 10,
                 "smooth play keeps the 10 ms visual interval");
         check(FrameRateTracker.shouldSkipVisualFrame(true, true, 20),
-                "turbo skips while under the 48 ms window");
-        check(!FrameRateTracker.shouldSkipVisualFrame(true, true, 48),
-                "turbo presents once the 48 ms window elapses");
+                "turbo skips while under the 96 ms window");
+        check(!FrameRateTracker.shouldSkipVisualFrame(true, true, 96),
+                "turbo presents once the 96 ms window elapses");
         check(FrameRateTracker.shouldSkipVisualFrame(false, true, 5),
                 "smooth play skips while under the 10 ms window");
         check(!FrameRateTracker.shouldSkipVisualFrame(false, true, 10),

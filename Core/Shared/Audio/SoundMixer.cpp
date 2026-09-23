@@ -63,6 +63,31 @@ void SoundMixer::StopAudio(bool clearBuffer)
 	}
 }
 
+bool SoundMixer::ShouldDiscardHostAudio()
+{
+	EmuSettings* settings = _emu->GetSettings();
+	AudioPlayerHud* audioPlayer = _emu->GetAudioPlayerHud();
+	if(audioPlayer || _waveRecorder || _emu->GetVideoRenderer()->IsRecording()) {
+		return false;
+	}
+	if(settings->GetPreferences().RewindBufferSize != 0) {
+		return false;
+	}
+
+	AudioConfig cfg = settings->GetAudioConfig();
+	uint32_t masterVolume = cfg.MasterVolume;
+	if(settings->CheckFlag(EmulationFlags::InBackground)) {
+		if(cfg.MuteSoundInBackground) {
+			masterVolume = 0;
+		} else if(cfg.ReduceSoundInBackground) {
+			masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
+		}
+	} else if(cfg.ReduceSoundInFastForward && settings->CheckFlag(EmulationFlags::TurboOrRewind)) {
+		masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
+	}
+	return masterVolume == 0;
+}
+
 void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_t sourceRate)
 {
 	if(sampleCount == 0) {
@@ -91,13 +116,17 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	_rightSample = samples[1];
 
 	// Handheld turbo mutes output (VolumeReduction=100) and disables rewind.
-	// Must Stop (clear) the device — returning without feeding the SDL ring
-	// buffer lets ReadFromBuffer loop stale PCM (pause/loop glitches).
+	// Must Stop (clear) the device once — returning without feeding the SDL ring
+	// lets ReadFromBuffer loop stale PCM. Do not re-Stop every SPC frame.
 	if(masterVolume == 0 && !isRecording && !audioPlayer
 			&& settings->GetPreferences().RewindBufferSize == 0) {
-		StopAudio(true);
+		if(!_audioStoppedForMute) {
+			StopAudio(true);
+			_audioStoppedForMute = true;
+		}
 		return;
 	}
+	_audioStoppedForMute = false;
 
 	int16_t *out = _sampleBuffer;
 	uint32_t count = _resampler->Resample(samples, sampleCount, sourceRate, cfg.SampleRate, out, 0x10000);
