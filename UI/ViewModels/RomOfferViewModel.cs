@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Mesen.ViewModels
 {
-	public record RomOfferLoadResult(bool Ok, string Path);
+	public record RomOfferLoadResult(bool Ok, string Path, string Label);
 
 	/// <summary>
 	/// "New ROM available" banner. Agents create the offer over the socket (OFFER_ROM);
@@ -40,6 +40,7 @@ namespace Mesen.ViewModels
 			uint loadCount = 0;
 			bool lastOk = false;
 			string lastPath = "";
+			string lastLabel = "";
 			string lastError = "";
 			try {
 				using JsonDocument doc = JsonDocument.Parse(json);
@@ -54,6 +55,7 @@ namespace Mesen.ViewModels
 					loadCount = last.GetProperty("count").GetUInt32();
 					lastOk = last.GetProperty("ok").GetBoolean();
 					lastPath = last.GetProperty("path").GetString() ?? "";
+					lastLabel = last.GetProperty("label").GetString() ?? "";
 					lastError = last.GetProperty("error").GetString() ?? "";
 				}
 			} catch(Exception ex) when(ex is JsonException || ex is InvalidOperationException || ex is System.Collections.Generic.KeyNotFoundException) {
@@ -77,7 +79,7 @@ namespace Mesen.ViewModels
 				if(!lastOk && pending) {
 					Notes = "Load failed: " + lastError;
 				}
-				LiveLoadFinished?.Invoke(this, new RomOfferLoadResult(lastOk, lastPath));
+				LiveLoadFinished?.Invoke(this, new RomOfferLoadResult(lastOk, lastPath, lastLabel));
 			}
 
 			//A direct load-rom-live of another path changes nothing on screen

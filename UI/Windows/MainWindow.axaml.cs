@@ -443,6 +443,8 @@ namespace Mesen.Windows
 					CheatCodes.ApplyCheats();
 					RomInfo romInfo = EmuApi.GetRomInfo();
 					InstanceLog.Write("game loaded: " + romInfo.RomPath);
+					string buildLabel = BuildLabelHelper.Find(romInfo.RomPath);
+					PostUnlessShuttingDown(() => _model.BuildLabel = buildLabel);
 					
 					PostUnlessShuttingDown(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
@@ -670,6 +672,10 @@ namespace Mesen.Windows
 
 			ConfigManager.Config.RecentFiles.AddRecentFile(result.Path, null);
 			ConfigManager.Config.Save();
+			if(string.IsNullOrWhiteSpace(_model.BuildLabel)) {
+				//No manifest or version in the file name: the offer's label names the build
+				_model.BuildLabel = result.Label;
+			}
 
 			//Put the player's window and input settings back the way they were before the swap
 			ConfigManager.Config.ApplyConfig();

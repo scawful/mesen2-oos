@@ -23,6 +23,10 @@ namespace Mesen.Config
         // whatever the ROM file is called. Empty keeps the default per-filename save.
         [Reactive] public string PersistentSaveName { get; set; } = "";
 
+        // Marks this instance as the player's window: the title shows "Oracle <build> [play]"
+        // instead of the agent markers (ACTIVE, [instance], [src:...]).
+        [Reactive] public bool PlayerWindow { get; set; } = false;
+
         public OracleConfig()
         {
         }

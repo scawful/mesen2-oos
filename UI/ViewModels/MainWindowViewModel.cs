@@ -28,6 +28,7 @@ namespace Mesen.ViewModels
 		[Reactive] public RecentGamesViewModel RecentGames { get; private set; }
 
 		[Reactive] public string WindowTitle { get; private set; } = "Mesen";
+		[Reactive] public string BuildLabel { get; set; } = "";
 		[Reactive] public Size RendererSize { get; set; }
 
 		[Reactive] public bool IsMenuVisible { get; set; }
@@ -78,7 +79,9 @@ namespace Mesen.ViewModels
 				x => x.RendererSize,
 				x => x.Config.Preferences.ShowTitleBarInfo,
 				x => x.Config.Video.AspectRatio,
-				x => x.Config.Video.VideoFilter
+				x => x.Config.Video.VideoFilter,
+				x => x.BuildLabel,
+				x => x.Config.Oracle.PlayerWindow
 			).Subscribe(x => {
 				UpdateWindowTitle();
 			});
@@ -88,8 +91,14 @@ namespace Mesen.ViewModels
 
 		private void UpdateWindowTitle()
 		{
-			string title = "Mesen";
 			string romName = RomInfo.GetRomName();
+			if(ConfigManager.Config.Oracle.PlayerWindow) {
+				string build = string.IsNullOrWhiteSpace(BuildLabel) ? romName : BuildLabel;
+				WindowTitle = string.IsNullOrWhiteSpace(build) ? "Oracle [play]" : "Oracle " + build + " [play]";
+				return;
+			}
+
+			string title = "Mesen";
 			if(!string.IsNullOrWhiteSpace(romName)) {
 				title += " - " + romName;
 				if(ConfigManager.Config.Preferences.ShowTitleBarInfo) {
