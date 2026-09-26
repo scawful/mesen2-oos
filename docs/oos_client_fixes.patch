@@ -1,6 +1,6 @@
 diff -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
 --- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 08:27:36
-+++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 09:45:46
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 09:46:42
 @@ -889,7 +889,7 @@
  
      # Save state commands
@@ -22,7 +22,29 @@ diff -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_
              elif args.slot is not None:
                  ok = client.save_state(slot=args.slot)
                  emit({"saved": args.slot}, ok=ok)
-@@ -3069,24 +3070,31 @@
+@@ -1485,10 +1486,21 @@
+ 
+     if args.command == "health":
+         info = client.health_check()
++        if not info.get("ok"):
++            # No PING answer: the ROM state is unknown, not "not loaded"
++            if args.json:
++                print(json.dumps({**info, "connected": False}, indent=2))
++            else:
++                print("Health: FAIL (cannot reach Mesen)")
++                print(f"Socket: {info.get('socket') or '(none found)'}")
++                print(f"Error: {info.get('error') or 'PING failed'}")
++                print("Hint: the instance is not running or the socket file is stale (pid is in <socket>.status)")
++            sys.exit(1)
+         rom_info = client.get_rom_info()
+         rom_loaded = bool(rom_info)
+         if args.json:
+             payload = dict(info)
++            payload["connected"] = True
+             payload["rom_loaded"] = rom_loaded
+             payload["rom_info"] = rom_info
+             if not rom_loaded and client.last_error:
+@@ -3069,24 +3081,31 @@
              print("Frame advance failed")
  
      elif args.command == "save":
