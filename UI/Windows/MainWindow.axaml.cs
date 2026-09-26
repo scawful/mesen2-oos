@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Platform;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -47,6 +48,8 @@ namespace Mesen.Windows
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
 		private bool _stopSignalReceived = false;
+		private bool _placeDefaultWindowFrame = false;
+		private DispatcherTimer? _windowFrameSaveTimer;
 		private readonly PosixSignalRegistration _sigTerm;
 		private readonly PosixSignalRegistration _sigInt;
 		private bool _shutdownStarted = false;
@@ -134,7 +137,19 @@ namespace Mesen.Windows
 			_model.RomOffer.LiveLoadStarted += RomOffer_LiveLoadStarted;
 			_model.RomOffer.LiveLoadFinished += RomOffer_LiveLoadFinished;
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
-			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
+			//Always open as a normal window: the last frame when it fits on a screen (a profile seeded
+			//from another display may not), otherwise the default frame once the first game loads
+			MainWindowConfig windowConfig = ConfigManager.Config.MainWindow;
+			windowConfig.WindowIsMaximized = false;
+			_placeDefaultWindowFrame = !SavedWindowFrameFits(windowConfig);
+			if(_placeDefaultWindowFrame) {
+				windowConfig.WindowSize = new PixelSize(0, 0);
+			}
+			windowConfig.LoadWindowSettings(this);
+
+			//Remember the frame as soon as it changes, not only on a clean exit (Force Quit, crashes)
+			PositionChanged += (s, e) => ScheduleWindowFrameSave();
+			this.GetPropertyChangedObservable(ClientSizeProperty).Subscribe(x => ScheduleWindowFrameSave());
 
 			//kill -TERM / Ctrl+C: close through the normal shutdown path (saves config and SRAM).
 			//The runtime default exits mid-frame (exit 143 or a crash in the render thread).
@@ -291,6 +306,88 @@ namespace Mesen.Windows
 			return !string.IsNullOrWhiteSpace(value) && value != "0" && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
 		}
 
+		private static double GetPositionScale(double deviceScale)
+		{
+			//Screen areas and window positions are device pixels on Windows/Linux but points on macOS
+			return OperatingSystem.IsMacOS() ? 1.0 : deviceScale;
+		}
+
+		private bool SavedWindowFrameFits(MainWindowConfig config)
+		{
+			if(config.WindowSize.Width <= 0 || config.WindowSize.Height <= 0) {
+				return false;
+			}
+
+			foreach(Screen screen in Screens.All) {
+				//WindowSize is the client size in DIPs; leave room for the title bar
+				PixelSize size = PixelSize.FromSize(new Size(config.WindowSize.Width, config.WindowSize.Height + 30), GetPositionScale(screen.Scaling));
+				PixelRect frame = new PixelRect(config.WindowLocation, size);
+				PixelRect visible = screen.WorkingArea.Intersect(frame);
+				if(size.Width <= screen.WorkingArea.Width && size.Height <= screen.WorkingArea.Height && visible.Width * visible.Height >= frame.Width * frame.Height * 0.9) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private void PlaceDefaultWindowFrame()
+		{
+			//Largest integer scale whose window uses at most 60% of the usable height and width,
+			//centered horizontally with a third of the spare height above it
+			//(1512x982 display: 2x = 512x525, scawful's pick)
+			Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+			if(screen == null || WindowState != WindowState.Normal || IsShutdownPending) {
+				return;
+			}
+
+			double layoutScale = LayoutHelper.GetLayoutScale(this);
+			double positionScale = GetPositionScale(layoutScale);
+			PixelRect area = screen.WorkingArea;
+			Size areaSize = area.Size.ToSize(positionScale);
+			FrameInfo baseSize = EmuApi.GetBaseScreenSize();
+			double pictureHeight = baseSize.Height > 0 ? baseSize.Height : 224;
+			double pictureWidth = Math.Round(pictureHeight * EmuApi.GetAspectRatio());
+			Size frame = FrameSize ?? ClientSize;
+			double chromeHeight = frame.Height - _rendererPanel.Bounds.Height;
+			double chromeWidth = frame.Width - _rendererPanel.Bounds.Width;
+
+			int scale = 1;
+			for(int i = 2; i <= 8; i++) {
+				if(pictureHeight * i + chromeHeight <= areaSize.Height * 0.6 && pictureWidth * i + chromeWidth <= areaSize.Width * 0.6) {
+					scale = i;
+				}
+			}
+
+			//SetScale counts physical pixels per game pixel
+			SetScale(scale * layoutScale);
+			double frameWidth = (pictureWidth * scale + chromeWidth) * positionScale;
+			double frameHeight = (pictureHeight * scale + chromeHeight) * positionScale;
+			Position = new PixelPoint(
+				area.X + (int)Math.Max(0, (area.Width - frameWidth) / 2),
+				area.Y + (int)Math.Max(0, (area.Height - frameHeight) / 3)
+			);
+			InstanceLog.Write($"window placed at the default frame: scale {scale}, {Math.Round(frameWidth / positionScale)}x{Math.Round(frameHeight / positionScale)} in {area}");
+		}
+
+		private void ScheduleWindowFrameSave()
+		{
+			if(_shutdownStarted) {
+				return;
+			}
+			if(_windowFrameSaveTimer == null) {
+				_windowFrameSaveTimer = new DispatcherTimer() { Interval = TimeSpan.FromSeconds(1) };
+				_windowFrameSaveTimer.Tick += (s, e) => {
+					_windowFrameSaveTimer.Stop();
+					if(!_shutdownStarted && IsVisible && WindowState == WindowState.Normal) {
+						ConfigManager.Config.MainWindow.SaveWindowSettings(this);
+						ConfigManager.Config.Save();
+					}
+				};
+			}
+			_windowFrameSaveTimer.Stop();
+			_windowFrameSaveTimer.Start();
+		}
+
 		private void OnStopSignal(PosixSignalContext context)
 		{
 			if(_stopSignalReceived) {
@@ -445,6 +542,10 @@ namespace Mesen.Windows
 					InstanceLog.Write("game loaded: " + romInfo.RomPath);
 					string buildLabel = BuildLabelHelper.Find(romInfo.RomPath);
 					PostUnlessShuttingDown(() => _model.BuildLabel = buildLabel);
+					if(_placeDefaultWindowFrame) {
+						_placeDefaultWindowFrame = false;
+						PostUnlessShuttingDown(() => DispatcherTimer.RunOnce(PlaceDefaultWindowFrame, TimeSpan.FromMilliseconds(200)));
+					}
 					
 					PostUnlessShuttingDown(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
