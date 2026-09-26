@@ -1,4 +1,77 @@
-diff --color -ruN a/tools/oos_client/mesen2_registry.py b/tools/oos_client/mesen2_registry.py
+diff -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
+--- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 08:27:36
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 09:45:46
+@@ -889,7 +889,7 @@
+ 
+     # Save state commands
+     save_parser = subparsers.add_parser("save", help="Save state")
+-    save_parser.add_argument("slot", type=int, nargs="?", help="Slot number (1-99 or configured)")
++    save_parser.add_argument("target", nargs="?", help="Slot number (1-99 or configured) or path to a .mss file")
+     save_parser.add_argument("--path", "-p", help="Custom save path")
+ 
+     load_parser = subparsers.add_parser("load", help="Load state")
+@@ -1231,8 +1231,9 @@
+         if args.agent_cmd == "save":
+             ok = False
+             if args.path:
+-                ok = client.save_state(path=args.path)
+-                emit({"saved": args.path}, ok=ok)
++                state_path = _normalize_filesystem_path(args.path)
++                ok = client.save_state(path=state_path) and Path(state_path).is_file()
++                emit({"saved": state_path, "error": client.last_error}, ok=ok)
+             elif args.slot is not None:
+                 ok = client.save_state(slot=args.slot)
+                 emit({"saved": args.slot}, ok=ok)
+@@ -3069,24 +3070,31 @@
+             print("Frame advance failed")
+ 
+     elif args.command == "save":
+-        ok = False
+-        if args.path:
+-            if client.save_state(path=args.path):
+-                print(f"Saved to {args.path}")
+-                ok = True
+-            else:
+-                print("Save failed")
+-        elif args.slot is not None:
+-            if client.save_state(slot=args.slot):
+-                print(f"Saved to slot {args.slot}")
+-                ok = True
+-            else:
+-                print("Save failed")
+-        else:
+-            print("Usage: save <slot> OR save --path <file>")
++        slot, path, error = _resolve_slot_or_path(getattr(args, "target", None), args.path)
++        if error:
++            print(error, file=sys.stderr)
++            print("Usage: save <slot|path> OR save --path <file>", file=sys.stderr)
+             sys.exit(1)
+-        if not ok:
+-            sys.exit(1)
++        if path:
++            # Relative paths are the caller's, not Mesen's (the core would put them in SaveStates/)
++            state_path = Path(_normalize_filesystem_path(path))
++            try:
++                state_path.parent.mkdir(parents=True, exist_ok=True)
++            except OSError as exc:
++                print(f"Save failed: cannot create {state_path.parent}: {exc.strerror}", file=sys.stderr)
++                sys.exit(1)
++            if not client.save_state(path=str(state_path)):
++                print(f"Save failed: {client.last_error or 'SAVESTATE failed'}", file=sys.stderr)
++                sys.exit(1)
++            if not state_path.is_file():
++                print(f"Save reported OK but {state_path} was not written", file=sys.stderr)
++                sys.exit(1)
++            print(f"Saved to {state_path} ({state_path.stat().st_size} bytes)")
++        else:
++            if not client.save_state(slot=slot):
++                print(f"Save to slot {slot} failed: {client.last_error or 'SAVESTATE failed'}", file=sys.stderr)
++                sys.exit(1)
++            print(f"Saved to slot {slot}")
+ 
+     elif args.command == "load":
+         ok = False
+diff -ruN a/tools/oos_client/mesen2_registry.py b/tools/oos_client/mesen2_registry.py
 --- a/tools/oos_client/mesen2_registry.py	2026-09-23 14:16:18
 +++ b/tools/oos_client/mesen2_registry.py	2026-09-26 09:43:15
 @@ -6,10 +6,9 @@
