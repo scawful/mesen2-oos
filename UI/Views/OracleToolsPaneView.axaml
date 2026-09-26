@@ -1,0 +1,190 @@
+<UserControl
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	mc:Ignorable="d" d:DesignHeight="720"
+	x:Class="Mesen.Views.OracleToolsPaneView"
+	x:DataType="vm:OracleDebugPanelViewModel"
+	IsVisible="{Binding IsExpanded}"
+	Width="{x:Static vm:OracleDebugPanelViewModel.ToolsPaneWidth}"
+>
+	<Design.DataContext>
+		<vm:OracleDebugPanelViewModel />
+	</Design.DataContext>
+
+	<UserControl.Styles>
+		<Style Selector="TextBlock.section">
+			<Setter Property="FontWeight" Value="SemiBold" />
+			<Setter Property="Foreground" Value="{DynamicResource ThemeForegroundLowBrush}" />
+			<Setter Property="Margin" Value="0,10,0,4" />
+		</Style>
+		<Style Selector="TextBlock.key">
+			<Setter Property="Foreground" Value="{DynamicResource ThemeForegroundLowBrush}" />
+			<Setter Property="Margin" Value="0,0,10,2" />
+		</Style>
+		<Style Selector="TextBlock.value">
+			<Setter Property="FontFamily" Value="{DynamicResource MesenMonospaceFont}" />
+			<Setter Property="FontSize" Value="{DynamicResource MesenMonospaceFontSize}" />
+			<Setter Property="Margin" Value="0,0,0,2" />
+			<Setter Property="TextTrimming" Value="CharacterEllipsis" />
+		</Style>
+		<Style Selector="TextBlock.hint">
+			<Setter Property="Foreground" Value="{DynamicResource ThemeForegroundLowBrush}" />
+			<Setter Property="TextWrapping" Value="Wrap" />
+		</Style>
+		<Style Selector="Grid.row">
+			<Setter Property="Margin" Value="0,0,0,4" />
+		</Style>
+		<Style Selector="Button">
+			<Setter Property="HorizontalContentAlignment" Value="Center" />
+		</Style>
+	</UserControl.Styles>
+
+	<Border
+		Background="{DynamicResource ThemeBackgroundBrush}"
+		BorderBrush="{DynamicResource ThemeBorderLowBrush}"
+		BorderThickness="1,0,0,0"
+	>
+		<ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+			<StackPanel Margin="10,0,10,10">
+
+				<!-- Game state -->
+				<TextBlock Classes="section" Text="State" />
+				<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+					<TextBlock Grid.Row="0" Classes="key" Text="Mode" />
+					<TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding ModeText}" />
+					<TextBlock Grid.Row="1" Classes="key" Text="Where" />
+					<TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding WhereText}" ToolTip.Tip="{Binding WhereText}" />
+					<TextBlock Grid.Row="2" Classes="key" Text="Link" />
+					<TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding LinkDetailText}" />
+					<TextBlock Grid.Row="3" Classes="key" Text="Stats" />
+					<TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Text="{Binding StatsText}" />
+					<TextBlock Grid.Row="4" Classes="key" Text="Story" />
+					<TextBlock Grid.Row="4" Grid.Column="1" Classes="value" Text="{Binding StoryText}" />
+					<TextBlock Grid.Row="5" Classes="key" Text="ROM" />
+					<TextBlock Grid.Row="5" Grid.Column="1" Classes="value" Text="{Binding RomText}" ToolTip.Tip="{Binding RomText}" />
+				</Grid>
+
+				<!-- Warp -->
+				<TextBlock Classes="section" Text="Warp" />
+				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
+					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding WarpTargets}" SelectedItem="{Binding SelectedWarpTarget}">
+						<ComboBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleWarpTargetViewModel">
+								<TextBlock Text="{Binding DisplayLabel}" />
+							</DataTemplate>
+						</ComboBox.ItemTemplate>
+					</ComboBox>
+					<Button Grid.Column="2" Content="Go" Click="OnWarpClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+				<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto">
+					<TextBlock Grid.Column="0" Classes="key" Text="Entrance $" VerticalAlignment="Center" />
+					<TextBox Grid.Column="1" Text="{Binding WarpEntranceHex}" Watermark="e.g. 76" />
+					<Button Grid.Column="3" Content="Go" Click="OnWarpEntranceClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+				<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto" IsVisible="{Binding CanFallToRoom}">
+					<TextBlock Grid.Column="0" Classes="key" Text="Fall to room $" VerticalAlignment="Center" />
+					<TextBox Grid.Column="1" Text="{Binding FallRoomHex}" Watermark="same dungeon, e.g. 77" />
+					<Button Grid.Column="3" Content="Go" Click="OnFallToRoomClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+
+				<!-- Capture -->
+				<TextBlock Classes="section" Text="Capture" />
+				<TextBox Classes="row" Text="{Binding CaptureLabel}" Watermark="Label, e.g. d6-room77-before-fight" />
+				<TextBox Classes="row" Text="{Binding CaptureTags}" Watermark="Tags, comma separated (e.g. d6, rc-test)" />
+				<TextBox Classes="row" Text="{Binding CaptureNotes}" Watermark="Notes (optional)" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="80" />
+				<Button HorizontalAlignment="Stretch" Content="Save state + screenshot" Click="OnCaptureStateClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				<TextBlock Classes="hint" Margin="0,4,0,0" Text="{Binding LastCaptureText}" IsVisible="{Binding LastCaptureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+				<!-- Progress -->
+				<TextBlock Classes="section" Text="Progress" />
+				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
+					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}">
+						<ComboBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:OraclePresetOptionViewModel">
+								<TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Description}" />
+							</DataTemplate>
+						</ComboBox.ItemTemplate>
+					</ComboBox>
+					<Button Grid.Column="2" Content="Apply" Click="OnApplyPresetClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+				<Grid Classes="row" ColumnDefinitions="*,6,Auto,4,Auto">
+					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding FlagOptions}" SelectedItem="{Binding SelectedFlag}">
+						<ComboBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleFlagOptionViewModel">
+								<TextBlock Text="{Binding Label}" />
+							</DataTemplate>
+						</ComboBox.ItemTemplate>
+					</ComboBox>
+					<Button Grid.Column="2" Content="On" Click="OnSetFlagOnClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					<Button Grid.Column="4" Content="Off" Click="OnSetFlagOffClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+				<Grid ColumnDefinitions="*,6,*">
+					<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="Save data editor…" Click="OnOpenSaveDataEditorClick" />
+					<Button Grid.Column="2" HorizontalAlignment="Stretch" Content="Sync WRAM → SRAM" Click="OnSyncSramClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Write the live save block ($7EF000-$7EF4FF) into the active SRAM slot and its mirror" />
+				</Grid>
+
+				<!-- Frames -->
+				<TextBlock Classes="section" Text="Frames" />
+				<Grid ColumnDefinitions="*,6,Auto,6,Auto">
+					<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="{Binding PauseButtonText}" Click="OnPauseClick" />
+					<TextBox Grid.Column="2" Width="56" Text="{Binding FrameAdvanceCount}" HorizontalContentAlignment="Right" />
+					<Button Grid.Column="4" Content="Step frames" Click="OnFrameAdvanceClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+
+				<!-- Macros -->
+				<Grid ColumnDefinitions="*,Auto">
+					<TextBlock Classes="section" Text="Macros" />
+					<CheckBox Grid.Column="1" Content="Show" IsChecked="{Binding IsMacrosOpen}" VerticalAlignment="Bottom" />
+				</Grid>
+				<StackPanel Spacing="4" IsVisible="{Binding IsMacrosOpen}">
+						<Grid ColumnDefinitions="*,6,Auto">
+							<TextBox Grid.Column="0" Text="{Binding MacroProfilePath}" Watermark="Macro profile JSON path" />
+							<Button Grid.Column="2" Content="Reload" Click="OnReloadMacrosClick" />
+						</Grid>
+						<TextBlock Classes="hint" Text="{Binding MacroStatus}" />
+						<ItemsControl ItemsSource="{Binding MacroButtons}">
+							<ItemsControl.ItemsPanel>
+								<ItemsPanelTemplate>
+									<WrapPanel Orientation="Horizontal" />
+								</ItemsPanelTemplate>
+							</ItemsControl.ItemsPanel>
+							<ItemsControl.ItemTemplate>
+								<DataTemplate x:DataType="vm:OracleMacroButtonViewModel">
+									<Button Margin="0,0,6,6" Tag="{Binding Id}" Click="OnRunMacroClick" Content="{Binding DisplayLabel}" />
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+				</StackPanel>
+
+				<!-- Log -->
+				<Grid ColumnDefinitions="*,Auto">
+					<TextBlock Classes="section" Text="Log" />
+					<CheckBox Grid.Column="1" Content="Show" IsChecked="{Binding IsLogOpen}" VerticalAlignment="Bottom" />
+				</Grid>
+				<StackPanel Spacing="4" IsVisible="{Binding IsLogOpen}">
+						<TextBox
+							Height="140"
+							AcceptsReturn="True"
+							IsReadOnly="True"
+							TextWrapping="NoWrap"
+							Text="{Binding SessionLog}"
+							FontFamily="{DynamicResource MesenMonospaceFont}"
+							FontSize="{DynamicResource MesenMonospaceFontSize}"
+							ScrollViewer.HorizontalScrollBarVisibility="Auto"
+							ScrollViewer.VerticalScrollBarVisibility="Auto"
+						/>
+						<StackPanel Orientation="Horizontal" Spacing="6">
+							<Button Content="Copy" Click="OnCopyLogClick" />
+							<Button Content="Save…" Click="OnSaveLogClick" />
+							<Button Content="Clear" Click="OnClearLogClick" />
+						</StackPanel>
+				</StackPanel>
+
+				<TextBlock Classes="hint" Margin="0,10,0,0" Text="Cmd/Ctrl+Shift+O: tools pane · Cmd/Ctrl+Shift+H: hide strip" />
+			</StackPanel>
+		</ScrollViewer>
+	</Border>
+</UserControl>

@@ -331,6 +331,25 @@ namespace Mesen.Utilities
 			return Task.FromResult(ReadRuntimeSummary());
 		}
 
+		public static IReadOnlyList<OraclePanelPreset> GetPresets()
+		{
+			return Presets.Select(preset => new OraclePanelPreset() {
+				Id = preset.Id,
+				Label = preset.Label,
+				Description = preset.Description
+			}).ToList();
+		}
+
+		public static IReadOnlyList<OraclePanelToggleOption> GetFlagDefinitions()
+		{
+			return FlagToggleDefs.Select(def => new OraclePanelToggleOption() {
+				Group = def.Group,
+				Key = def.Key,
+				Label = def.Label,
+				Description = $"{def.Group}: {def.Label}"
+			}).ToList();
+		}
+
 		public static Task<OraclePanelEditorData?> FetchEditorDataAsync()
 		{
 			if(!CanReadState()) {
@@ -422,7 +441,7 @@ namespace Mesen.Utilities
 			return Task.FromResult<OraclePanelApplyResult?>(result);
 		}
 
-		private static bool CanReadState()
+		internal static bool CanReadState()
 		{
 			if(!EmuApi.IsRunning()) {
 				return false;
@@ -494,7 +513,7 @@ namespace Mesen.Utilities
 			};
 		}
 
-		private static int ApplyItemValues(IReadOnlyList<OraclePanelValueUpdate> updates)
+		internal static int ApplyItemValues(IReadOnlyList<OraclePanelValueUpdate> updates)
 		{
 			int changed = 0;
 			foreach(OraclePanelValueUpdate update in updates) {
@@ -508,7 +527,7 @@ namespace Mesen.Utilities
 			return changed;
 		}
 
-		private static int ApplyFlagValues(IReadOnlyList<OraclePanelValueUpdate> updates)
+		internal static int ApplyFlagValues(IReadOnlyList<OraclePanelValueUpdate> updates)
 		{
 			int changed = 0;
 			foreach(OraclePanelValueUpdate update in updates) {
@@ -564,7 +583,7 @@ namespace Mesen.Utilities
 			return changed;
 		}
 
-		private static int? SyncWramSaveToSram()
+		internal static int? SyncWramSaveToSram()
 		{
 			byte[] saveBlock = DebugApi.GetMemoryValues(MemoryType.SnesWorkRam, 0xF000, 0xF4FF);
 			ApplyInverseChecksum(saveBlock);
@@ -622,22 +641,22 @@ namespace Mesen.Utilities
 			return address == RupeesAddr ? ReadWord(address) : ReadByte(address);
 		}
 
-		private static byte ReadByte(uint address)
+		internal static byte ReadByte(uint address)
 		{
 			return DebugApi.GetMemoryValue(MemoryType.SnesMemory, address);
 		}
 
-		private static int ReadWord(uint address)
+		internal static int ReadWord(uint address)
 		{
 			return ReadByte(address) | (ReadByte(address + 1) << 8);
 		}
 
-		private static void WriteByte(uint address, int value)
+		internal static void WriteByte(uint address, int value)
 		{
 			DebugApi.SetMemoryValue(MemoryType.SnesMemory, address, (byte)(value & 0xFF));
 		}
 
-		private static void WriteWord(uint address, int value)
+		internal static void WriteWord(uint address, int value)
 		{
 			WriteByte(address, value & 0xFF);
 			WriteByte(address + 1, (value >> 8) & 0xFF);

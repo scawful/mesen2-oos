@@ -38,6 +38,7 @@ namespace Mesen.Windows
 		private ContentControl _audioPlayer;
 		private MainMenuView _mainMenu;
 		private Control _oracleDebugPanel;
+		private Control _oracleToolsPane;
 		private CommandLineHelper? _cmdLine;
 
 		private bool _testModeEnabled;
@@ -112,12 +113,17 @@ namespace Mesen.Windows
 
 			_rendererPanel = this.GetControl<Panel>("RendererPanel");
 			_rendererPanel.LayoutUpdated += RendererPanel_LayoutUpdated;
+			_rendererPanel.AddHandler(InputElement.PointerPressedEvent, OnRendererPointerPressed, RoutingStrategies.Tunnel, true);
+			AddHandler(InputElement.GotFocusEvent, OnFocusedElementChanged, RoutingStrategies.Bubble, true);
+			AddHandler(InputElement.LostFocusEvent, OnFocusedElementChanged, RoutingStrategies.Bubble, true);
 
 			_renderer = this.GetControl<NativeRenderer>("Renderer");
 			_softwareRenderer = this.GetControl<SoftwareRendererView>("SoftwareRenderer");
 			_audioPlayer = this.GetControl<ContentControl>("AudioPlayer");
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
 			_oracleDebugPanel = this.GetControl<Control>("OracleDebugPanel");
+			_oracleToolsPane = this.GetControl<Control>("OracleToolsPane");
+			_model.OracleDebugPanel.VisibilityModeChanged += OracleDebugPanel_VisibilityModeChanged;
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
@@ -419,7 +425,6 @@ namespace Mesen.Windows
 					});
 
 					GameConfig.LoadGameConfig(romInfo).ApplyConfig();
-					OracleAgentManager.CheckAutoStart();
 
 					GameLoadedEventParams evtParams = new();
 					if(e.Parameter != IntPtr.Zero) {
@@ -600,16 +605,35 @@ namespace Mesen.Windows
 
 				//When menu is set to auto-hide, don't count its height when calculating the window's final size
 				double menuHeight = ConfigManager.Config.Preferences.AutoHideMenu ? 0 : _mainMenu.Bounds.Height;
-				double oraclePanelHeight = _oracleDebugPanel.Bounds.Height;
+				double oraclePanelHeight = _oracleDebugPanel.IsVisible ? _oracleDebugPanel.Bounds.Height : 0;
+				double oracleToolsWidth = _oracleToolsPane.IsVisible ? _oracleToolsPane.Bounds.Width : 0;
 
 				double width = Math.Max(MinWidth, Math.Round(screenSize.Height * aspectRatio) * scale);
 				double height = Math.Max(MinHeight, screenSize.Height * scale);
-				ClientSize = new Size(width, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight);
+				ClientSize = new Size(width + oracleToolsWidth, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight);
 				ResizeRenderer();
 			} else if(WindowState == WindowState.Maximized || WindowState == WindowState.FullScreen) {
 				_rendererSize = new Size(Math.Floor(screenSize.Width * scale), Math.Floor(screenSize.Height * scale));
 				ResizeRenderer();
 			}
+		}
+
+		private void OracleDebugPanel_VisibilityModeChanged(object? sender, EventArgs e)
+		{
+			if(WindowState != WindowState.Normal) {
+				ResizeRenderer();
+				return;
+			}
+
+			//Keep the game at its current scale: grow or shrink the window around the
+			//status strip and tools pane instead of squeezing the renderer.
+			double dpiScale = LayoutHelper.GetLayoutScale(this);
+			FrameInfo baseScreenSize = EmuApi.GetBaseScreenSize();
+			if(baseScreenSize.Height == 0 || _rendererPanel.Bounds.Height <= 0) {
+				return;
+			}
+			double scale = Math.Round(_rendererPanel.Bounds.Height * dpiScale / baseScreenSize.Height, 2);
+			Dispatcher.UIThread.Post(() => SetScale(scale), DispatcherPriority.Background);
 		}
 
 		private void ResizeRenderer()
@@ -848,8 +872,34 @@ namespace Mesen.Windows
 
 		private void OnActiveChanged()
 		{
-			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive);
+			UpdateBackgroundFlag();
 			InputApi.ResetKeyState();
+		}
+
+		private void OnFocusedElementChanged(object? sender, RoutedEventArgs e)
+		{
+			bool wasTextInputFocused = _model.OracleDebugPanel.IsTextInputFocused;
+			UpdateBackgroundFlag();
+			if(wasTextInputFocused != _model.OracleDebugPanel.IsTextInputFocused) {
+				InputApi.ResetKeyState();
+			}
+		}
+
+		private void UpdateBackgroundFlag()
+		{
+			//A focused text box (e.g. in the Oracle tools pane) counts as background so key
+			//presses reach the text box instead of the game. On macOS the native key monitor
+			//swallows every key while the main window is in the foreground.
+			bool textInputFocused = IsActive && IsTextInputFocused();
+			_model.OracleDebugPanel.IsTextInputFocused = textInputFocused;
+			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive || textInputFocused);
+		}
+
+		private void OnRendererPointerPressed(object? sender, PointerPressedEventArgs e)
+		{
+			if(IsTextInputFocused()) {
+				FocusManager?.ClearFocus();
+			}
 		}
 
 		private void timerUpdateBackgroundFlag(object? sender, EventArgs e)
