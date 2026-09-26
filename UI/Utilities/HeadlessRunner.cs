@@ -5,6 +5,7 @@ using Mesen.Interop;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Mesen.Utilities
@@ -48,8 +49,15 @@ namespace Mesen.Utilities
 
 			Console.CancelKeyPress += (sender, e) => {
 				e.Cancel = true;
+				InstanceLog.QuitRequested("Ctrl+C: stopping");
 				EmuApi.Stop();
 			};
+			using PosixSignalRegistration sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => {
+				//Stop like Ctrl+C so the battery file is saved before the process exits
+				ctx.Cancel = true;
+				InstanceLog.QuitRequested("received SIGTERM: stopping");
+				EmuApi.Stop();
+			});
 
 			if(!LoadFiles(cmdLine)) {
 				listener.Dispose();
@@ -66,6 +74,7 @@ namespace Mesen.Utilities
 			WaitForStop(() => stopRequested);
 
 			int stopCode = EmuApi.GetStopCode();
+			InstanceLog.QuitRequested($"emulation stopped (stop code {stopCode})");
 			listener.Dispose();
 			EmuApi.Release();
 			return stopCode;

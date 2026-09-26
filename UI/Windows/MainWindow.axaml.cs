@@ -46,6 +46,9 @@ namespace Mesen.Windows
 		private bool _testModeEnabled;
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
+		private bool _stopSignalReceived = false;
+		private readonly PosixSignalRegistration _sigTerm;
+		private readonly PosixSignalRegistration _sigInt;
 		private bool _shutdownStarted = false;
 		private bool _shutdownCompleted = false;
 		private readonly CancellationTokenSource _shutdownCts = new();
@@ -133,6 +136,11 @@ namespace Mesen.Windows
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
+			//kill -TERM / Ctrl+C: close through the normal shutdown path (saves config and SRAM).
+			//The runtime default exits mid-frame (exit 143 or a crash in the render thread).
+			_sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnStopSignal);
+			_sigInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnStopSignal);
+
 #if DEBUG
 			this.AttachDevTools();
 #endif
@@ -193,6 +201,7 @@ namespace Mesen.Windows
 			}
 
 			_shutdownStarted = true;
+			InstanceLog.QuitRequested("main window closing (" + e.CloseReason + ")");
 			_shutdownCts.Cancel();
 			_emulatorOperationShutdownTask = EmulatorOperationTracker.BeginShutdownAsync();
 			_pendingLoadShutdownTask = LoadRomHelper.BeginShutdownAsync();
@@ -280,6 +289,22 @@ namespace Mesen.Windows
 		{
 			string? value = Environment.GetEnvironmentVariable("MESEN2_SHUTDOWN_TRACE");
 			return !string.IsNullOrWhiteSpace(value) && value != "0" && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+		}
+
+		private void OnStopSignal(PosixSignalContext context)
+		{
+			if(_stopSignalReceived) {
+				InstanceLog.Write($"received {context.Signal} again: default termination");
+				return;
+			}
+
+			_stopSignalReceived = true;
+			context.Cancel = true;
+			InstanceLog.QuitRequested($"received {context.Signal}: closing the main window (send it again to force)");
+			Dispatcher.UIThread.Post(() => {
+				_needCloseValidation = false;
+				Close();
+			});
 		}
 
 		private async void ValidateExit()
@@ -417,6 +442,7 @@ namespace Mesen.Windows
 				case ConsoleNotificationType.GameLoaded:
 					CheatCodes.ApplyCheats();
 					RomInfo romInfo = EmuApi.GetRomInfo();
+					InstanceLog.Write("game loaded: " + romInfo.RomPath);
 					
 					PostUnlessShuttingDown(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
