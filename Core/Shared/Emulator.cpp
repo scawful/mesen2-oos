@@ -1143,6 +1143,9 @@ void Emulator::Serialize(ostream& out, bool includeSettings, int compressionLeve
 	if(includeSettings) {
 		SV(_settings);
 	}
+	//Lets a load into another build warn; older builds ignore the extra key
+	string romSha1 = GetHash(HashType::Sha1);
+	s.Stream(romSha1, "romSha1");
 	s.Stream(_console, "");
 	s.SaveTo(out, compressionLevel);
 }
@@ -1180,8 +1183,17 @@ bool Emulator::Deserialize(istream& in, uint32_t fileFormatVersion, bool include
 		}
 	}
 
+	string stateRomSha1;
+	s.Stream(stateRomSha1, "romSha1");
 	s.Stream(_console, "");
-	
+
+	string romSha1 = GetHash(HashType::Sha1);
+	if(!stateRomSha1.empty() && stateRomSha1 != romSha1) {
+		//Not blocking: states from the previous build usually work, but code and data may have moved
+		MessageManager::DisplayMessage("SaveStates", "State from a different build (SHA-1 %1, running %2): it may not work as expected.", stateRomSha1.substr(0, 8), romSha1.substr(0, 8));
+		MessageManager::Log("[SaveState] Loaded a state saved on another build: state SHA-1 " + stateRomSha1 + ", running " + romSha1);
+	}
+
 	if(sendNotification) {
 		_notificationManager->SendNotification(ConsoleNotificationType::StateLoaded);
 	}

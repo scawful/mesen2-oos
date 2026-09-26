@@ -425,6 +425,7 @@ private:
 	static SocketResponse HandleOfferRomStatus(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleOfferRomClear(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadRomLive(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleEmuLog(Emulator* emu, const SocketCommand& cmd);
 	static bool LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, string& error);
 	static void NotifyRomOfferChanged(Emulator* emu);
 

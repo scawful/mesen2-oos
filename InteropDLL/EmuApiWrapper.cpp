@@ -370,6 +370,12 @@ extern "C" {
 		SocketServer::SnoozeRomOffer(_emu.get());
 	}
 
+	DllExport void __stdcall GetSaveStateBaseName(char* outBuffer, uint32_t maxLength)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		StringUtilities::CopyToBuffer(_emu->GetSaveStateManager()->GetStateFilenameBase(), outBuffer, maxLength);
+	}
+
 	DllExport void __stdcall SetOracleSaveName(char* saveName)
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();

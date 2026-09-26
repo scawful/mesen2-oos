@@ -362,6 +362,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["OFFER_ROM_STATUS"] = HandleOfferRomStatus;
 	_handlers["OFFER_ROM_CLEAR"] = HandleOfferRomClear;
 	_handlers["LOAD_ROM_LIVE"] = HandleLoadRomLive;
+	_handlers["LOG"] = HandleEmuLog;
 	_handlers["READ"] = HandleRead;
 	_handlers["READ16"] = HandleRead16;
 	_handlers["WRITE"] = HandleWrite;
@@ -1395,6 +1396,51 @@ SocketResponse SocketServer::HandleOfferRomClear(Emulator* emu, const SocketComm
 	NotifyRomOfferChanged(emu);
 	resp.success = true;
 	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleEmuLog(Emulator* emu, const SocketCommand& cmd) {
+	//Tail of the Mesen log window (ROM loads, save warnings, [Save]/[SaveState] lines)
+	int lines = 50;
+	if(cmd.HasParam("lines") && (!TryParseInt(cmd.GetParam("lines"), lines) || lines <= 0)) {
+		SocketResponse resp;
+		resp.success = false;
+		resp.error = "Invalid lines value";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+
+	string log = MessageManager::GetLog();
+	size_t start = log.size();
+	for(int i = 0; i <= lines && start > 0; i++) {
+		size_t pos = log.rfind('\n', start - 1);
+		start = pos == string::npos ? 0 : pos;
+	}
+	if(start > 0) {
+		start++;
+	}
+
+	//Log lines can carry raw ROM header bytes; keep the JSON valid UTF-8
+	string text;
+	for(size_t i = start; i < log.size();) {
+		uint8_t c = (uint8_t)log[i];
+		size_t len = c < 0x80 ? 1 : (c >> 5) == 0x06 ? 2 : (c >> 4) == 0x0E ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+		bool valid = len > 0 && i + len <= log.size();
+		for(size_t j = 1; valid && j < len; j++) {
+			valid = ((uint8_t)log[i + j] >> 6) == 0x02;
+		}
+		if(valid) {
+			text.append(log, i, len);
+			i += len;
+		} else {
+			text += '?';
+			i++;
+		}
+	}
+
+	SocketResponse resp;
+	resp.success = true;
+	resp.data = "\"" + JsonEscape(text) + "\"";
 	return resp;
 }
 
@@ -6746,6 +6792,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"OFFER_ROM", "Offer a new ROM to the player (UI banner: Load now / Later); replaces any pending offer", "path, label (optional), notes (optional)", "{\"type\":\"OFFER_ROM\",\"path\":\"/path/to/rom.sfc\",\"label\":\"v10\"}"},
 			{"OFFER_ROM_STATUS", "Get the pending ROM offer and the last live load result", "", "{\"type\":\"OFFER_ROM_STATUS\"}"},
 			{"OFFER_ROM_CLEAR", "Withdraw the pending ROM offer", "", "{\"type\":\"OFFER_ROM_CLEAR\"}"},
+			{"LOG", "Last lines of the Mesen log window", "lines (optional, default 50)", "{\"type\":\"LOG\",\"lines\":\"20\"}"},
 			{"LOAD_ROM_LIVE", "Load a ROM keeping the running game's .srm (optional backup state first); no path accepts the pending offer", "path (optional), label (optional), state (optional, default true)", "{\"type\":\"LOAD_ROM_LIVE\",\"path\":\"/path/to/rom.sfc\"}"},
 			{"FRAME", "Run one frame", "", "{\"type\":\"FRAME\"}"},
 			{"STEP", "Step CPU execution", "count (optional), mode (into/over/out/cycle/ppu/scanline/frame/nmi/irq/back)", "{\"type\":\"STEP\",\"count\":\"10\",\"mode\":\"over\"}"},
@@ -6819,7 +6866,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 	// List all commands
 	static const vector<string> commands = {
 		"PING", "STATE", "HEALTH", "PAUSE", "RESUME", "RESET", "FRAME", "STEP",
-		"OFFER_ROM", "OFFER_ROM_STATUS", "OFFER_ROM_CLEAR", "LOAD_ROM_LIVE",
+		"OFFER_ROM", "OFFER_ROM_STATUS", "OFFER_ROM_CLEAR", "LOAD_ROM_LIVE", "LOG",
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",

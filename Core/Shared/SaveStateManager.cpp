@@ -7,6 +7,7 @@
 #include "Shared/SaveStateManager.h"
 #include "Shared/MessageManager.h"
 #include "Shared/Emulator.h"
+#include "Shared/BatteryManager.h"
 #include "Shared/EmuSettings.h"
 #include "Shared/Movies/MovieManager.h"
 #include "Shared/RenderedFrame.h"
@@ -76,6 +77,14 @@ string SaveStateManager::GetStateFilenameBase()
 {
 	string romFile = _emu->GetRomInfo().RomFile.GetFileName();
 	string baseName = FolderUtilities::GetFilename(romFile, false);
+
+	//Oracle.PersistentSaveName and live ROM loads share one battery file across ROM file names:
+	//key the slots by that name too, so they carry over to the next build
+	string batteryName = _emu->GetBatteryManager()->GetRomName();
+	if(!batteryName.empty() && batteryName != baseName) {
+		return batteryName;
+	}
+
 	if(baseName.empty()) {
 		baseName = "rom";
 	}

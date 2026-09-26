@@ -106,7 +106,11 @@ on exit):
   `Saves/SrmBackups/<name>_<timestamp>.srm`: on every live load, and on any
   other load whose ROM path differs from the running one (a power cycle of the
   same file is skipped). Backups are never pruned (8 KB each).
-- Save-state slots stay keyed by ROM file name, so each build keeps its own slots.
+- Save-state slots follow the same name (`SaveStates/<PersistentSaveName>_<N>.mss`,
+  and the live-load save name after a live load), so slots carry across builds.
+  States record the ROM SHA-1 (`romSha1` key, ignored by older builds); loading
+  one saved on a different build shows a non-blocking OSD warning and logs
+  `[SaveState] Loaded a state saved on another build: ...` (socket `LOG`).
 
 ## Headless crash on rom-load (fixed)
 

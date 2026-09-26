@@ -123,6 +123,12 @@ Hand a new build to a running session without losing the in-game save. See `docs
 {"type":"LOAD_ROM_LIVE","path":"/abs/path/oos168x.sfc","state":"false"}
 ```
 
+### LOG
+Last lines of the Mesen log window (ROM loads, `[Save]` backups, `[SaveState]` build warnings).
+```json
+{"type":"LOG","lines":"20"}
+```
+
 ---
 
 ## Memory Commands
