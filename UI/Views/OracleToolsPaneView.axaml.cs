@@ -39,10 +39,39 @@ namespace Mesen.Views
 			AvaloniaXamlLoader.Load(this);
 		}
 
-		private async void OnWarpClick(object? sender, RoutedEventArgs e)
+		private async void OnWarpChoiceClick(object? sender, RoutedEventArgs e)
 		{
 			if(ViewModel != null) {
-				await ViewModel.ExecuteWarpAsync();
+				await ViewModel.Cheats.ExecuteWarpAsync();
+			}
+		}
+
+		private async void OnWarpChoiceDoubleTapped(object? sender, TappedEventArgs e)
+		{
+			if(ViewModel != null && ViewModel.Cheats.SelectedWarp != null && !ViewModel.IsCommandInFlight) {
+				await ViewModel.Cheats.ExecuteWarpAsync();
+			}
+		}
+
+		private async void OnJumpCheckpointClick(object? sender, RoutedEventArgs e)
+		{
+			if(ViewModel?.Cheats.SelectedCheckpoint == null) {
+				return;
+			}
+			if(!ViewModel.Cheats.SelectedCheckpoint.IsTodo) {
+				Window? window = TopLevel.GetTopLevel(this) as Window;
+				DialogResult answer = await MessageBox.Show(window, ViewModel.Cheats.ConfirmCheckpointText(), "Jump to checkpoint", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+				if(answer != DialogResult.OK) {
+					return;
+				}
+			}
+			await ViewModel.Cheats.ExecuteCheckpointAsync();
+		}
+
+		private async void OnRefillClick(object? sender, RoutedEventArgs e)
+		{
+			if(ViewModel != null) {
+				await ViewModel.Cheats.ExecuteRefillAsync();
 			}
 		}
 

@@ -82,28 +82,16 @@ namespace Mesen.Utilities
 			return target.Kind == OracleWarpKind.Entrance ? WarpToEntrance(target.Value) : FallToRoom(target.Value);
 		}
 
-		/// <summary>Enter a dungeon through an entrance ID, as if falling in (module $11).</summary>
+		/// <summary>
+		/// Enter an entrance ID: the vanilla door entry from overworld play, otherwise the
+		/// death-continue reload (see <see cref="OracleCheats"/>). Waits until the room is loaded.
+		/// </summary>
 		public static OracleActionResult WarpToEntrance(int entrance)
 		{
 			if(entrance < 0 || entrance > 0xFF) {
 				return OracleActionResult.Fail($"Entrance ${entrance:X} is out of range ($00-$FF).");
 			}
-
-			return WithPausedEmulation(() => {
-				int module = OraclePanelBridge.ReadByte(ModuleAddr);
-				if(module != ModuleDungeon && module != ModuleOverworld && module != ModuleSpecialOverworld) {
-					return OracleActionResult.Fail($"Warp needs gameplay (module $07/$09/$0B); module is ${module:X2}.");
-				}
-
-				OraclePanelBridge.WriteByte(EntranceAddr, entrance);
-				OraclePanelBridge.WriteByte(EntranceHighAddr, 0x00);
-				OraclePanelBridge.WriteByte(FallStateAddr, 0x20);
-				OraclePanelBridge.WriteByte(LinkStateAddr, 0x01);
-				OraclePanelBridge.WriteByte(SubmoduleAddr, 0x00);
-				OraclePanelBridge.WriteByte(SubsubmoduleAddr, 0x00);
-				OraclePanelBridge.WriteByte(ModuleAddr, ModuleFallIntoDungeon);
-				return OracleActionResult.Ok($"Warping to entrance ${entrance:X2}.");
-			});
+			return OracleCheats.WarpToEntrance(entrance);
 		}
 
 		/// <summary>Drop Link into another room of the current dungeon. Link keeps his X/Y.</summary>

@@ -40,6 +40,20 @@
 		<Style Selector="Button">
 			<Setter Property="HorizontalContentAlignment" Value="Center" />
 		</Style>
+		<!-- Not focusable, like the ROM offer banner: a focused control that loses focus to the
+		     renderer mid-press never raises Click, and game input stays on the renderer. -->
+		<Style Selector="Button.cheat">
+			<Setter Property="Focusable" Value="False" />
+		</Style>
+		<Style Selector="CheckBox.cheat">
+			<Setter Property="Focusable" Value="False" />
+			<Setter Property="MinHeight" Value="0" />
+			<Setter Property="Padding" Value="4,0,0,0" />
+		</Style>
+		<Style Selector="ListBox.warps ListBoxItem">
+			<Setter Property="Padding" Value="6,2" />
+			<Setter Property="MinHeight" Value="0" />
+		</Style>
 	</UserControl.Styles>
 
 	<Border
@@ -67,18 +81,23 @@
 					<TextBlock Grid.Row="5" Grid.Column="1" Classes="value" Text="{Binding RomText}" ToolTip.Tip="{Binding RomText}" />
 				</Grid>
 
-				<!-- Warp -->
+				<!-- Warp (targets from oracle-of-secrets Data/debug/warps.json) -->
 				<TextBlock Classes="section" Text="Warp" />
-				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
-					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding WarpTargets}" SelectedItem="{Binding SelectedWarpTarget}">
-						<ComboBox.ItemTemplate>
-							<DataTemplate x:DataType="vm:OracleWarpTargetViewModel">
-								<TextBlock Text="{Binding DisplayLabel}" />
-							</DataTemplate>
-						</ComboBox.ItemTemplate>
-					</ComboBox>
-					<Button Grid.Column="2" Content="Go" Click="OnWarpClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
+				<TextBox Classes="row" Text="{Binding Cheats.WarpSearchText}" Watermark="Search: d1, shop, abyss, 0x26" />
+				<ListBox
+					Classes="warps row"
+					Height="150"
+					ItemsSource="{Binding Cheats.WarpResults}"
+					SelectedItem="{Binding Cheats.SelectedWarp}"
+					DoubleTapped="OnWarpChoiceDoubleTapped"
+				>
+					<ListBox.ItemTemplate>
+						<DataTemplate x:DataType="vm:OracleWarpChoiceViewModel">
+							<TextBlock Text="{Binding DisplayLabel}" ToolTip.Tip="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+						</DataTemplate>
+					</ListBox.ItemTemplate>
+				</ListBox>
+				<Button Classes="cheat row" HorizontalAlignment="Stretch" Content="Warp to selection" Click="OnWarpChoiceClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Entrances: door entry from the overworld, reload from indoors. Areas: dungeon-exit load. Double-click a row to warp." />
 				<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto">
 					<TextBlock Grid.Column="0" Classes="key" Text="Entrance $" VerticalAlignment="Center" />
 					<TextBox Grid.Column="1" Text="{Binding WarpEntranceHex}" Watermark="e.g. 76" />
@@ -89,6 +108,104 @@
 					<TextBox Grid.Column="1" Text="{Binding FallRoomHex}" Watermark="same dungeon, e.g. 77" />
 					<Button Grid.Column="3" Content="Go" Click="OnFallToRoomClick" IsEnabled="{Binding !IsCommandInFlight}" />
 				</Grid>
+
+				<!-- Checkpoints (oracle-of-secrets Data/debug/checkpoints.json) -->
+				<TextBlock Classes="section" Text="Checkpoints" />
+				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
+					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Cheats.Checkpoints}" SelectedItem="{Binding Cheats.SelectedCheckpoint}">
+						<ComboBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleCheckpointOptionViewModel">
+								<TextBlock Text="{Binding DisplayLabel}" ToolTip.Tip="{Binding Notes}" TextTrimming="CharacterEllipsis" />
+							</DataTemplate>
+						</ComboBox.ItemTemplate>
+					</ComboBox>
+					<Button Grid.Column="2" Classes="cheat" Content="Jump" Click="OnJumpCheckpointClick" IsEnabled="{Binding !IsCommandInFlight}" />
+				</Grid>
+				<TextBlock Classes="hint" Text="{Binding Cheats.CheckpointHint}" MaxHeight="64" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Cheats.CheckpointHint}" />
+
+				<!-- Items -->
+				<Grid ColumnDefinitions="*,Auto">
+					<TextBlock Classes="section" Text="Items" />
+					<CheckBox Grid.Column="1" Classes="cheat" Content="Show" IsChecked="{Binding Cheats.IsItemsOpen}" VerticalAlignment="Bottom" />
+				</Grid>
+				<StackPanel Spacing="4" IsVisible="{Binding Cheats.IsItemsOpen}">
+					<ItemsControl ItemsSource="{Binding Cheats.ItemChoices}">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleCheatChoiceViewModel">
+								<Grid ColumnDefinitions="78,*" Margin="0,0,0,3">
+									<TextBlock Classes="key" Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
+									<ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
+										<ComboBox.ItemTemplate>
+											<DataTemplate x:DataType="vm:OracleCheatChoiceValueViewModel">
+												<TextBlock Text="{Binding Label}" />
+											</DataTemplate>
+										</ComboBox.ItemTemplate>
+									</ComboBox>
+								</Grid>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+					<ItemsControl ItemsSource="{Binding Cheats.ItemToggles}">
+						<ItemsControl.ItemsPanel>
+							<ItemsPanelTemplate>
+								<WrapPanel Orientation="Horizontal" />
+							</ItemsPanelTemplate>
+						</ItemsControl.ItemsPanel>
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleCheatToggleViewModel">
+								<CheckBox Classes="cheat" Width="136" Content="{Binding Label}" IsChecked="{Binding IsChecked}" ToolTip.Tip="{Binding Tip}" />
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+					<Button Classes="cheat" HorizontalAlignment="Stretch" Content="Refill health + magic" Click="OnRefillClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					<TextBlock Classes="hint" Text="Edits go to WRAM at once. Sync WRAM → SRAM (Progress) keeps them in the save." />
+				</StackPanel>
+
+				<!-- Flags (named bits from oracle-of-secrets Core/sram.asm) -->
+				<Grid ColumnDefinitions="*,Auto">
+					<TextBlock Classes="section" Text="Flags" />
+					<CheckBox Grid.Column="1" Classes="cheat" Content="Show" IsChecked="{Binding Cheats.IsFlagsOpen}" VerticalAlignment="Bottom" />
+				</Grid>
+				<StackPanel Spacing="4" IsVisible="{Binding Cheats.IsFlagsOpen}">
+					<ItemsControl ItemsSource="{Binding Cheats.FlagChoices}">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleCheatChoiceViewModel">
+								<Grid ColumnDefinitions="78,*" Margin="0,0,0,3">
+									<TextBlock Classes="key" Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
+									<ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
+										<ComboBox.ItemTemplate>
+											<DataTemplate x:DataType="vm:OracleCheatChoiceValueViewModel">
+												<TextBlock Text="{Binding Label}" />
+											</DataTemplate>
+										</ComboBox.ItemTemplate>
+									</ComboBox>
+								</Grid>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+					<ItemsControl ItemsSource="{Binding Cheats.FlagGroups}">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleCheatFlagGroupViewModel">
+								<StackPanel Margin="0,4,0,0">
+									<TextBlock Classes="key" Text="{Binding Title}" FontWeight="SemiBold" />
+									<ItemsControl ItemsSource="{Binding Toggles}">
+										<ItemsControl.ItemsPanel>
+											<ItemsPanelTemplate>
+												<WrapPanel Orientation="Horizontal" />
+											</ItemsPanelTemplate>
+										</ItemsControl.ItemsPanel>
+										<ItemsControl.ItemTemplate>
+											<DataTemplate x:DataType="vm:OracleCheatToggleViewModel">
+												<CheckBox Classes="cheat" Width="136" Content="{Binding Label}" IsChecked="{Binding IsChecked}" ToolTip.Tip="{Binding Tip}" />
+											</DataTemplate>
+										</ItemsControl.ItemTemplate>
+									</ItemsControl>
+								</StackPanel>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+					<TextBlock Classes="hint" Text="Flags edit WRAM at once; the game saves them on its next save, or use Sync WRAM → SRAM." />
+				</StackPanel>
 
 				<!-- Capture -->
 				<TextBlock Classes="section" Text="Capture" />

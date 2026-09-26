@@ -117,6 +117,8 @@ namespace Mesen.ViewModels
 			);
 			_selectedFlag = FlagOptions.FirstOrDefault();
 
+			Cheats = new OracleCheatsViewModel(RunActionAsync);
+
 			MacroButtons = new ObservableCollection<OracleMacroButtonViewModel>();
 			MacroProfilePath = ExpandHome(ConfigManager.Config.Oracle.DebugPanelMacroProfilePath);
 			if(!string.IsNullOrWhiteSpace(MacroProfilePath)) {
@@ -180,6 +182,9 @@ namespace Mesen.ViewModels
 		public string WarpEntranceHex { get => _warpEntranceHex; set => this.RaiseAndSetIfChanged(ref _warpEntranceHex, value); }
 		public string FallRoomHex { get => _fallRoomHex; set => this.RaiseAndSetIfChanged(ref _fallRoomHex, value); }
 		public bool CanFallToRoom { get => _canFallToRoom; private set => this.RaiseAndSetIfChanged(ref _canFallToRoom, value); }
+
+		// Tools pane: cheats & warps (warp search, checkpoints, items, flags)
+		public OracleCheatsViewModel Cheats { get; }
 
 		// Tools pane: capture
 		public string CaptureLabel { get => _captureLabel; set => this.RaiseAndSetIfChanged(ref _captureLabel, value); }
@@ -437,6 +442,9 @@ namespace Mesen.ViewModels
 				StatsText = $"HP {s.Health}/{s.MaxHealth} · MP {s.Magic} · Rupees {s.Rupees}";
 				StoryText = $"GS {s.GameState} · Crys ${s.Crystals:X2} · Pend ${s.Pendants:X2}";
 				CanFallToRoom = s.Indoors;
+				if(IsExpanded) {
+					Cheats.RefreshValues();
+				}
 			} catch(Exception ex) {
 				LocationText = "Refresh failed";
 				StatusLine = ex.Message;
