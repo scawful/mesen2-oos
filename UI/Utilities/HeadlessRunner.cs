@@ -36,12 +36,23 @@ namespace Mesen.Utilities
 			DebugWorkspaceManager.Load();
 			EmuApi.Pause();
 
+			//Stop(true) (Ctrl+C, emu.stop(), power off) sends EmulationStopped.
+			//Loading another ROM (socket LOADROM) stops the old console without it.
+			bool stopRequested = false;
+			NotificationListener listener = new();
+			listener.OnNotification += (e) => {
+				if(e.NotificationType == ConsoleNotificationType.EmulationStopped) {
+					stopRequested = true;
+				}
+			};
+
 			Console.CancelKeyPress += (sender, e) => {
 				e.Cancel = true;
 				EmuApi.Stop();
 			};
 
 			if(!LoadFiles(cmdLine)) {
+				listener.Dispose();
 				EmuApi.Release();
 				return -1;
 			}
@@ -52,13 +63,23 @@ namespace Mesen.Utilities
 
 			EmuApi.Resume();
 
-			while(EmuApi.IsRunning()) {
-				Thread.Sleep(250);
-			}
+			WaitForStop(() => stopRequested);
 
 			int stopCode = EmuApi.GetStopCode();
+			listener.Dispose();
 			EmuApi.Release();
 			return stopCode;
+		}
+
+		private static void WaitForStop(Func<bool> stopRequested)
+		{
+			//IsRunning() is briefly false while a ROM swap replaces the console,
+			//so only treat it as a stop once it stays false for a full second.
+			int stoppedPolls = 0;
+			while(!stopRequested() && stoppedPolls < 4) {
+				Thread.Sleep(250);
+				stoppedPolls = EmuApi.IsRunning() ? 0 : stoppedPolls + 1;
+			}
 		}
 
 		private static bool LoadFiles(CommandLineHelper cmdLine)
