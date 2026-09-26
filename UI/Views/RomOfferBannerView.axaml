@@ -14,7 +14,11 @@
 	</Design.DataContext>
 
 	<UserControl.Styles>
+		<!-- Not focusable: while the left button is held, MouseManager gives the renderer focus
+		     every 15 ms, and a focused Button that loses focus mid-press never raises Click.
+		     Also keeps game input on the renderer after a click. -->
 		<Style Selector="Button.offer">
+			<Setter Property="Focusable" Value="False" />
 			<Setter Property="Padding" Value="10,1" />
 			<Setter Property="MinHeight" Value="0" />
 			<Setter Property="Margin" Value="4,0,0,0" />

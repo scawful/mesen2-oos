@@ -90,6 +90,7 @@ namespace Mesen.ViewModels
 
 		public void LoadNow()
 		{
+			EmuApi.WriteLogEntry($"[RomOffer] Load now: label={Label} pending={IsPending} loading={IsLoading}");
 			if(!IsPending || IsLoading) {
 				return;
 			}
@@ -99,6 +100,7 @@ namespace Mesen.ViewModels
 			Task.Run(() => {
 				//The core reports progress through RomOfferChanged; refresh here only when it refused to start
 				if(!EmuApi.AcceptRomOffer()) {
+					EmuApi.WriteLogEntry("[RomOffer] Load now refused by the core; see OFFER_ROM_STATUS");
 					Dispatcher.UIThread.Post(() => {
 						IsLoading = false;
 						Update(EmuApi.GetRomOffer());
