@@ -122,6 +122,10 @@ SaveLoadResult SocketServer::_lastLoadResult;
 RomOfferState SocketServer::_romOffer;
 SimpleLock SocketServer::_romOfferLock;
 atomic<bool> SocketServer::_romLiveLoadBusy(false);
+atomic<int> SocketServer::_resumeFile(-1);
+uint32_t SocketServer::_resumeStartFrame = 0;
+uint32_t SocketServer::_resumeNextPressFrame = 0;
+bool SocketServer::_resumeSeenTitle = false;
 
 // Static member definitions for validation rules
 // Static member definitions for validation rules
@@ -1246,13 +1250,95 @@ string SocketServer::GetRomOfferJson() {
 		ss << ",\"state\":\"" << JsonEscape(o.lastStatePath) << "\"";
 		ss << ",\"save\":\"" << JsonEscape(o.lastSavePath) << "\"";
 		ss << ",\"backup\":\"" << JsonEscape(o.lastBackupPath) << "\"";
+		ss << ",\"resume_file\":" << o.lastResumeFile;
 		ss << ",\"at_ms\":" << o.lastAtMs << "}";
 	}
 	ss << "}";
 	return ss.str();
 }
 
-bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, string& error) {
+//ALTTP-layout save RAM: $1FFE (SRAMOFF) = file index * 2 + 2 while a file is in use (0 at the
+//title and file select), each file's $03E5 holds $55AA when it exists
+static int GetActiveAlttpSaveFile(Emulator* emu)
+{
+	ConsoleMemoryInfo sram = emu->GetMemory(MemoryType::SnesSaveRam);
+	if(emu->GetConsoleType() != ConsoleType::Snes || !sram.Memory || sram.Size < 0x2000) {
+		return -1;
+	}
+	uint8_t* data = (uint8_t*)sram.Memory;
+	int sramOffset = data[0x1FFE] | (data[0x1FFF] << 8);
+	if(sramOffset != 2 && sramOffset != 4 && sramOffset != 6) {
+		return -1;
+	}
+	return sramOffset / 2 - 1;
+}
+
+static bool IsAlttpSaveFileValid(Emulator* emu, int file)
+{
+	ConsoleMemoryInfo sram = emu->GetMemory(MemoryType::SnesSaveRam);
+	if(file < 0 || !sram.Memory || sram.Size < 0x2000) {
+		return false;
+	}
+	uint8_t* marker = (uint8_t*)sram.Memory + file * 0x500 + 0x3E5;
+	return marker[0] == 0xAA && marker[1] == 0x55;
+}
+
+static void FinishRomResume(const string& message)
+{
+	MessageManager::Log("[Resume] " + message);
+}
+
+void SocketServer::ProcessRomResume(Emulator* emu) {
+	//Runs on the emulation thread after each frame while a live load resumes a save file:
+	//press Start through the intro/title, then pick the file at the file select
+	int file = _resumeFile.load();
+	if(file < 0) {
+		return;
+	}
+
+	ConsoleMemoryInfo wram = emu->GetMemory(MemoryType::SnesWorkRam);
+	uint32_t frame = emu->GetFrameCount();
+	if(emu->GetConsoleType() != ConsoleType::Snes || !wram.Memory || wram.Size < 0x100) {
+		_resumeFile = -1;
+		return;
+	}
+
+	uint8_t* ram = (uint8_t*)wram.Memory;
+	uint8_t module = ram[0x10];
+	uint8_t submodule = ram[0x11];
+	bool atTitle = module == 0x00 || module == 0x01 || module == 0x14;
+	if(!atTitle && _resumeSeenTitle) {
+		_resumeFile = -1;
+		FinishRomResume("file " + std::to_string(file + 1) + " is loading (module $" + HexUtilities::ToHex(module) + ")");
+		return;
+	}
+	//Until the title shows, WRAM still holds boot garbage: only wait
+	_resumeSeenTitle |= atTitle;
+	if(frame - _resumeStartFrame > 1200) {
+		_resumeFile = -1;
+		FinishRomResume("gave up after 20 s at module $" + HexUtilities::ToHex(module) + "/$" + HexUtilities::ToHex(submodule));
+		return;
+	}
+	if(!atTitle || frame < _resumeNextPressFrame || (module == 0x01 && submodule != 0x05)) {
+		return;
+	}
+
+	DebugControllerState state = {};
+	if(module == 0x01) {
+		//File select waiting for input: put the cursor on the file and press A
+		ram[0xC8] = (uint8_t)file;
+		state.A = true;
+	} else {
+		state.Start = true;
+	}
+	auto dbg = emu->GetDebugger(false);
+	if(dbg.GetDebugger()) {
+		dbg.GetDebugger()->SetInputOverrides(0, state, 4);
+	}
+	_resumeNextPressFrame = frame + 30;
+}
+
+bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, bool resume, string& error) {
 	bool expected = false;
 	if(!_romLiveLoadBusy.compare_exchange_strong(expected, true)) {
 		error = "A live ROM load is already in progress";
@@ -1274,6 +1360,8 @@ bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const strin
 
 	string statePath;
 	string savePath;
+	//The file in play is only known before the swap: booting the new ROM clears $1FFE
+	int resumeFile = resume && emu->IsRunning() ? GetActiveAlttpSaveFile(emu) : -1;
 	if(emu->IsRunning()) {
 		//Keep the running game's save file name so the new ROM reads the same .srm
 		string batteryName = emu->GetCurrentBatteryName();
@@ -1298,6 +1386,20 @@ bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const strin
 		error = "Failed to load ROM";
 	}
 
+	if(ok && resumeFile >= 0) {
+		if(IsAlttpSaveFileValid(emu, resumeFile)) {
+			//Input overrides need the debugger; create it here, off the emulation thread
+			emu->GetDebugger(true);
+			_resumeStartFrame = emu->GetFrameCount();
+			_resumeNextPressFrame = 0;
+			_resumeSeenTitle = false;
+			_resumeFile = resumeFile;
+			MessageManager::Log("[Resume] continuing save file " + std::to_string(resumeFile + 1) + " after the live load");
+		} else {
+			resumeFile = -1;
+		}
+	}
+
 	{
 		auto lock = _romOfferLock.AcquireSafe();
 		RomOfferState& o = _romOffer;
@@ -1310,6 +1412,7 @@ bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const strin
 		o.lastStatePath = statePath;
 		o.lastSavePath = savePath;
 		o.lastBackupPath = backupPath;
+		o.lastResumeFile = resumeFile + 1;
 		o.lastAtMs = NowMs();
 		if(ok && o.pending && o.path == romPath) {
 			o.pending = false;
@@ -1333,7 +1436,7 @@ bool SocketServer::AcceptRomOffer(Emulator* emu, string& error) {
 		path = _romOffer.path;
 		label = _romOffer.label;
 	}
-	return LoadRomLive(emu, path, label, true, error);
+	return LoadRomLive(emu, path, label, true, true, error);
 }
 
 void SocketServer::SnoozeRomOffer(Emulator* emu) {
@@ -1453,6 +1556,7 @@ SocketResponse SocketServer::HandleLoadRomLive(Emulator* emu, const SocketComman
 	}
 
 	bool saveState = cmd.HasParam("state") ? ParseBoolValue(cmd.GetParam("state")) : true;
+	bool resume = cmd.HasParam("resume") ? ParseBoolValue(cmd.GetParam("resume")) : true;
 	string romPath = cmd.GetParam("path");
 	string label = cmd.GetParam("label");
 	string error;
@@ -1470,9 +1574,9 @@ SocketResponse SocketServer::HandleLoadRomLive(Emulator* emu, const SocketComman
 			romPath = _romOffer.path;
 			label = _romOffer.label;
 		}
-		ok = LoadRomLive(emu, romPath, label, saveState, error);
+		ok = LoadRomLive(emu, romPath, label, saveState, resume, error);
 	} else {
-		ok = LoadRomLive(emu, romPath, label.empty() ? FolderUtilities::GetFilename(romPath, true) : label, saveState, error);
+		ok = LoadRomLive(emu, romPath, label.empty() ? FolderUtilities::GetFilename(romPath, true) : label, saveState, resume, error);
 	}
 
 	resp.success = ok;
@@ -6793,7 +6897,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"OFFER_ROM_STATUS", "Get the pending ROM offer and the last live load result", "", "{\"type\":\"OFFER_ROM_STATUS\"}"},
 			{"OFFER_ROM_CLEAR", "Withdraw the pending ROM offer", "", "{\"type\":\"OFFER_ROM_CLEAR\"}"},
 			{"LOG", "Last lines of the Mesen log window", "lines (optional, default 50)", "{\"type\":\"LOG\",\"lines\":\"20\"}"},
-			{"LOAD_ROM_LIVE", "Load a ROM keeping the running game's .srm (optional backup state first); no path accepts the pending offer", "path (optional), label (optional), state (optional, default true)", "{\"type\":\"LOAD_ROM_LIVE\",\"path\":\"/path/to/rom.sfc\"}"},
+			{"LOAD_ROM_LIVE", "Load a ROM keeping the running game's .srm (optional backup state first); no path accepts the pending offer. ALTTP-layout saves: continues the file in play past the title", "path (optional), label (optional), state (optional, default true), resume (optional, default true)", "{\"type\":\"LOAD_ROM_LIVE\",\"path\":\"/path/to/rom.sfc\"}"},
 			{"FRAME", "Run one frame", "", "{\"type\":\"FRAME\"}"},
 			{"STEP", "Step CPU execution", "count (optional), mode (into/over/out/cycle/ppu/scanline/frame/nmi/irq/back)", "{\"type\":\"STEP\",\"count\":\"10\",\"mode\":\"over\"}"},
 			{"READ", "Read 1 byte from memory", "addr, memtype (optional)", "{\"type\":\"READ\",\"addr\":\"0x7E0022\"}"},

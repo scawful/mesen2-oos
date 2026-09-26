@@ -39,13 +39,13 @@ All four print the offer JSON:
 ```
 
 The client changes live in `tools/oos_client`, which is untracked in the main
-checkout. `docs/offer_rom_client.patch` (the offer commands) was applied there on
-2026-09-26 08:27; `docs/oos_client_fixes.patch` holds the later client fixes
-(registry `close` by pid, `save <path>`, `health` on a dead socket) against that
-state:
+checkout. Already applied there on 2026-09-26: `docs/offer_rom_client.patch`
+(offer commands) and `docs/oos_client_fixes.patch` (registry `close` by pid,
+`save <path>`, `health` on a dead socket). Pending: `docs/oos_client_resume.patch`
+(`load-rom-live --no-resume`):
 
 ```bash
-cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_fixes.patch
+cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_resume.patch
 ```
 
 ## What the player sees (GUI)
@@ -78,6 +78,20 @@ cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/o
 4. GUI only: add the ROM to recent files, reapply the config
    (`ConfigManager.Config.ApplyConfig()`: input, video, audio) and restore the
    window position, size and state captured when the load started.
+
+5. Resume (ALTTP-layout saves such as Oracle; on by default, `resume=false` /
+   `--no-resume` to skip): before the swap the core reads which save file is in
+   play from save RAM `$1FFE` (file * 2 + 2; the new ROM's boot code clears it).
+   After the swap it pulses Start through the intro/title (modules `$00`/`$14`),
+   and at the file select (`$01`/`$05`) sets the cursor `$C8` to that file and
+   presses A, using the debugger input override. It only acts on a file whose
+   `$55AA` marker is set, stops once the file loads or after 20 s, and logs
+   `[Resume] ...` (socket `LOG`). `last_load.resume_file` is the file number
+   (0 = none). This is the least fragile option: it uses the game's own title
+   and file select code and the SRAM save, never a save state from the old build
+   (unsafe across builds). It depends on the vanilla module numbers and
+   `$C8`/`$1FFE`; if Oracle changes its title flow, it gives up after 20 s and
+   leaves the title on screen.
 
 The ALTTP in-game save lives in SRAM only after the game saves (save menu,
 death). Unsaved progress in WRAM is only in the backup state, and states from
@@ -183,7 +197,7 @@ current app to `/Applications/Mesen2-Backups/<timestamp>/`:
 ~/src/hobby/mesen2-oos-offer-rom/tools/install_mesen2_oos.sh \
   --source "$HOME/src/hobby/mesen2-oos-offer-rom/bin/osx-arm64/Release/osx-arm64/publish/Mesen2 OOS.app" \
   --core "$HOME/src/hobby/mesen2-oos-offer-rom/build-cmake/lib/osx-arm64/libMesenCore.dylib"
-cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_fixes.patch
+cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_resume.patch
 ```
 
 The bundle includes the uncommitted Oracle panel rework (first commit on this

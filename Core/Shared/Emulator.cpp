@@ -334,6 +334,8 @@ void Emulator::ProcessEndOfFrame()
 	}
 
 	if(!_isRunAheadFrame) {
+		SocketServer::ProcessRomResume(this);
+
 		if(!_frameLimiter) {
 			_frameDelay = GetFrameDelay();
 			_frameLimiter.reset(new FrameLimiter(_frameDelay));

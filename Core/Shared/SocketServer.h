@@ -210,6 +210,7 @@ struct RomOfferState {
 	string lastStatePath;
 	string lastSavePath;
 	string lastBackupPath;
+	int lastResumeFile = 0;
 	uint64_t lastAtMs = 0;
 };
 
@@ -426,7 +427,11 @@ private:
 	static SocketResponse HandleOfferRomClear(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadRomLive(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleEmuLog(Emulator* emu, const SocketCommand& cmd);
-	static bool LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, string& error);
+	static bool LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, bool resume, string& error);
+	static atomic<int> _resumeFile;
+	static uint32_t _resumeStartFrame;
+	static uint32_t _resumeNextPressFrame;
+	static bool _resumeSeenTitle;
 	static void NotifyRomOfferChanged(Emulator* emu);
 
 public:
@@ -460,6 +465,7 @@ public:
 	static string GetRomOfferJson();
 	static bool AcceptRomOffer(Emulator* emu, string& error);
 	static void SnoozeRomOffer(Emulator* emu);
+	static void ProcessRomResume(Emulator* emu);
 
 	// Collision overlay accessors - called from WatchHud for rendering
 	static bool IsCollisionOverlayEnabled();
