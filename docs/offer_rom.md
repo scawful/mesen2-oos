@@ -39,10 +39,13 @@ All four print the offer JSON:
 ```
 
 The client changes live in `tools/oos_client`, which is untracked in the main
-checkout. Apply them there with:
+checkout. `docs/offer_rom_client.patch` (the offer commands) was applied there on
+2026-09-26 08:27; `docs/oos_client_fixes.patch` holds the later client fixes
+(registry `close` by pid, `save <path>`, `health` on a dead socket) against that
+state:
 
 ```bash
-cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/offer_rom_client.patch
+cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_fixes.patch
 ```
 
 ## What the player sees (GUI)
@@ -148,12 +151,24 @@ romB) plus vanilla ALTTP (USA, 1 MiB).
 - Test scripts: scratchpad `offer-rom/test_headless.sh` (16/16 pass) and
   `test_edge.sh` (5/5 pass).
 
-Not verified: the GUI banner, Later, the File menu item and the window/config
-restore. No GUI instance was launched, to avoid stealing focus from the live
-`oos-rc-play` session, and screen capture is unavailable to agents. The XAML
-compiled with compiled bindings. First GUI check after install: run
-`offer-rom` against your instance, confirm the banner, click Later, confirm
-`File > Load Offered ROM: <label>`, load it, confirm the save continues.
+GUI (2026-09-26 09:35, own instance with a renamed bundle id on yabai space 5):
+banner shown with label and notes; Load now -> `pending: false`, `ok: true`,
+new ROM running, `.srm` backup written; Later -> `snoozed: true`, banner hidden,
+`File > Load Offered ROM: <label>` listed.
+
+Real-mouse bug (fixed in `da1c8ee8`): in the first installed build Load now and
+Later did nothing for scawful. `MouseManager` refocuses the renderer every 15 ms
+while the left button is held in the active window, and Avalonia's `Button`
+drops `IsPressed` on focus loss, so `Click` never fires on release (confirmed in
+the bundled Avalonia.Controls 11.0.999 IL). The banner buttons are now not
+focusable. Agent clicks (accessibility press, background clicks into an inactive
+window) never hit that path, so they cannot prove this fix; the proof is a real
+click in the foreground window.
+
+Not verified: a real foreground click on the new build; picking `File > Load
+Offered ROM` (menu popups open on the current Space and the background tools
+could not press the item; the item calls the same `LoadNow()` and sits inside
+the menu, where the renderer does not take focus); the window/config restore.
 
 ## Install (needs scawful's approval)
 
@@ -164,7 +179,7 @@ current app to `/Applications/Mesen2-Backups/<timestamp>/`:
 ~/src/hobby/mesen2-oos-offer-rom/tools/install_mesen2_oos.sh \
   --source "$HOME/src/hobby/mesen2-oos-offer-rom/bin/osx-arm64/Release/osx-arm64/publish/Mesen2 OOS.app" \
   --core "$HOME/src/hobby/mesen2-oos-offer-rom/build-cmake/lib/osx-arm64/libMesenCore.dylib"
-cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/offer_rom_client.patch
+cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_fixes.patch
 ```
 
 The bundle includes the uncommitted Oracle panel rework (first commit on this
