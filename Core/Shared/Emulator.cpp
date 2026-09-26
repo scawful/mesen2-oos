@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <ctime>
+#include <filesystem>
 #include <assert.h>
 #include "Shared/Emulator.h"
 #include "Shared/NotificationManager.h"
@@ -522,6 +524,7 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	if(_console) {
 		//Make sure the battery is saved to disk before we load another game (or reload the same game)
 		_console->SaveBattery();
+		BackupSharedSave(romFile);
 	}
 
 	if(!forPowerCycle) {
@@ -664,6 +667,124 @@ void Emulator::InitConsole(unique_ptr<IConsole>& newConsole, ConsoleMemoryInfo o
 	_notificationManager->RegisterNotificationListener(_console.lock());
 }
 
+void Emulator::SetBatteryNameOverride(string romPath, string batteryName)
+{
+	auto lock = _batteryNameLock.AcquireSafe();
+	_batteryNameRomPath = (string)VirtualFile(romPath);
+	_batteryNameOverride = batteryName;
+	_liveLoadBackupPending = true;
+}
+
+void Emulator::SetOracleSaveName(string saveName)
+{
+	if(saveName.find_first_of("/\\:") != string::npos || saveName.find("..") != string::npos) {
+		MessageManager::Log("[Save] Ignoring invalid Oracle save name: " + saveName);
+		saveName.clear();
+	}
+	auto lock = _batteryNameLock.AcquireSafe();
+	_oracleSaveName = saveName;
+}
+
+static bool IsOracleRom(VirtualFile& romFile)
+{
+	//Oracle of Secrets keeps the vanilla ALTTP header title, but is expanded past its 1 MiB
+	string ext = romFile.GetFileExtension();
+	if((ext != ".sfc" && ext != ".smc") || romFile.IsArchive()) {
+		return false;
+	}
+
+	ifstream input(romFile.GetFilePath(), std::ios::in | std::ios::binary);
+	if(!input) {
+		return false;
+	}
+	input.seekg(0, std::ios::end);
+	int64_t size = (int64_t)input.tellg();
+	int64_t offset = (size & 0x3FF) == 0x200 ? 0x200 : 0;
+	if(size - offset <= 0x100000) {
+		return false;
+	}
+
+	char title[19] = {};
+	input.seekg(offset + 0x7FC0, std::ios::beg);
+	input.read(title, sizeof(title));
+	return input && memcmp(title, "THE LEGEND OF ZELDA", sizeof(title)) == 0;
+}
+
+string Emulator::GetBatteryName(VirtualFile& romFile, bool* sharedSave)
+{
+	string oracleSaveName;
+	{
+		auto lock = _batteryNameLock.AcquireSafe();
+		if(!_batteryNameOverride.empty() && (string)romFile == _batteryNameRomPath) {
+			if(sharedSave) {
+				*sharedSave = true;
+			}
+			return _batteryNameOverride;
+		}
+		oracleSaveName = _oracleSaveName;
+	}
+
+	if(!oracleSaveName.empty() && IsOracleRom(romFile)) {
+		if(sharedSave) {
+			*sharedSave = true;
+		}
+		return oracleSaveName;
+	}
+	return FolderUtilities::GetFilename(romFile.GetFileName(), false);
+}
+
+void Emulator::BackupSharedSave(VirtualFile& romFile)
+{
+	//Another ROM is about to read the running game's save file (live load or Oracle save name):
+	//keep a timestamped copy in case the new build changes or breaks the save.
+	//Plain reloads of the same file (power cycle) are skipped, live loads never are.
+	bool liveLoad;
+	{
+		auto lock = _batteryNameLock.AcquireSafe();
+		liveLoad = _liveLoadBackupPending;
+		_liveLoadBackupPending = false;
+	}
+	bool sharedSave = false;
+	string saveName = GetBatteryName(romFile, &sharedSave);
+	bool sameRom = (string)romFile == (string)_rom.RomFile;
+	if(!sharedSave || (sameRom && !liveLoad) || saveName != _batteryManager->GetRomName()) {
+		return;
+	}
+
+	string srmPath = FolderUtilities::CombinePath(FolderUtilities::GetSaveFolder(), saveName + ".srm");
+	std::error_code ec;
+	if(!std::filesystem::exists(std::filesystem::u8path(srmPath), ec)) {
+		return;
+	}
+
+	std::time_t now = std::time(nullptr);
+	char timestamp[32] = {};
+	std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", std::localtime(&now));
+	string backupFolder = FolderUtilities::CombinePath(FolderUtilities::GetSaveFolder(), "SrmBackups");
+	FolderUtilities::CreateFolder(backupFolder);
+	string backupPath = FolderUtilities::CombinePath(backupFolder, saveName + "_" + timestamp + ".srm");
+	std::filesystem::copy_file(std::filesystem::u8path(srmPath), std::filesystem::u8path(backupPath), std::filesystem::copy_options::overwrite_existing, ec);
+	if(ec) {
+		MessageManager::Log("[Save] Could not back up " + srmPath + ": " + ec.message());
+		return;
+	}
+
+	MessageManager::Log("[Save] Backed up " + srmPath + " to " + backupPath);
+	auto lock = _batteryNameLock.AcquireSafe();
+	_lastSaveBackupPath = backupPath;
+}
+
+string Emulator::GetCurrentBatteryName()
+{
+	return _batteryManager->GetRomName();
+}
+
+string Emulator::GetLastSaveBackupPath()
+{
+	auto lock = _batteryNameLock.AcquireSafe();
+	return _lastSaveBackupPath;
+}
+
 void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature)
 {
 	TryLoadRom<NesConsole>(romFile, result, console, useFileSignature);
@@ -690,7 +811,7 @@ void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_pt
 
 			//Change filename for batterymanager to allow loading the correct files
 			bool hasBattery = _batteryManager->HasBattery();
-			_batteryManager->Initialize(FolderUtilities::GetFilename(romFile.GetFileName(), false));
+			_batteryManager->Initialize(GetBatteryName(romFile));
 
 			console.reset(new T(this));
 			result = console->LoadRom(romFile);
@@ -698,7 +819,7 @@ void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_pt
 			if(result != LoadRomResult::Success) {
 				//Restore state if load fails
 				memcpy(_consoleMemory, consoleMemory, sizeof(_consoleMemory));
-				_batteryManager->Initialize(FolderUtilities::GetFilename(_rom.RomFile.GetFileName(), false), hasBattery);
+				_batteryManager->Initialize(GetBatteryName(_rom.RomFile), hasBattery);
 			}
 		}
 	}

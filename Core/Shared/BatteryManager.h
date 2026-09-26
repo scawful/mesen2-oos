@@ -26,6 +26,7 @@ private:
 
 public:
 	void Initialize(string romName, bool setBatteryFlag = false);
+	string GetRomName() { return _romName; }
 
 	bool HasBattery() { return _hasBattery; }
 

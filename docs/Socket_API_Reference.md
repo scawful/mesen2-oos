@@ -113,6 +113,16 @@ Step CPU execution. **count** (optional, default 1): number of steps. **mode** (
 {"type":"STEP","mode":"out"}
 ```
 
+### OFFER_ROM / OFFER_ROM_STATUS / OFFER_ROM_CLEAR / LOAD_ROM_LIVE
+Hand a new build to a running session without losing the in-game save. See `docs/offer_rom.md`.
+```json
+{"type":"OFFER_ROM","path":"/abs/path/oos168x.sfc","label":"v10","notes":"D6 door fix"}
+{"type":"OFFER_ROM_STATUS"}
+{"type":"OFFER_ROM_CLEAR"}
+{"type":"LOAD_ROM_LIVE"}
+{"type":"LOAD_ROM_LIVE","path":"/abs/path/oos168x.sfc","state":"false"}
+```
+
 ---
 
 ## Memory Commands

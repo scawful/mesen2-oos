@@ -6,6 +6,7 @@
 #include "Core/Shared/SystemActionManager.h"
 #include "Core/Shared/MessageManager.h"
 #include "Core/Shared/SaveStateManager.h"
+#include "Core/Shared/SocketServer.h"
 #include "Core/Shared/Interfaces/INotificationListener.h"
 #include "Core/Shared/KeyManager.h"
 #include "Core/Shared/ShortcutKeyHandler.h"
@@ -347,6 +348,32 @@ extern "C" {
 		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		_emu->GetGameClient()->Disconnect();
 		return _emu->LoadRom((VirtualFile)filename, patchFile ? (VirtualFile)patchFile : VirtualFile());
+	}
+
+	DllExport void __stdcall GetRomOffer(char* outBuffer, uint32_t maxLength)
+	{
+		StringUtilities::CopyToBuffer(SocketServer::GetRomOfferJson(), outBuffer, maxLength);
+	}
+
+	DllExport bool __stdcall AcceptRomOffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
+		_emu->GetGameClient()->Disconnect();
+		string error;
+		return SocketServer::AcceptRomOffer(_emu.get(), error);
+	}
+
+	DllExport void __stdcall SnoozeRomOffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		SocketServer::SnoozeRomOffer(_emu.get());
+	}
+
+	DllExport void __stdcall SetOracleSaveName(char* saveName)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->SetOracleSaveName(saveName ? saveName : "");
 	}
 
 	DllExport void __stdcall AddKnownGameFolder(char* folder) { FolderUtilities::AddKnownGameFolder(folder); }

@@ -103,6 +103,12 @@ namespace Mesen.Interop
 		[DllImport(DllPath, EntryPoint = "GetLog")] private static extern void GetLogWrapper(IntPtr outLog, Int32 maxLength);
 		public static string GetLog() { return Utf8Utilities.CallStringApi(GetLogWrapper, 100000); }
 
+		[DllImport(DllPath, EntryPoint = "GetRomOffer")] private static extern void GetRomOfferWrapper(IntPtr outBuffer, Int32 maxLength);
+		public static string GetRomOffer() { return Utf8Utilities.CallStringApi(GetRomOfferWrapper, 20000); }
+		[DllImport(DllPath)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool AcceptRomOffer();
+		[DllImport(DllPath)] public static extern void SnoozeRomOffer();
+		[DllImport(DllPath)] public static extern void SetOracleSaveName([MarshalAs(UnmanagedType.LPUTF8Str)]string saveName);
+
 		[DllImport(DllPath)] public static extern void WriteLogEntry([MarshalAs(UnmanagedType.LPUTF8Str)]string message);
 		[DllImport(DllPath)] public static extern void DisplayMessage([MarshalAs(UnmanagedType.LPUTF8Str)]string title, [MarshalAs(UnmanagedType.LPUTF8Str)]string message, [MarshalAs(UnmanagedType.LPUTF8Str)]string? param1 = null);
 

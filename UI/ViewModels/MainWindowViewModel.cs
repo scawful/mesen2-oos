@@ -37,6 +37,7 @@ namespace Mesen.ViewModels
 
 		public SoftwareRendererViewModel SoftwareRenderer { get; } = new();
 		public OracleDebugPanelViewModel OracleDebugPanel { get; } = new();
+		public RomOfferViewModel RomOffer { get; } = new();
 
 		public Configuration Config { get; }
 

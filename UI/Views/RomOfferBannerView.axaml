@@ -1,0 +1,42 @@
+<UserControl
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	mc:Ignorable="d" d:DesignWidth="760"
+	x:Class="Mesen.Views.RomOfferBannerView"
+	x:DataType="vm:RomOfferViewModel"
+	IsVisible="{Binding IsVisible}"
+>
+	<Design.DataContext>
+		<vm:RomOfferViewModel />
+	</Design.DataContext>
+
+	<UserControl.Styles>
+		<Style Selector="Button.offer">
+			<Setter Property="Padding" Value="10,1" />
+			<Setter Property="MinHeight" Value="0" />
+			<Setter Property="Margin" Value="4,0,0,0" />
+			<Setter Property="VerticalAlignment" Value="Center" />
+		</Style>
+	</UserControl.Styles>
+
+	<Border
+		Background="{DynamicResource ThemeAccentBrush3}"
+		BorderBrush="{DynamicResource ThemeAccentBrush}"
+		BorderThickness="0,0,0,1"
+		Padding="8,3"
+	>
+		<Grid ColumnDefinitions="*,Auto">
+			<StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" ClipToBounds="True" ToolTip.Tip="{Binding Details}">
+				<TextBlock Text="{Binding Title}" FontWeight="Bold" VerticalAlignment="Center" />
+				<TextBlock Text="{Binding Notes}" TextTrimming="CharacterEllipsis" MaxWidth="420" VerticalAlignment="Center" />
+			</StackPanel>
+			<StackPanel Grid.Column="1" Orientation="Horizontal">
+				<Button Classes="offer" Content="Load now" Click="OnLoadNowClick" IsEnabled="{Binding !IsLoading}" ToolTip.Tip="Save the game to disk, back up the .srm, then load the new ROM with the same save file" />
+				<Button Classes="offer" Content="Later" Click="OnLaterClick" IsEnabled="{Binding !IsLoading}" ToolTip.Tip="Hide this banner. The offer stays under File > Load Offered ROM" />
+			</StackPanel>
+		</Grid>
+	</Border>
+</UserControl>

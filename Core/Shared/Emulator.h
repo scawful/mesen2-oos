@@ -131,6 +131,15 @@ private:
 	SimpleLock _romHashLock;
 	string _romSha1;
 
+	// Save file name rules: a live ROM swap keeps the previous save name for its ROM path,
+	// and Oracle ROMs can share one save name (Oracle.PersistentSaveName, off when empty).
+	SimpleLock _batteryNameLock;
+	string _batteryNameRomPath;
+	string _batteryNameOverride;
+	string _oracleSaveName;
+	string _lastSaveBackupPath;
+	bool _liveLoadBackupPending = false;
+
 	void WaitForLock();
 	void WaitForPauseEnd();
 
@@ -144,6 +153,8 @@ private:
 
 	double GetFrameDelay();
 
+	string GetBatteryName(VirtualFile& romFile, bool* sharedSave = nullptr);
+	void BackupSharedSave(VirtualFile& romFile);
 	void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
 	template<typename T> void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
 
@@ -176,6 +187,10 @@ public:
 	bool IsPaused();
 
 	bool LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
+	void SetBatteryNameOverride(string romPath, string batteryName);
+	void SetOracleSaveName(string saveName);
+	string GetCurrentBatteryName();
+	string GetLastSaveBackupPath();
 	RomInfo& GetRomInfo() { return _rom; }
 	string GetHash(HashType type);
 	uint32_t GetCrc32();

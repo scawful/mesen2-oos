@@ -39,6 +39,8 @@ namespace Mesen.Windows
 		private MainMenuView _mainMenu;
 		private Control _oracleDebugPanel;
 		private Control _oracleToolsPane;
+		private Control _romOfferBanner;
+		private (PixelPoint Position, Size ClientSize, WindowState State)? _liveLoadWindow;
 		private CommandLineHelper? _cmdLine;
 
 		private bool _testModeEnabled;
@@ -123,7 +125,11 @@ namespace Mesen.Windows
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
 			_oracleDebugPanel = this.GetControl<Control>("OracleDebugPanel");
 			_oracleToolsPane = this.GetControl<Control>("OracleToolsPane");
-			_model.OracleDebugPanel.VisibilityModeChanged += OracleDebugPanel_VisibilityModeChanged;
+			_romOfferBanner = this.GetControl<Control>("RomOfferBanner");
+			_model.OracleDebugPanel.VisibilityModeChanged += Chrome_VisibilityChanged;
+			_model.RomOffer.VisibilityChanged += Chrome_VisibilityChanged;
+			_model.RomOffer.LiveLoadStarted += RomOffer_LiveLoadStarted;
+			_model.RomOffer.LiveLoadFinished += RomOffer_LiveLoadFinished;
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
@@ -519,6 +525,11 @@ namespace Mesen.Windows
 					});
 					break;
 
+				case ConsoleNotificationType.RomOfferChanged:
+					string romOffer = EmuApi.GetRomOffer();
+					PostUnlessShuttingDown(() => _model.RomOffer.Update(romOffer));
+					break;
+
 				case ConsoleNotificationType.RefreshSoftwareRenderer:
 					if(e.Parameter == IntPtr.Zero) {
 						break;
@@ -607,10 +618,11 @@ namespace Mesen.Windows
 				double menuHeight = ConfigManager.Config.Preferences.AutoHideMenu ? 0 : _mainMenu.Bounds.Height;
 				double oraclePanelHeight = _oracleDebugPanel.IsVisible ? _oracleDebugPanel.Bounds.Height : 0;
 				double oracleToolsWidth = _oracleToolsPane.IsVisible ? _oracleToolsPane.Bounds.Width : 0;
+				double romOfferHeight = _romOfferBanner.IsVisible ? _romOfferBanner.Bounds.Height : 0;
 
 				double width = Math.Max(MinWidth, Math.Round(screenSize.Height * aspectRatio) * scale);
 				double height = Math.Max(MinHeight, screenSize.Height * scale);
-				ClientSize = new Size(width + oracleToolsWidth, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight);
+				ClientSize = new Size(width + oracleToolsWidth, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight + romOfferHeight);
 				ResizeRenderer();
 			} else if(WindowState == WindowState.Maximized || WindowState == WindowState.FullScreen) {
 				_rendererSize = new Size(Math.Floor(screenSize.Width * scale), Math.Floor(screenSize.Height * scale));
@@ -618,7 +630,36 @@ namespace Mesen.Windows
 			}
 		}
 
-		private void OracleDebugPanel_VisibilityModeChanged(object? sender, EventArgs e)
+		private void RomOffer_LiveLoadStarted(object? sender, EventArgs e)
+		{
+			_liveLoadWindow = (Position, ClientSize, WindowState);
+		}
+
+		private void RomOffer_LiveLoadFinished(object? sender, RomOfferLoadResult result)
+		{
+			if(!result.Ok) {
+				_liveLoadWindow = null;
+				return;
+			}
+
+			ConfigManager.Config.RecentFiles.AddRecentFile(result.Path, null);
+			ConfigManager.Config.Save();
+
+			//Put the player's window and input settings back the way they were before the swap
+			ConfigManager.Config.ApplyConfig();
+			if(_liveLoadWindow is { } saved) {
+				_liveLoadWindow = null;
+				if(WindowState != saved.State) {
+					WindowState = saved.State;
+				}
+				if(saved.State == WindowState.Normal) {
+					Position = saved.Position;
+					ClientSize = saved.ClientSize;
+				}
+			}
+		}
+
+		private void Chrome_VisibilityChanged(object? sender, EventArgs e)
 		{
 			if(WindowState != WindowState.Normal) {
 				ResizeRenderer();

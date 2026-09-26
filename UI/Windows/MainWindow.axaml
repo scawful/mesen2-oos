@@ -39,6 +39,7 @@
 		
 		<ContentControl Name="AudioPlayer" DockPanel.Dock="Bottom" Content="{Binding AudioPlayer}" />
 
+		<v:RomOfferBannerView Name="RomOfferBanner" DockPanel.Dock="Top" DataContext="{Binding RomOffer}" />
 		<v:OracleDebugPanelView Name="OracleDebugPanel" DockPanel.Dock="Top" DataContext="{Binding OracleDebugPanel}" />
 		<v:OracleToolsPaneView Name="OracleToolsPane" DockPanel.Dock="Right" DataContext="{Binding OracleDebugPanel}" />
 

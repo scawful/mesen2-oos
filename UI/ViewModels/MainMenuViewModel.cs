@@ -117,6 +117,12 @@ namespace Mesen.ViewModels
 					ActionType = ActionType.LoadLastSession,
 					IsEnabled = () => File.Exists(SaveStateSlotHelper.GetRecentGamePath())
 				},
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					DynamicText = () => "Load Offered ROM: " + MainWindow.RomOffer.Label,
+					IsVisible = () => MainWindow.RomOffer.IsPending,
+					OnClick = () => MainWindow.RomOffer.LoadNow()
+				},
 
 				new ContextMenuSeparator(),
 				new MainMenuAction() {

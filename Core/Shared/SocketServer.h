@@ -191,6 +191,28 @@ struct SaveLoadResult {
 	uint64_t timestampMs = 0;
 };
 
+// "New ROM available" offer shown to the player, plus the result of the last live load.
+struct RomOfferState {
+	bool pending = false;
+	bool snoozed = false;
+	bool loading = false;
+	uint32_t id = 0;
+	string path;
+	string label;
+	string notes;
+	uint64_t offeredAtMs = 0;
+
+	uint32_t loadCount = 0;
+	bool lastOk = false;
+	string lastPath;
+	string lastLabel;
+	string lastError;
+	string lastStatePath;
+	string lastSavePath;
+	string lastBackupPath;
+	uint64_t lastAtMs = 0;
+};
+
 class SocketServer {
 private:
 	Emulator* _emu;
@@ -395,6 +417,17 @@ private:
 	static SocketResponse HandleStateDiff(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleWatchTrigger(Emulator* emu, const SocketCommand& cmd);
 
+	// ROM offer / live load (hand a new build to a running session)
+	static RomOfferState _romOffer;
+	static SimpleLock _romOfferLock;
+	static atomic<bool> _romLiveLoadBusy;
+	static SocketResponse HandleOfferRom(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleOfferRomStatus(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleOfferRomClear(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleLoadRomLive(Emulator* emu, const SocketCommand& cmd);
+	static bool LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, string& error);
+	static void NotifyRomOfferChanged(Emulator* emu);
+
 public:
 	SocketServer(Emulator* emu);
 	~SocketServer();
@@ -421,6 +454,11 @@ public:
 	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled; }
 	static bool HasMemoryWatch(uint32_t addr);
 	static bool HasLogpoints() { return !_logpoints.empty(); }
+
+	// ROM offer accessors - called from the UI banner through the interop layer
+	static string GetRomOfferJson();
+	static bool AcceptRomOffer(Emulator* emu, string& error);
+	static void SnoozeRomOffer(Emulator* emu);
 
 	// Collision overlay accessors - called from WatchHud for rendering
 	static bool IsCollisionOverlayEnabled();

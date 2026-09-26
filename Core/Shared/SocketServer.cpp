@@ -5,6 +5,7 @@
 #include "SaveStateManager.h"
 #include "EmuSettings.h"
 #include "MessageManager.h"
+#include "NotificationManager.h"
 #include "RewindManager.h"
 #include "CheatManager.h"
 #include "RomInfo.h"
@@ -118,6 +119,9 @@ SimpleLock SocketServer::_saveLoadLock;
 SimpleLock SocketServer::_saveLoadStatusLock;
 SaveLoadResult SocketServer::_lastSaveResult;
 SaveLoadResult SocketServer::_lastLoadResult;
+RomOfferState SocketServer::_romOffer;
+SimpleLock SocketServer::_romOfferLock;
+atomic<bool> SocketServer::_romLiveLoadBusy(false);
 
 // Static member definitions for validation rules
 // Static member definitions for validation rules
@@ -336,6 +340,7 @@ void SocketServer::InitializeValidationRules() {
 	CommandValidation loadRomRule = defaultRule;
 	loadRomRule.requiredParams.insert("path");
 	SocketServer::_validationRules["LOADROM"] = loadRomRule;
+	SocketServer::_validationRules["OFFER_ROM"] = loadRomRule;
 	SocketServer::_validationRules["CPU"] = defaultRule;
 	SocketServer::_validationRules["GAMESTATE"] = defaultRule;
 	SocketServer::_validationRules["SPRITES"] = defaultRule;
@@ -353,6 +358,10 @@ void SocketServer::RegisterHandlers() {
 	_handlers["RESUME"] = HandleResume;
 	_handlers["RESET"] = HandleReset;
 	_handlers["LOADROM"] = HandleLoadRom;
+	_handlers["OFFER_ROM"] = HandleOfferRom;
+	_handlers["OFFER_ROM_STATUS"] = HandleOfferRomStatus;
+	_handlers["OFFER_ROM_CLEAR"] = HandleOfferRomClear;
+	_handlers["LOAD_ROM_LIVE"] = HandleLoadRomLive;
 	_handlers["READ"] = HandleRead;
 	_handlers["READ16"] = HandleRead16;
 	_handlers["WRITE"] = HandleWrite;
@@ -1201,6 +1210,230 @@ SocketResponse SocketServer::HandleLoadRom(Emulator* emu, const SocketCommand& c
 		resp.data = "\"OK\"";
 	} else {
 		resp.error = "Failed to load ROM";
+		resp.errorCode = SocketErrorCode::InternalError;
+	}
+	return resp;
+}
+
+void SocketServer::NotifyRomOfferChanged(Emulator* emu) {
+	if(emu && emu->GetNotificationManager()) {
+		emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::RomOfferChanged);
+	}
+}
+
+string SocketServer::GetRomOfferJson() {
+	auto lock = _romOfferLock.AcquireSafe();
+	const RomOfferState& o = _romOffer;
+	stringstream ss;
+	ss << "{\"pending\":" << (o.pending ? "true" : "false");
+	ss << ",\"id\":" << o.id;
+	ss << ",\"path\":\"" << JsonEscape(o.pending ? o.path : "") << "\"";
+	ss << ",\"label\":\"" << JsonEscape(o.pending ? o.label : "") << "\"";
+	ss << ",\"notes\":\"" << JsonEscape(o.pending ? o.notes : "") << "\"";
+	ss << ",\"offered_at_ms\":" << (o.pending ? o.offeredAtMs : 0);
+	ss << ",\"snoozed\":" << (o.snoozed ? "true" : "false");
+	ss << ",\"loading\":" << (o.loading ? "true" : "false");
+	ss << ",\"last_load\":";
+	if(o.loadCount == 0) {
+		ss << "null";
+	} else {
+		ss << "{\"count\":" << o.loadCount;
+		ss << ",\"ok\":" << (o.lastOk ? "true" : "false");
+		ss << ",\"path\":\"" << JsonEscape(o.lastPath) << "\"";
+		ss << ",\"label\":\"" << JsonEscape(o.lastLabel) << "\"";
+		ss << ",\"error\":\"" << JsonEscape(o.lastError) << "\"";
+		ss << ",\"state\":\"" << JsonEscape(o.lastStatePath) << "\"";
+		ss << ",\"save\":\"" << JsonEscape(o.lastSavePath) << "\"";
+		ss << ",\"backup\":\"" << JsonEscape(o.lastBackupPath) << "\"";
+		ss << ",\"at_ms\":" << o.lastAtMs << "}";
+	}
+	ss << "}";
+	return ss.str();
+}
+
+bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, string& error) {
+	bool expected = false;
+	if(!_romLiveLoadBusy.compare_exchange_strong(expected, true)) {
+		error = "A live ROM load is already in progress";
+		return false;
+	}
+
+	VirtualFile romFile(romPath);
+	if(!romFile.IsValid()) {
+		error = "Invalid ROM path: " + romPath;
+		_romLiveLoadBusy = false;
+		return false;
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.loading = true;
+	}
+	NotifyRomOfferChanged(emu);
+
+	string statePath;
+	string savePath;
+	if(emu->IsRunning()) {
+		//Keep the running game's save file name so the new ROM reads the same .srm
+		string batteryName = emu->GetCurrentBatteryName();
+		if(saveState) {
+			statePath = FolderUtilities::CombinePath(FolderUtilities::GetSaveStateFolder(), batteryName + "_before_live_load.mss");
+			if(!emu->GetSaveStateManager()->SaveState(statePath, false)) {
+				statePath.clear();
+			}
+		}
+		emu->SetBatteryNameOverride(romPath, batteryName);
+		savePath = FolderUtilities::CombinePath(FolderUtilities::GetSaveFolder(), batteryName + ".srm");
+	}
+
+	//LoadRom writes the running game's SRAM to disk (and backs it up) before the new ROM reads it
+	string previousBackup = emu->GetLastSaveBackupPath();
+	bool ok = emu->LoadRom(romFile, VirtualFile());
+	string backupPath = emu->GetLastSaveBackupPath();
+	if(backupPath == previousBackup) {
+		backupPath.clear();
+	}
+	if(!ok) {
+		error = "Failed to load ROM";
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		RomOfferState& o = _romOffer;
+		o.loading = false;
+		o.loadCount++;
+		o.lastOk = ok;
+		o.lastPath = romPath;
+		o.lastLabel = label;
+		o.lastError = ok ? "" : error;
+		o.lastStatePath = statePath;
+		o.lastSavePath = savePath;
+		o.lastBackupPath = backupPath;
+		o.lastAtMs = NowMs();
+		if(ok && o.pending && o.path == romPath) {
+			o.pending = false;
+			o.snoozed = false;
+		}
+	}
+	NotifyRomOfferChanged(emu);
+	_romLiveLoadBusy = false;
+	return ok;
+}
+
+bool SocketServer::AcceptRomOffer(Emulator* emu, string& error) {
+	string path;
+	string label;
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		if(!_romOffer.pending) {
+			error = "No ROM offer pending";
+			return false;
+		}
+		path = _romOffer.path;
+		label = _romOffer.label;
+	}
+	return LoadRomLive(emu, path, label, true, error);
+}
+
+void SocketServer::SnoozeRomOffer(Emulator* emu) {
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		if(!_romOffer.pending) {
+			return;
+		}
+		_romOffer.snoozed = true;
+	}
+	NotifyRomOfferChanged(emu);
+}
+
+SocketResponse SocketServer::HandleOfferRom(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	string romPath = cmd.GetParam("path");
+	if(!VirtualFile(romPath).IsValid()) {
+		resp.success = false;
+		resp.error = "Invalid ROM path: " + romPath;
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+
+	string label = cmd.GetParam("label");
+	if(label.empty()) {
+		label = FolderUtilities::GetFilename(romPath, true);
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.pending = true;
+		_romOffer.snoozed = false;
+		_romOffer.id++;
+		_romOffer.path = romPath;
+		_romOffer.label = label;
+		_romOffer.notes = cmd.GetParam("notes");
+		_romOffer.offeredAtMs = NowMs();
+	}
+	NotifyRomOfferChanged(emu);
+
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOfferRomStatus(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOfferRomClear(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.pending = false;
+		_romOffer.snoozed = false;
+	}
+	NotifyRomOfferChanged(emu);
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleLoadRomLive(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	if(!emu) {
+		resp.success = false;
+		resp.error = "Emulator not available";
+		return resp;
+	}
+
+	bool saveState = cmd.HasParam("state") ? ParseBoolValue(cmd.GetParam("state")) : true;
+	string romPath = cmd.GetParam("path");
+	string label = cmd.GetParam("label");
+	string error;
+	bool ok;
+	if(romPath.empty()) {
+		//No path: accept the pending offer, same as the UI's "Load now" button
+		{
+			auto lock = _romOfferLock.AcquireSafe();
+			if(!_romOffer.pending) {
+				resp.success = false;
+				resp.error = "No path given and no ROM offer pending";
+				resp.errorCode = SocketErrorCode::MissingParameter;
+				return resp;
+			}
+			romPath = _romOffer.path;
+			label = _romOffer.label;
+		}
+		ok = LoadRomLive(emu, romPath, label, saveState, error);
+	} else {
+		ok = LoadRomLive(emu, romPath, label.empty() ? FolderUtilities::GetFilename(romPath, true) : label, saveState, error);
+	}
+
+	resp.success = ok;
+	if(ok) {
+		resp.data = GetRomOfferJson();
+	} else {
+		resp.error = error;
 		resp.errorCode = SocketErrorCode::InternalError;
 	}
 	return resp;
@@ -6510,6 +6743,10 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"RESUME", "Resume emulation", "", "{\"type\":\"RESUME\"}"},
 			{"RESET", "Reset the emulator", "", "{\"type\":\"RESET\"}"},
 			{"LOADROM", "Load ROM from path", "path, patch (optional), stop (optional), powercycle (optional)", "{\"type\":\"LOADROM\",\"path\":\"/path/to/rom.sfc\"}"},
+			{"OFFER_ROM", "Offer a new ROM to the player (UI banner: Load now / Later); replaces any pending offer", "path, label (optional), notes (optional)", "{\"type\":\"OFFER_ROM\",\"path\":\"/path/to/rom.sfc\",\"label\":\"v10\"}"},
+			{"OFFER_ROM_STATUS", "Get the pending ROM offer and the last live load result", "", "{\"type\":\"OFFER_ROM_STATUS\"}"},
+			{"OFFER_ROM_CLEAR", "Withdraw the pending ROM offer", "", "{\"type\":\"OFFER_ROM_CLEAR\"}"},
+			{"LOAD_ROM_LIVE", "Load a ROM keeping the running game's .srm (optional backup state first); no path accepts the pending offer", "path (optional), label (optional), state (optional, default true)", "{\"type\":\"LOAD_ROM_LIVE\",\"path\":\"/path/to/rom.sfc\"}"},
 			{"FRAME", "Run one frame", "", "{\"type\":\"FRAME\"}"},
 			{"STEP", "Step CPU execution", "count (optional), mode (into/over/out/cycle/ppu/scanline/frame/nmi/irq/back)", "{\"type\":\"STEP\",\"count\":\"10\",\"mode\":\"over\"}"},
 			{"READ", "Read 1 byte from memory", "addr, memtype (optional)", "{\"type\":\"READ\",\"addr\":\"0x7E0022\"}"},
@@ -6582,6 +6819,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 	// List all commands
 	static const vector<string> commands = {
 		"PING", "STATE", "HEALTH", "PAUSE", "RESUME", "RESET", "FRAME", "STEP",
+		"OFFER_ROM", "OFFER_ROM_STATUS", "OFFER_ROM_CLEAR", "LOAD_ROM_LIVE",
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",
