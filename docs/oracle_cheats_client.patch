@@ -1,0 +1,43 @@
+diff -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
+--- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 10:29:33
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 10:29:33
+@@ -841,6 +841,10 @@
+     fly_parser.add_argument("--no-rom", action="store_true", help="Skip ROM debug warp attempt and use fallback directly")
+     fly_parser.add_argument("--settle", type=int, default=8, help="Fallback settle frames (default: 8)")
+ 
++    # Oracle cheats: checkpoint, warp-entrance, warp-area (mesen2_client_lib/oracle_cheats.py)
++    from . import oracle_cheats
++    oracle_cheats.add_parsers(subparsers)
++
+     # Navigation command
+     nav_parser = subparsers.add_parser("navigate", help="Navigate Link autonomously")
+     nav_group = nav_parser.add_mutually_exclusive_group(required=True)
+@@ -1438,6 +1442,9 @@
+     client = OracleDebugClient()
+     if args.vanilla:
+         client.load_usdasm_labels()
++
++    if args.command in oracle_cheats.COMMANDS:
++        sys.exit(oracle_cheats.run(args, client))
+ 
+     if args.command == "debug-status":
+         info = client.health_check()
+diff -ruN a/tools/oos_client/mesen2_client_lib/constants.py b/tools/oos_client/mesen2_client_lib/constants.py
+--- a/tools/oos_client/mesen2_client_lib/constants.py	2026-09-26 10:29:33
++++ b/tools/oos_client/mesen2_client_lib/constants.py	2026-09-26 10:29:33
+@@ -356,12 +356,13 @@
+     "bookflag": (OracleRAM.OOSPROG2, "Book of Secrets", 0x20),  # bit 5
+     # Crystals
+     "crystals": (OracleRAM.CRYSTALS, "Crystals", None),
+-    "d1": (OracleRAM.CRYSTALS, "D1 Mushroom Grotto", 0x01),
++    # D1 = $02, D6 = $01 (ROM dungeon IDs $0C/$0E; oracle-of-secrets Core/sram.asm, fixed 2026-09-26).
++    "d1": (OracleRAM.CRYSTALS, "D1 Mushroom Grotto", 0x02),
+     "d2": (OracleRAM.CRYSTALS, "D2 Tail Palace", 0x10),
+     "d3": (OracleRAM.CRYSTALS, "D3 Kalyxo Castle", 0x40),
+     "d4": (OracleRAM.CRYSTALS, "D4 Zora Temple", 0x20),
+     "d5": (OracleRAM.CRYSTALS, "D5 Glacia Estate", 0x04),
+-    "d6": (OracleRAM.CRYSTALS, "D6 Goron Mines", 0x02),
++    "d6": (OracleRAM.CRYSTALS, "D6 Goron Mines", 0x01),
+     "d7": (OracleRAM.CRYSTALS, "D7 Dragon Ship", 0x08),
+     # Pendants
+     "pendants": (OracleRAM.PENDANTS, "Pendants", None),
