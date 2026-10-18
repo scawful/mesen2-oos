@@ -97,13 +97,26 @@ class OracleInventoryContract(unittest.TestCase):
 
     def test_split_rods_goldstar_and_saved_song_are_covered(self):
         for name, value in [("CustomRods", 2), ("PortalRodOwned", 1),
-                            ("GoldstarOwned", 1), ("SavedOcarinaSong", 4)]:
+                            ("GoldstarOwned", 1), ("SavedOcarinaSong", 1)]:
             with self.subTest(name=name):
                 self.assertEqual(self.grants.get(self.address(name)), value)
         migration = block(self.asm("Items/goldstar.asm"), "GoldstarInventory_Migrate:")
         marker = int(re.search(r"GoldstarInventoryVersion : CMP\.b #\$([0-9A-F]+)", migration).group(1), 16)
         self.assertEqual(self.grants.get(self.address("GoldstarInventoryVersion")), marker)
         self.assertEqual(self.grants[self.address("Hookshot")], 1)
+
+    def test_six_songs_and_all_new_item_ownership_and_supply(self):
+        for name in ("ByrnaOwned", "BombchuOwned", "SwitchHookOwned", "GaroMaskOwned"):
+            with self.subTest(name=name):
+                self.assertEqual(self.grants.get(self.address(name)), 1)
+        cap = int(self.symbols["!BOMBCHU_AMMO_MAX"].strip())
+        self.assertEqual(self.grants.get(self.address("BombchuAmmo")), cap)
+        self.assertEqual(self.grants.get(self.address("Flute")), 7)
+        choices = block(self.bridge, "ItemChoiceDefs =")
+        self.assertIn('(5, "Secrets"), (6, "Stone")', choices)
+        self.assertIn('(7, "All Six Songs")', choices)
+        cheats = (Path(__file__).parent / "UI/Utilities/OracleCheats.cs").read_text()
+        self.assertIn('(6, "+ Secrets"), (7, "+ Stone")', cheats)
 
     def test_all_ring_map_and_scroll_ownership_bits_are_granted(self):
         ring_table = self.asm("Menu/menu_page3.asm").split("Menu_Page3_RingBits:\n", 1)[1].split("\n\n", 1)[0]

@@ -215,8 +215,8 @@ namespace Mesen.Utilities
 			new() { Group = "Inventory Upgrades", Key = "boomerang", Label = "Boomerang", Address = 0x7EF341, Choices = ChoiceList((0, "None"), (1, "Blue"), (2, "Red")) },
 			new() { Group = "Inventory Upgrades", Key = "hookshot", Label = "Hookshot", Address = 0x7EF342, Choices = ChoiceList((0, "None"), (1, "Hookshot"), (2, "Goldstar")) },
 			new() { Group = "Inventory Upgrades", Key = "mirror", Label = "Mirror", Address = 0x7EF353, Choices = ChoiceList((0, "None"), (1, "Letter"), (2, "Mirror")) },
-			new() { Group = "Inventory Upgrades", Key = "flute", Label = "Ocarina Songs", Address = 0x7EF34C, Choices = ChoiceList((0, "None"), (1, "Ocarina"), (2, "Healing"), (3, "Healing + Storms"), (4, "Healing + Storms + Soaring"), (5, "All Songs")) },
-			new() { Group = "Inventory Upgrades", Key = "ocarina_song", Label = "Selected Song", Address = 0x7E030F, Choices = ChoiceList((0, "None"), (1, "Healing"), (2, "Storms"), (3, "Soaring"), (4, "Time")) }
+			new() { Group = "Inventory Upgrades", Key = "flute", Label = "Ocarina Songs", Address = 0x7EF34C, Choices = ChoiceList((0, "None"), (1, "Ocarina"), (2, "Healing"), (3, "Healing + Storms"), (4, "Healing + Storms + Soaring"), (5, "+ Time"), (6, "+ Secrets"), (7, "All Six Songs")) },
+			new() { Group = "Inventory Upgrades", Key = "ocarina_song", Label = "Selected Song", Address = 0x7E030F, Choices = ChoiceList((0, "None"), (1, "Healing"), (2, "Storms"), (3, "Soaring"), (4, "Time"), (5, "Secrets"), (6, "Stone")) }
 		};
 
 		private static readonly List<FlagBitDef> FlagToggleDefs = new() {
@@ -264,6 +264,8 @@ namespace Mesen.Utilities
 			["bottle1"] = 0x7EF35C, ["bottle2"] = 0x7EF35D, ["bottle3"] = 0x7EF35E, ["bottle4"] = 0x7EF35F,
 			["customrods"] = 0x7EF351, ["portalrod"] = 0x7EF3A6, ["goldstar"] = 0x7EF3A9,
 			["goldstar_inventory_version"] = 0x7EF3AA, ["saved_ocarina_song"] = 0x7EF3AB, ["rings"] = 0x7EF3A2,
+			["byrna"] = 0x7EF3AC, ["bombchu"] = 0x7EF3AD, ["switchhook"] = 0x7EF3AE, ["garomask"] = 0x7EF3AF,
+			["bombchu_ammo"] = 0x7EF3B0,
 			["bananas"] = 0x7EF38B, ["pineapples"] = 0x7EF38D, ["rockmeat"] = 0x7EF38F,
 			["seashells"] = 0x7EF391, ["honeycombs"] = 0x7EF393, ["dekusticks"] = 0x7EF395,
 			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398
@@ -277,18 +279,19 @@ namespace Mesen.Utilities
 			new() {
 				Id = "all_items",
 				Label = "All Items",
-				Description = "Tools, masks, rings, maps, scrolls and Oracle collectibles, including at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
+				Description = "Tools, masks, six songs, rings, maps, scrolls and Oracle collectibles, including 20 Bombchus and at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
 				Items = new Dictionary<string, int> {
 					["bow"] = 4, ["boomerang"] = 2, ["hookshot"] = 1, ["bombs"] = 50, ["powder"] = 2, ["firerod"] = 1,
-					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 5, ["ocarina_song"] = 4, ["feather"] = 1,
+					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 7, ["ocarina_song"] = 1, ["feather"] = 1,
 					["book"] = 1, ["somaria"] = 1, ["mirror"] = 2, ["zoramask"] = 1, ["dekumask"] = 1, ["bunnymask"] = 1,
 					["stonemask"] = 1, ["wolfmask"] = 1, ["sword"] = 4, ["shield"] = 3, ["armor"] = 2, ["gloves"] = 2,
 					["boots"] = 1, ["flippers"] = 1, ["moonpearl"] = 1, ["health"] = 160, ["maxhealth"] = 160, ["magic"] = 128,
 					["rupees"] = 9999, ["arrows"] = 70, ["keys"] = 9,
 					["bottle1"] = 3, ["bottle2"] = 4, ["bottle3"] = 5, ["bottle4"] = 6,
 					["customrods"] = 2, ["portalrod"] = 1, ["goldstar"] = 1, ["goldstar_inventory_version"] = 0xA5,
-					["saved_ocarina_song"] = 4, ["rings"] = 0x3F, ["tinglemaps"] = 0x7F, ["dungeonscrolls"] = 0x7F,
-					// Magic Bag uses the 00..59 TimeLabels table. Five Rock Meat meets
+					["saved_ocarina_song"] = 1, ["rings"] = 0x3F, ["tinglemaps"] = 0x7F, ["dungeonscrolls"] = 0x7F,
+					["byrna"] = 1, ["bombchu"] = 1, ["switchhook"] = 1, ["garomask"] = 1, ["bombchu_ammo"] = 20,
+					// Five Rock Meat meets
 					// the Goron's normal dialogue gate; do not set its world event.
 					["bananas"] = 10, ["pineapples"] = 10, ["rockmeat"] = 5,
 					["seashells"] = 10, ["honeycombs"] = 10, ["dekusticks"] = 10
@@ -544,6 +547,10 @@ namespace Mesen.Utilities
 						continue;
 					}
 					switch(address) {
+						case 0x7E030F: // Current song: keep a valid choice, then saved choice, then Healing.
+						case 0x7EF3AB: // Match the ROM selection restored after a save/reload.
+							value = ResolveOcarinaSongSelection();
+							break;
 						case 0x7EF3A2: // Appraised rings
 						case 0x7EF396: // Purchased maps
 						case 0x7EF398: // Collected dungeon scrolls
@@ -562,6 +569,16 @@ namespace Mesen.Utilities
 				changed++;
 			}
 			return changed;
+		}
+
+		private static int ResolveOcarinaSongSelection()
+		{
+			int current = ReadByte(0x7E030F);
+			if(current >= 1 && current <= 6) {
+				return current;
+			}
+			int saved = ReadByte(0x7EF3AB);
+			return saved >= 1 && saved <= 6 ? saved : 1;
 		}
 
 		internal static int ApplyFlagValues(IReadOnlyList<OraclePanelValueUpdate> updates)

@@ -42,7 +42,7 @@ namespace Mesen.Utilities
 			new() { Label = "Boomerang", Address = 0x7EF341, Choices = C((0, "None"), (1, "Blue"), (2, "Red")) },
 			new() { Label = "Hookshot", Address = 0x7EF342, Choices = C((0, "None"), (1, "Hookshot"), (2, "Goldstar")) },
 			new() { Label = "Powder", Address = 0x7EF344, Choices = C((0, "None"), (1, "Mushroom"), (2, "Magic Powder")) },
-			new() { Label = "Ocarina", Address = 0x7EF34C, Choices = C((0, "None"), (1, "No songs"), (2, "Healing"), (3, "+ Storms"), (4, "+ Soaring"), (5, "+ Time")) },
+			new() { Label = "Ocarina", Address = 0x7EF34C, Choices = C((0, "None"), (1, "No songs"), (2, "Healing"), (3, "+ Storms"), (4, "+ Soaring"), (5, "+ Time"), (6, "+ Secrets"), (7, "+ Stone")) },
 			new() { Label = "Mirror", Address = 0x7EF353, Choices = C((0, "None"), (1, "Letter"), (2, "Mirror")) },
 			new() { Label = "Rod", Address = 0x7EF351, Choices = C((0, "None"), (1, "Fishing Rod"), (2, "Portal Rod")) },
 			new() { Label = "Bottle 1", Address = 0x7EF35C, Choices = Bottle() },
