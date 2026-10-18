@@ -43,6 +43,8 @@ CONTINUE_FLAG = 0x7E010A
 NEXT_MODULE = 0x7E010C
 RESPAWN_FLAG = 0x7E04AA
 FOLLOWER = 0x7EF3CC
+SAVED_WORLD = 0x7EF3CA
+WORLD_FLAG = 0x7E0FFF
 SAVE_START = 0x7EF000
 SAVE_SIZE = 0x500
 SRAM_ACTIVE_SLOT = 0x1FFE
@@ -294,6 +296,48 @@ class OracleCheats:
         abyss = entrance.get("area") is not None and hexint(entrance["area"]) & 0x40
         return find_area(self.warps, "0x40" if abyss else "0x33")
 
+    @staticmethod
+    def _uses_cached_exit(room: int) -> bool:
+        return 0x100 <= room < 0x180 and room != 0x104
+
+    def _exit_area(self, room: int) -> int | None:
+        # Read one bus block, not 79 socket requests. Native scans the table backwards.
+        data = bytes(self.b.read_block(0x02DD8A, 0x4F * 3))
+        if len(data) != 0x4F * 3:
+            raise CheatsError("Could not read this ROM's exit table")
+        for i in range(0x4E, -1, -1):
+            if int.from_bytes(data[i * 2:i * 2 + 2], "little") == room:
+                return data[0x4F * 2 + i]
+        return None
+
+    def _entrance_destination(self, entrance: dict) -> tuple[int, int]:
+        eid = hexint(entrance["id"])
+        if not 0 <= eid < 0x85:
+            raise CheatsError("Entrance must be between $00 and $84")
+        room = self.r16(0x02C813 + eid * 2)
+        area = None if self._uses_cached_exit(room) else self._exit_area(room)
+        if area is None:
+            data = bytes(self.b.read_block(0x1BB96F, 0x81 * 5))
+            if len(data) != 0x81 * 5:
+                raise CheatsError("Could not read this ROM's entrance table")
+            areas = {int.from_bytes(data[i * 2:i * 2 + 2], "little")
+                     for i in range(0x81)
+                     if data[0x81 * 4 + i] == eid and
+                     int.from_bytes(data[0x81 * 2 + i * 2:0x81 * 2 + i * 2 + 2], "little") != 0xFFFF}
+            known = hexint(entrance["area"]) if entrance.get("area") is not None else None
+            area = known if known in areas else next(iter(areas)) if len(areas) == 1 else None
+        if room > 0x1FF or area is None:
+            raise CheatsError(f"Cannot resolve entrance ${eid:02X} from this ROM's door/exit tables")
+        return room, area
+
+    @staticmethod
+    def _world_writes(area: int) -> list[tuple[int, int]]:
+        # Special OW/Lyra entrances preserve the current saved world.
+        if not 0 <= area < 0x80:
+            return []
+        world = area & 0x40
+        return [(SAVED_WORLD, world), (WORLD_FLAG, int(world != 0))]
+
     def warp_entrance(self, query: str | int, method: str = "auto", wait: bool = True,
                       modules: tuple[int, ...] = (MOD_DUNGEON, MOD_MESSAGE)) -> dict:
         entrance = find_entrance(self.warps, f"0x{query:02X}" if isinstance(query, int) else str(query))
@@ -301,17 +345,20 @@ class OracleCheats:
         s = self._require_idle()
         if self.r(FOLLOWER) == SPAWN_FOLLOWER:
             raise CheatsError("follower $02 makes Underworld_LoadEntrance load the spawn point; clear $7EF3CC first")
-        room = hexint(entrance["room"]) if entrance.get("room") else None
+        room, destination = self._entrance_destination(entrance)
+        changes_world = destination < 0x80 and (destination & 0x40) != self.r(SAVED_WORLD)
         steps: list[str] = []
         resume_after = self._is_paused()
         if resume_after:
             self.b.resume()
         try:
             if method == "auto":
-                if s.module == MOD_OVERWORLD and not s.indoors:
+                if (s.module == MOD_OVERWORLD and not s.indoors and not changes_world and
+                        (not self._uses_cached_exit(room) or s.area == destination)):
                     method = "door"
-                elif entrance.get("exit") == "cache":
-                    area = self._entrance_area(entrance) or self._fallback_area(entrance)
+                elif self._uses_cached_exit(room):
+                    area = next((a for a in self.warps.get("areas", []) if hexint(a["area"]) == destination), None)
+                    area = area or find_area(self.warps, "0x40" if destination & 0x40 else "0x33")
                     steps.append(f"area 0x{hexint(area['area']):02X} first (house exit needs an overworld spot)")
                     self._warp_area_raw(area)
                     landed = self.wait_play((MOD_OVERWORLD, MOD_SPECIAL))
@@ -320,12 +367,17 @@ class OracleCheats:
                     method = "door" if landed.module == MOD_OVERWORLD else "reload"
                 else:
                     method = "reload"
+            if method == "door" and changes_world and not self._uses_cached_exit(room):
+                method = "reload"  # Full native sprite-property initialization across worlds.
+            if (self._uses_cached_exit(room) and destination < 0x80 and
+                    (destination & 0x40) != self.r(SAVED_WORLD)):
+                raise CheatsError("Cross-world house warps require the auto method to prepare an exit cache")
             if method == "door":
-                self._poke([(ENTRANCE, eid), (ENTRANCE + 1, 0), (CONTINUE_FLAG, 0), (RESPAWN_FLAG, 0),
+                self._poke(self._world_writes(destination) + [(ENTRANCE, eid), (ENTRANCE + 1, 0), (CONTINUE_FLAG, 0), (RESPAWN_FLAG, 0),
                             (0x7E004D, 0), (0x7E0046, 0), (NEXT_MODULE, 0x06), (SUBMODULE, 0), (SUBSUB, 0),
                             (MODULE, 0x0F)])
             elif method == "reload":
-                self._poke([(ENTRANCE, eid), (ENTRANCE + 1, 0), (CONTINUE_FLAG, 1), (RESPAWN_FLAG, 0),
+                self._poke(self._world_writes(destination) + [(ENTRANCE, eid), (ENTRANCE + 1, 0), (CONTINUE_FLAG, 1), (RESPAWN_FLAG, 0),
                             (INDOORS, 1), (SUBMODULE, 0), (SUBSUB, 0), (MODULE, 0x05)])
             else:
                 raise CheatsError(f"unknown warp method '{method}'")
@@ -350,7 +402,12 @@ class OracleCheats:
 
     def _warp_area_raw(self, area: dict) -> None:
         room = hexint(area["via_room"])
-        self._poke([(ROOM, room & 0xFF), (ROOM + 1, room >> 8), (CONTINUE_FLAG, 0), (RESPAWN_FLAG, 0),
+        destination = hexint(area["area"])
+        if not 0 <= destination < 0x80:
+            raise CheatsError("Special overworld areas require their dedicated loader or checkpoint")
+        if self._uses_cached_exit(room) or self._exit_area(room) != destination:
+            raise CheatsError(f"Area ${destination:02X} no longer matches room ${room:03X}'s exit in this ROM; refresh warps.json")
+        self._poke(self._world_writes(destination) + [(ROOM, room & 0xFF), (ROOM + 1, room >> 8), (CONTINUE_FLAG, 0), (RESPAWN_FLAG, 0),
                     (BRIGHTNESS, 0x80), (HDMA_ENABLE, 0), (SUBMODULE, 0), (SUBSUB, 0), (MODULE, 0x08)])
 
     def prime_entrance(self, area: dict) -> dict:
@@ -416,6 +473,20 @@ class OracleCheats:
     def apply_checkpoint(self, cp_id: str, sram: bool = True, warp: bool = True, wait: bool = True) -> dict:
         resolved = resolve_checkpoint(self.checkpoints, cp_id)
         self._require_idle()
+        destination = None
+        entrance_method = "auto"
+        loc = resolved["location"]
+        if warp and "entrance" in loc:
+            entry = find_entrance(self.warps, loc["entrance"])
+            room, destination = self._entrance_destination(entry)
+            # Checkpoint writes can change SavedWorld before the warp sees its source.
+            entrance_method = "auto" if self._uses_cached_exit(room) else "reload"
+        elif warp and "area" in loc:
+            area = find_area(self.warps, loc["area"])
+            destination = hexint(area["area"])
+            room = hexint(area["via_room"])
+            if not 0 <= destination < 0x80 or self._uses_cached_exit(room) or self._exit_area(room) != destination:
+                raise CheatsError("Checkpoint area does not have a supported matching exit in this ROM")
         expected: dict[int, int] = {}
         was_paused = self._is_paused()
         if not was_paused:
@@ -427,6 +498,9 @@ class OracleCheats:
                 expected[addr] = apply_write(current, write)
             for addr, value in expected.items():
                 self.w(addr, value)
+            if destination is not None:
+                for addr, value in self._world_writes(destination):
+                    self.w(addr, value)
             slot = self.sync_sram() if sram else None
         finally:
             if not was_paused:
@@ -437,7 +511,7 @@ class OracleCheats:
         exp_modules = tuple(hexint(m) for m in resolved["expect"].get("modules", [])) or (MOD_DUNGEON,)
         if warp and loc:
             if "entrance" in loc:
-                result["warp"] = self.warp_entrance(loc["entrance"], wait=wait, modules=exp_modules)
+                result["warp"] = self.warp_entrance(loc["entrance"], method=entrance_method, wait=wait, modules=exp_modules)
             elif "area" in loc:
                 # Module08 keeps the HUD hearts and follower graphics of the previous load.
                 # A full reload through an entrance first rebuilds both (Module05_LoadFile

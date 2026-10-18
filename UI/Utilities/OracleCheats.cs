@@ -252,6 +252,8 @@ namespace Mesen.Utilities
 		private const uint EntranceAddr = 0x7E010E;
 		private const uint RespawnFlagAddr = 0x7E04AA;
 		private const uint FollowerAddr = 0x7EF3CC;
+		private const uint SavedWorldAddr = 0x7EF3CA;
+		private const uint WorldFlagAddr = 0x7E0FFF;
 		private const uint GameStateAddr = 0x7EF3C5;
 		private const uint CrystalsAddr = 0x7EF37A;
 		private const int ModDungeon = 0x07;
@@ -410,6 +412,23 @@ namespace Mesen.Utilities
 					return idle;
 				}
 
+				// Persist the same world that the subsequent native warp will load.
+				// Otherwise a successful checkpoint can reopen in its ancestor's world.
+				int? checkpointArea = null;
+				if(cp.Entrance is int checkpointEntrance) {
+					if(checkpointEntrance < 0 || checkpointEntrance >= 0x85) return OracleActionResult.Fail("Invalid checkpoint entrance.");
+					OracleCheatEntrance entry = data.Entrances.FirstOrDefault(e => e.Id == checkpointEntrance)
+						?? new OracleCheatEntrance() { Id = checkpointEntrance };
+					checkpointArea = EntranceArea(entry, OraclePanelBridge.ReadWord(0x02C813 + (uint)checkpointEntrance * 2));
+					if(checkpointArea == null) return OracleActionResult.Fail("Cannot resolve checkpoint entrance in this ROM.");
+				} else if(cp.Area is int requestedArea) {
+					OracleCheatArea? target = data.Areas.FirstOrDefault(a => a.Area == requestedArea);
+					if(target == null || requestedArea < 0 || requestedArea >= 0x80 ||
+						UsesCachedExit(target.ViaRoom) || ExitAreaForRoom(target.ViaRoom) != requestedArea) {
+						return OracleActionResult.Fail("Checkpoint area does not have a supported matching exit in this ROM.");
+					}
+					checkpointArea = requestedArea;
+				}
 				Dictionary<uint, int> expected = new();
 				int? slot = null;
 				WithPause(() => {
@@ -420,6 +439,7 @@ namespace Mesen.Utilities
 					foreach(KeyValuePair<uint, int> entry in expected) {
 						OraclePanelBridge.WriteByte(entry.Key, entry.Value);
 					}
+					if(checkpointArea is int destination) PrepareWorld(destination);
 					slot = OraclePanelBridge.SyncWramSaveToSram();
 				});
 
@@ -428,7 +448,10 @@ namespace Mesen.Utilities
 				if(cp.Entrance.HasValue) {
 					OracleCheatEntrance entrance = data.Entrances.FirstOrDefault(e => e.Id == cp.Entrance.Value)
 						?? new OracleCheatEntrance() { Id = cp.Entrance.Value, Label = $"Entrance ${cp.Entrance.Value:X2}", Exit = "unknown" };
-					warp = WarpToEntranceCore(data, entrance, "auto", modules);
+					// Checkpoint writes may already have changed SavedWorld, so auto cannot
+					// infer the loaded graphics' original world. Rebuild table-exit entrances.
+					int room = OraclePanelBridge.ReadWord(0x02C813 + (uint)entrance.Id * 2);
+					warp = WarpToEntranceCore(data, entrance, UsesCachedExit(room) ? "auto" : "reload", modules);
 				} else if(cp.Area.HasValue) {
 					OracleCheatArea? area = data.Areas.FirstOrDefault(a => a.Area == cp.Area.Value);
 					if(area == null) {
@@ -473,6 +496,47 @@ namespace Mesen.Utilities
 				?? new OracleCheatEntrance() { Id = 0x01, Label = "Link's House", Room = 0x104, Exit = "table" };
 		}
 
+		// Read the loaded ROM: the catalog labels/room numbers can predate entrance edits.
+		private static int? ExitAreaForRoom(int room)
+		{
+			for(int i = 0x4E; i >= 0; i--) {
+				if(OraclePanelBridge.ReadWord(0x02DD8A + (uint)i * 2) == room) {
+					return OraclePanelBridge.ReadByte(0x02DE28 + (uint)i);
+				}
+			}
+			return null;
+		}
+
+		private static bool UsesCachedExit(int room) => room >= 0x100 && room < 0x180 && room != 0x104;
+
+		private static int? EntranceArea(OracleCheatEntrance entrance, int room)
+		{
+			if(!UsesCachedExit(room) && ExitAreaForRoom(room) is int exitArea) {
+				return exitArea;
+			}
+			HashSet<int> areas = new();
+			for(uint i = 0; i < 0x81; i++) {
+				if(OraclePanelBridge.ReadByte(0x1BBB73 + i) == entrance.Id &&
+					OraclePanelBridge.ReadWord(0x1BBA71 + i * 2) != 0xFFFF) {
+					areas.Add(OraclePanelBridge.ReadWord(0x1BB96F + i * 2));
+				}
+			}
+			// A catalog area is useful only when the current ROM still has that door.
+			if(entrance.Area is int known && areas.Contains(known)) return known;
+			return areas.Count == 1 ? areas.First() : null;
+		}
+
+		private static void PrepareWorld(int area)
+		{
+			// Special OW/Lyra are separate modes, not another interpretation of bit 6.
+			// Their existing entrance paths retain the current saved world.
+			if(area < 0 || area >= 0x80) return;
+			int world = area & 0x40;
+			OraclePanelBridge.WriteByte(SavedWorldAddr, world);
+			// Sprite_Main derives this byte; seed it before any transition GBC/actor hook.
+			OraclePanelBridge.WriteByte(WorldFlagAddr, world == 0 ? 0 : 1);
+		}
+
 		private static OracleActionResult WarpToEntranceCore(OracleCheatData data, OracleCheatEntrance entrance, string method, int[]? modules)
 		{
 			OracleActionResult? idle = RequireIdle();
@@ -483,17 +547,27 @@ namespace Mesen.Utilities
 				return OracleActionResult.Fail("Follower $02 makes the game load the spawn point instead; clear $7EF3CC first.");
 			}
 
+			if(entrance.Id < 0 || entrance.Id >= 0x85) {
+				return OracleActionResult.Fail("Entrance must be between $00 and $84.");
+			}
+			int targetRoom = OraclePanelBridge.ReadWord(0x02C813 + (uint)entrance.Id * 2);
+			int? destination = EntranceArea(entrance, targetRoom);
+			if(destination is not int destinationArea || targetRoom > 0x01FF) {
+				return OracleActionResult.Fail($"Cannot resolve entrance ${entrance.Id:X2} from this ROM's door/exit tables.");
+			}
+			bool changesWorld = destinationArea < 0x80 && (destinationArea & 0x40) != OraclePanelBridge.ReadByte(SavedWorldAddr);
 			int module = OraclePanelBridge.ReadByte(ModuleAddr);
 			bool outdoors = OraclePanelBridge.ReadByte(IndoorsAddr) == 0;
 			string steps = "";
 			if(method == "auto") {
-				if(module == ModOverworld && outdoors) {
+				if(module == ModOverworld && outdoors && !changesWorld &&
+					(!UsesCachedExit(targetRoom) || OraclePanelBridge.ReadByte(AreaAddr) == destinationArea)) {
 					method = "door";
-				} else if(entrance.Exit == "cache") {
+				} else if(UsesCachedExit(targetRoom)) {
 					//Houses ($0100-$017F) exit to the overworld spot saved on entry: stand in that area first.
 					//No exit-table room on that area: Loom Beach (Kalyxo) or the Abyss arrival point instead.
-					int fallback = ((entrance.Area ?? 0) & 0x40) != 0 ? 0x40 : 0x33;
-					OracleCheatArea? area = data.Areas.FirstOrDefault(a => a.Area == entrance.Area)
+					int fallback = (destinationArea & 0x40) != 0 ? 0x40 : 0x33;
+					OracleCheatArea? area = data.Areas.FirstOrDefault(a => a.Area == destinationArea)
 						?? data.Areas.FirstOrDefault(a => a.Area == fallback);
 					if(area == null) {
 						return OracleActionResult.Fail($"No overworld area to stand in before entering {entrance.Label}.");
@@ -509,7 +583,18 @@ namespace Mesen.Utilities
 				}
 			}
 
+			// A cross-world table exit also needs the full native sprite-property initialization.
+			if(method == "door" && changesWorld && !UsesCachedExit(targetRoom)) method = "reload";
+			if(method != "door" && method != "reload") {
+				return OracleActionResult.Fail($"Unknown warp method '{method}'.");
+			}
+			// Explicit cross-world house reloads cannot safely reuse another world's cache.
+			if(UsesCachedExit(targetRoom) && destinationArea < 0x80 &&
+				(destinationArea & 0x40) != OraclePanelBridge.ReadByte(SavedWorldAddr)) {
+				return OracleActionResult.Fail("Cross-world house warps require the auto method to prepare an exit cache.");
+			}
 			WithPause(() => {
+				PrepareWorld(destinationArea);
 				OraclePanelBridge.WriteByte(EntranceAddr, entrance.Id);
 				OraclePanelBridge.WriteByte(EntranceAddr + 1, 0);
 				OraclePanelBridge.WriteByte(RespawnFlagAddr, 0);
@@ -535,8 +620,8 @@ namespace Mesen.Utilities
 				return OracleActionResult.Fail($"{entrance.Label}: no dungeon play after 15 s (module ${OraclePanelBridge.ReadByte(ModuleAddr):X2}/${OraclePanelBridge.ReadByte(SubmoduleAddr):X2}).");
 			}
 			int room = OraclePanelBridge.ReadWord(RoomAddr);
-			if(Array.IndexOf(PlayModules, landedModule) >= 0 && entrance.Room.HasValue && room != entrance.Room.Value) {
-				return OracleActionResult.Fail($"{entrance.Label}: landed in room ${room:X3}, expected ${entrance.Room.Value:X3}.");
+			if(Array.IndexOf(PlayModules, landedModule) >= 0 && room != targetRoom) {
+				return OracleActionResult.Fail($"{entrance.Label}: landed in room ${room:X3}, expected ${targetRoom:X3}.");
 			}
 			string where = landedModule == ModDungeon || landedModule == ModMessage ? $"room ${room:X3}" : $"module ${landedModule:X2}";
 			return OracleActionResult.Ok($"Warped: {entrance.Label} (${entrance.Id:X2}, {steps}{method}) -> {where}.");
@@ -548,8 +633,16 @@ namespace Mesen.Utilities
 			if(idle != null) {
 				return idle;
 			}
-			//Dungeon-exit load: Module08 reads UnderworldExitData for room $A0 (usdasm bank_02.asm:17340).
+			// Module08 has never supported special OW/Lyra setup; use their dedicated tools.
+			if(area.Area < 0 || area.Area >= 0x80) {
+				return OracleActionResult.Fail("Special overworld areas require their dedicated loader or checkpoint.");
+			}
+			if(UsesCachedExit(area.ViaRoom) || ExitAreaForRoom(area.ViaRoom) != area.Area) {
+				return OracleActionResult.Fail($"Area ${area.Area:X2} no longer matches room ${area.ViaRoom:X3}'s exit in this ROM; refresh warps.json.");
+			}
+			//Dungeon-exit load: Module08 reads UnderworldExitData for room $A0.
 			WithPause(() => {
+				PrepareWorld(area.Area);
 				OraclePanelBridge.WriteWord(RoomAddr, area.ViaRoom);
 				OraclePanelBridge.WriteByte(ContinueFlagAddr, 0);
 				OraclePanelBridge.WriteByte(RespawnFlagAddr, 0);
