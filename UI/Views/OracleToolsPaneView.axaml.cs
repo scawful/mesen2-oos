@@ -6,6 +6,7 @@ using Avalonia.Platform.Storage;
 using Mesen.Utilities;
 using Mesen.ViewModels;
 using Mesen.Windows;
+using System;
 using System.IO;
 
 namespace Mesen.Views
@@ -37,6 +38,14 @@ namespace Mesen.Views
 		private void InitializeComponent()
 		{
 			AvaloniaXamlLoader.Load(this);
+		}
+
+		private void OnToolPageClick(object? sender, RoutedEventArgs e)
+		{
+			if(ViewModel != null && sender is Button { Tag: string pageName }
+				&& Enum.TryParse(pageName, out OracleToolPage page)) {
+				ViewModel.SelectedToolPage = page;
+			}
 		}
 
 		private async void OnWarpChoiceClick(object? sender, RoutedEventArgs e)

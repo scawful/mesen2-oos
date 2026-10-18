@@ -13,6 +13,16 @@ using System.Threading.Tasks;
 
 namespace Mesen.ViewModels
 {
+	public enum OracleToolPage
+	{
+		Travel,
+		Items,
+		Progress,
+		Capture,
+		Macros,
+		Log
+	}
+
 	public class OracleMacroButtonViewModel
 	{
 		public string Id { get; init; } = string.Empty;
@@ -63,8 +73,7 @@ namespace Mesen.ViewModels
 		private bool _commandInFlight;
 		private bool _canFallToRoom;
 		private bool _hasMacroError;
-		private bool _isMacrosOpen;
-		private bool _isLogOpen;
+		private OracleToolPage _selectedToolPage = OracleToolPage.Travel;
 		private readonly List<string> _sessionEntries = new();
 		private readonly Dictionary<string, List<MacroStep>> _macroStepsById = new(StringComparer.OrdinalIgnoreCase);
 
@@ -154,6 +163,32 @@ namespace Mesen.ViewModels
 		public bool IsStripVisible => !IsHidden;
 		public string ToolsButtonText => IsExpanded ? "Close tools" : "Tools";
 
+		public OracleToolPage SelectedToolPage {
+			get => _selectedToolPage;
+			set {
+				if(!Enum.IsDefined(value) || _selectedToolPage == value) {
+					return;
+				}
+				this.RaiseAndSetIfChanged(ref _selectedToolPage, value);
+				this.RaisePropertyChanged(nameof(IsTravelPage));
+				this.RaisePropertyChanged(nameof(IsItemsPage));
+				this.RaisePropertyChanged(nameof(IsProgressPage));
+				this.RaisePropertyChanged(nameof(IsCapturePage));
+				this.RaisePropertyChanged(nameof(IsMacrosPage));
+				this.RaisePropertyChanged(nameof(IsLogPage));
+				// These gates also refresh the values when a page becomes visible.
+				Cheats.IsItemsOpen = IsItemsPage;
+				Cheats.IsFlagsOpen = IsProgressPage;
+			}
+		}
+
+		public bool IsTravelPage => SelectedToolPage == OracleToolPage.Travel;
+		public bool IsItemsPage => SelectedToolPage == OracleToolPage.Items;
+		public bool IsProgressPage => SelectedToolPage == OracleToolPage.Progress;
+		public bool IsCapturePage => SelectedToolPage == OracleToolPage.Capture;
+		public bool IsMacrosPage => SelectedToolPage == OracleToolPage.Macros;
+		public bool IsLogPage => SelectedToolPage == OracleToolPage.Log;
+
 		public bool IsCommandInFlight {
 			get => _commandInFlight;
 			private set => this.RaiseAndSetIfChanged(ref _commandInFlight, value);
@@ -204,8 +239,6 @@ namespace Mesen.ViewModels
 		// Tools pane: macros + log
 		public ObservableCollection<OracleMacroButtonViewModel> MacroButtons { get; }
 		public bool HasMacros => MacroButtons.Count > 0;
-		public bool IsMacrosOpen { get => _isMacrosOpen; set => this.RaiseAndSetIfChanged(ref _isMacrosOpen, value); }
-		public bool IsLogOpen { get => _isLogOpen; set => this.RaiseAndSetIfChanged(ref _isLogOpen, value); }
 		public string MacroStatus { get => _macroStatus; private set => this.RaiseAndSetIfChanged(ref _macroStatus, value); }
 		public bool HasMacroError { get => _hasMacroError; private set => this.RaiseAndSetIfChanged(ref _hasMacroError, value); }
 		public string SessionLog { get => _sessionLog; private set => this.RaiseAndSetIfChanged(ref _sessionLog, value); }
@@ -357,7 +390,6 @@ namespace Mesen.ViewModels
 				} else {
 					ParseAndValidateMacroProfile(File.ReadAllText(path));
 					MacroStatus = $"Loaded {MacroButtons.Count} macro{(MacroButtons.Count == 1 ? "" : "s")}.";
-					IsMacrosOpen = MacroButtons.Count > 0;
 					AppendLog("macro", true, MacroStatus);
 				}
 			} catch(Exception ex) {

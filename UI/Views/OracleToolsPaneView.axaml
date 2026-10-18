@@ -54,6 +54,15 @@
 			<Setter Property="Padding" Value="6,2" />
 			<Setter Property="MinHeight" Value="0" />
 		</Style>
+		<Style Selector="Button.toolpage">
+			<Setter Property="Padding" Value="6,4" />
+			<Setter Property="MinWidth" Value="0" />
+			<Setter Property="HorizontalAlignment" Value="Stretch" />
+		</Style>
+		<Style Selector="Button.toolpage.selected">
+			<Setter Property="FontWeight" Value="Bold" />
+			<Setter Property="BorderBrush" Value="{DynamicResource ThemeForegroundLowBrush}" />
+		</Style>
 	</UserControl.Styles>
 
 	<Border
@@ -61,32 +70,33 @@
 		BorderBrush="{DynamicResource ThemeBorderLowBrush}"
 		BorderThickness="1,0,0,0"
 	>
-		<ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-			<StackPanel Margin="10,0,10,10">
-
-				<!-- Game state -->
-				<TextBlock Classes="section" Text="State" />
-				<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
-					<TextBlock Grid.Row="0" Classes="key" Text="Mode" />
-					<TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding ModeText}" />
-					<TextBlock Grid.Row="1" Classes="key" Text="Where" />
-					<TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding WhereText}" ToolTip.Tip="{Binding WhereText}" />
-					<TextBlock Grid.Row="2" Classes="key" Text="Link" />
-					<TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding LinkDetailText}" />
-					<TextBlock Grid.Row="3" Classes="key" Text="Stats" />
-					<TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Text="{Binding StatsText}" />
-					<TextBlock Grid.Row="4" Classes="key" Text="Story" />
-					<TextBlock Grid.Row="4" Grid.Column="1" Classes="value" Text="{Binding StoryText}" />
-					<TextBlock Grid.Row="5" Classes="key" Text="ROM" />
-					<TextBlock Grid.Row="5" Grid.Column="1" Classes="value" Text="{Binding RomText}" ToolTip.Tip="{Binding RomText}" />
+		<Grid Margin="10,8,10,10" RowDefinitions="Auto,Auto,*,Auto">
+			<!-- Playback controls stay reachable on every page. -->
+			<StackPanel Grid.Row="0" Margin="0,0,0,6">
+				<Grid ColumnDefinitions="*,6,Auto,6,Auto">
+					<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="{Binding PauseButtonText}" Click="OnPauseClick" />
+					<TextBox Grid.Column="2" Width="56" Text="{Binding FrameAdvanceCount}" HorizontalContentAlignment="Right" />
+					<Button Grid.Column="4" Content="Step frames" Click="OnFrameAdvanceClick" IsEnabled="{Binding !IsCommandInFlight}" />
 				</Grid>
+			</StackPanel>
+			<Grid Grid.Row="1" Margin="-2,0,-2,6" ColumnDefinitions="*,*,*" RowDefinitions="Auto,Auto">
+				<Button Grid.Row="0" Grid.Column="0" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsTravelPage}" Content="Travel" Tag="Travel" Click="OnToolPageClick" />
+				<Button Grid.Row="0" Grid.Column="1" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsItemsPage}" Content="Items" Tag="Items" Click="OnToolPageClick" />
+				<Button Grid.Row="0" Grid.Column="2" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsProgressPage}" Content="Progress" Tag="Progress" Click="OnToolPageClick" />
+				<Button Grid.Row="1" Grid.Column="0" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsCapturePage}" Content="Capture" Tag="Capture" Click="OnToolPageClick" />
+				<Button Grid.Row="1" Grid.Column="1" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsMacrosPage}" Content="Macros" Tag="Macros" Click="OnToolPageClick" />
+				<Button Grid.Row="1" Grid.Column="2" Margin="2" Classes="cheat toolpage" Classes.selected="{Binding IsLogPage}" Content="Log" Tag="Log" Click="OnToolPageClick" />
+			</Grid>
 
-				<!-- Warp (targets from oracle-of-secrets Data/debug/warps.json) -->
-				<TextBlock Classes="section" Text="Warp" />
-				<TextBox Classes="row" Text="{Binding Cheats.WarpSearchText}" Watermark="Search: d1, shop, abyss, 0x26" />
+			<!-- Travel: the list alone scrolls; search and actions remain fixed. -->
+			<Grid Grid.Row="2" RowDefinitions="Auto,*,Auto" IsVisible="{Binding IsTravelPage}">
+				<StackPanel Grid.Row="0">
+					<TextBlock Classes="section" Text="Warp" />
+					<TextBox Classes="row" Text="{Binding Cheats.WarpSearchText}" Watermark="Search: d1, shop, abyss, 0x26" />
+				</StackPanel>
 				<ListBox
 					Classes="warps row"
-					Height="150"
+					Grid.Row="1"
 					ItemsSource="{Binding Cheats.WarpResults}"
 					SelectedItem="{Binding Cheats.SelectedWarp}"
 					DoubleTapped="OnWarpChoiceDoubleTapped"
@@ -97,76 +107,102 @@
 						</DataTemplate>
 					</ListBox.ItemTemplate>
 				</ListBox>
-				<Button Classes="cheat row" HorizontalAlignment="Stretch" Content="Warp to selection" Click="OnWarpChoiceClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Entrances: door entry from the overworld, reload from indoors. Areas: dungeon-exit load. Double-click a row to warp." />
-				<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto">
-					<TextBlock Grid.Column="0" Classes="key" Text="Entrance $" VerticalAlignment="Center" />
-					<TextBox Grid.Column="1" Text="{Binding WarpEntranceHex}" Watermark="e.g. 76" />
-					<Button Grid.Column="3" Content="Go" Click="OnWarpEntranceClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
-				<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto" IsVisible="{Binding CanFallToRoom}">
-					<TextBlock Grid.Column="0" Classes="key" Text="Fall to room $" VerticalAlignment="Center" />
-					<TextBox Grid.Column="1" Text="{Binding FallRoomHex}" Watermark="same dungeon, e.g. 77" />
-					<Button Grid.Column="3" Content="Go" Click="OnFallToRoomClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
+				<StackPanel Grid.Row="2">
+					<Button Classes="cheat row" HorizontalAlignment="Stretch" Content="Warp to selection" Click="OnWarpChoiceClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Entrances: door entry from the overworld, reload from indoors. Areas: dungeon-exit load. Double-click a row to warp." />
+					<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto">
+						<TextBlock Grid.Column="0" Classes="key" Text="Entrance $" VerticalAlignment="Center" />
+						<TextBox Grid.Column="1" Text="{Binding WarpEntranceHex}" Watermark="e.g. 76" />
+						<Button Grid.Column="3" Content="Go" Click="OnWarpEntranceClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
+					<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto" IsVisible="{Binding CanFallToRoom}">
+						<TextBlock Grid.Column="0" Classes="key" Text="Fall to room $" VerticalAlignment="Center" />
+						<TextBox Grid.Column="1" Text="{Binding FallRoomHex}" Watermark="same dungeon, e.g. 77" />
+						<Button Grid.Column="3" Content="Go" Click="OnFallToRoomClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
+					<TextBlock Classes="section" Text="Checkpoints" />
+					<Grid Classes="row" ColumnDefinitions="*,6,Auto">
+						<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Cheats.Checkpoints}" SelectedItem="{Binding Cheats.SelectedCheckpoint}">
+							<ComboBox.ItemTemplate>
+								<DataTemplate x:DataType="vm:OracleCheckpointOptionViewModel">
+									<TextBlock Text="{Binding DisplayLabel}" ToolTip.Tip="{Binding Notes}" TextTrimming="CharacterEllipsis" />
+								</DataTemplate>
+							</ComboBox.ItemTemplate>
+						</ComboBox>
+						<Button Grid.Column="2" Classes="cheat" Content="Jump" Click="OnJumpCheckpointClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
+					<TextBlock Classes="hint" Text="{Binding Cheats.CheckpointHint}" MaxHeight="64" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Cheats.CheckpointHint}" />
+				</StackPanel>
+			</Grid>
 
-				<!-- Checkpoints (oracle-of-secrets Data/debug/checkpoints.json) -->
-				<TextBlock Classes="section" Text="Checkpoints" />
-				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
-					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Cheats.Checkpoints}" SelectedItem="{Binding Cheats.SelectedCheckpoint}">
-						<ComboBox.ItemTemplate>
-							<DataTemplate x:DataType="vm:OracleCheckpointOptionViewModel">
-								<TextBlock Text="{Binding DisplayLabel}" ToolTip.Tip="{Binding Notes}" TextTrimming="CharacterEllipsis" />
-							</DataTemplate>
-						</ComboBox.ItemTemplate>
-					</ComboBox>
-					<Button Grid.Column="2" Classes="cheat" Content="Jump" Click="OnJumpCheckpointClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
-				<TextBlock Classes="hint" Text="{Binding Cheats.CheckpointHint}" MaxHeight="64" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Cheats.CheckpointHint}" />
-
-				<!-- Items -->
-				<Grid ColumnDefinitions="*,Auto">
-					<TextBlock Classes="section" Text="Items" />
-					<CheckBox Grid.Column="1" Classes="cheat" Content="Show" IsChecked="{Binding Cheats.IsItemsOpen}" VerticalAlignment="Bottom" />
-				</Grid>
-				<StackPanel Spacing="4" IsVisible="{Binding Cheats.IsItemsOpen}">
-					<ItemsControl ItemsSource="{Binding Cheats.ItemChoices}">
-						<ItemsControl.ItemTemplate>
-							<DataTemplate x:DataType="vm:OracleCheatChoiceViewModel">
-								<Grid ColumnDefinitions="78,*" Margin="0,0,0,3">
-									<TextBlock Classes="key" Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
-									<ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
-										<ComboBox.ItemTemplate>
-											<DataTemplate x:DataType="vm:OracleCheatChoiceValueViewModel">
-												<TextBlock Text="{Binding Label}" />
-											</DataTemplate>
-										</ComboBox.ItemTemplate>
-									</ComboBox>
-								</Grid>
-							</DataTemplate>
-						</ItemsControl.ItemTemplate>
-					</ItemsControl>
-					<ItemsControl ItemsSource="{Binding Cheats.ItemToggles}">
-						<ItemsControl.ItemsPanel>
-							<ItemsPanelTemplate>
-								<WrapPanel Orientation="Horizontal" />
-							</ItemsPanelTemplate>
-						</ItemsControl.ItemsPanel>
-						<ItemsControl.ItemTemplate>
-							<DataTemplate x:DataType="vm:OracleCheatToggleViewModel">
-								<CheckBox Classes="cheat" Width="136" Content="{Binding Label}" IsChecked="{Binding IsChecked}" ToolTip.Tip="{Binding Tip}" />
-							</DataTemplate>
-						</ItemsControl.ItemTemplate>
-					</ItemsControl>
+			<Grid Grid.Row="2" RowDefinitions="Auto,*,Auto" IsVisible="{Binding IsItemsPage}">
+				<TextBlock Classes="section" Text="Items" />
+				<ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+					<StackPanel Spacing="4">
+						<ItemsControl ItemsSource="{Binding Cheats.ItemChoices}">
+							<ItemsControl.ItemTemplate>
+								<DataTemplate x:DataType="vm:OracleCheatChoiceViewModel">
+									<Grid ColumnDefinitions="78,*" Margin="0,0,0,3">
+										<TextBlock Classes="key" Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
+										<ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
+											<ComboBox.ItemTemplate>
+												<DataTemplate x:DataType="vm:OracleCheatChoiceValueViewModel">
+													<TextBlock Text="{Binding Label}" />
+												</DataTemplate>
+											</ComboBox.ItemTemplate>
+										</ComboBox>
+									</Grid>
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+						<ItemsControl ItemsSource="{Binding Cheats.ItemToggles}">
+							<ItemsControl.ItemsPanel>
+								<ItemsPanelTemplate>
+									<WrapPanel Orientation="Horizontal" />
+								</ItemsPanelTemplate>
+							</ItemsControl.ItemsPanel>
+							<ItemsControl.ItemTemplate>
+								<DataTemplate x:DataType="vm:OracleCheatToggleViewModel">
+									<CheckBox Classes="cheat" Width="136" Content="{Binding Label}" IsChecked="{Binding IsChecked}" ToolTip.Tip="{Binding Tip}" />
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+					</StackPanel>
+				</ScrollViewer>
+				<StackPanel Grid.Row="2" Spacing="4" Margin="0,6,0,0">
 					<Button Classes="cheat" HorizontalAlignment="Stretch" Content="Refill health + magic" Click="OnRefillClick" IsEnabled="{Binding !IsCommandInFlight}" />
 					<TextBlock Classes="hint" Text="Edits go to WRAM at once. Sync WRAM → SRAM (Progress) keeps them in the save." />
 				</StackPanel>
+			</Grid>
 
-				<!-- Flags (named bits from oracle-of-secrets Core/sram.asm) -->
-				<Grid ColumnDefinitions="*,Auto">
+			<ScrollViewer Grid.Row="2" IsVisible="{Binding IsProgressPage}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+				<StackPanel Spacing="4">
+					<TextBlock Classes="section" Text="Progress" />
+					<Grid Classes="row" ColumnDefinitions="*,6,Auto">
+						<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}">
+							<ComboBox.ItemTemplate>
+								<DataTemplate x:DataType="vm:OraclePresetOptionViewModel">
+									<TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Description}" />
+								</DataTemplate>
+							</ComboBox.ItemTemplate>
+						</ComboBox>
+						<Button Grid.Column="2" Content="Apply" Click="OnApplyPresetClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
+					<Grid Classes="row" ColumnDefinitions="*,6,Auto,4,Auto">
+						<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding FlagOptions}" SelectedItem="{Binding SelectedFlag}">
+							<ComboBox.ItemTemplate>
+								<DataTemplate x:DataType="vm:OracleFlagOptionViewModel">
+									<TextBlock Text="{Binding Label}" />
+								</DataTemplate>
+							</ComboBox.ItemTemplate>
+						</ComboBox>
+						<Button Grid.Column="2" Content="On" Click="OnSetFlagOnClick" IsEnabled="{Binding !IsCommandInFlight}" />
+						<Button Grid.Column="4" Content="Off" Click="OnSetFlagOffClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
+					<Grid ColumnDefinitions="*,6,*">
+						<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="Save data editor…" Click="OnOpenSaveDataEditorClick" />
+						<Button Grid.Column="2" HorizontalAlignment="Stretch" Content="Sync WRAM → SRAM" Click="OnSyncSramClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Write the live save block ($7EF000-$7EF4FF) into the active SRAM slot and its mirror" />
+					</Grid>
 					<TextBlock Classes="section" Text="Flags" />
-					<CheckBox Grid.Column="1" Classes="cheat" Content="Show" IsChecked="{Binding Cheats.IsFlagsOpen}" VerticalAlignment="Bottom" />
-				</Grid>
-				<StackPanel Spacing="4" IsVisible="{Binding Cheats.IsFlagsOpen}">
 					<ItemsControl ItemsSource="{Binding Cheats.FlagChoices}">
 						<ItemsControl.ItemTemplate>
 							<DataTemplate x:DataType="vm:OracleCheatChoiceViewModel">
@@ -205,103 +241,81 @@
 						</ItemsControl.ItemTemplate>
 					</ItemsControl>
 					<TextBlock Classes="hint" Text="Flags edit WRAM at once; the game saves them on its next save, or use Sync WRAM → SRAM." />
-				</StackPanel>
-
-				<!-- Capture -->
-				<TextBlock Classes="section" Text="Capture" />
-				<TextBox Classes="row" Text="{Binding CaptureLabel}" Watermark="Label, e.g. d6-room77-before-fight" />
-				<TextBox Classes="row" Text="{Binding CaptureTags}" Watermark="Tags, comma separated (e.g. d6, rc-test)" />
-				<TextBox Classes="row" Text="{Binding CaptureNotes}" Watermark="Notes (optional)" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="80" />
-				<Button HorizontalAlignment="Stretch" Content="Save state + screenshot" Click="OnCaptureStateClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				<TextBlock Classes="hint" Margin="0,4,0,0" Text="{Binding LastCaptureText}" IsVisible="{Binding LastCaptureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-				<!-- Progress -->
-				<TextBlock Classes="section" Text="Progress" />
-				<Grid Classes="row" ColumnDefinitions="*,6,Auto">
-					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}">
-						<ComboBox.ItemTemplate>
-							<DataTemplate x:DataType="vm:OraclePresetOptionViewModel">
-								<TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Description}" />
-							</DataTemplate>
-						</ComboBox.ItemTemplate>
-					</ComboBox>
-					<Button Grid.Column="2" Content="Apply" Click="OnApplyPresetClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
-				<Grid Classes="row" ColumnDefinitions="*,6,Auto,4,Auto">
-					<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding FlagOptions}" SelectedItem="{Binding SelectedFlag}">
-						<ComboBox.ItemTemplate>
-							<DataTemplate x:DataType="vm:OracleFlagOptionViewModel">
-								<TextBlock Text="{Binding Label}" />
-							</DataTemplate>
-						</ComboBox.ItemTemplate>
-					</ComboBox>
-					<Button Grid.Column="2" Content="On" Click="OnSetFlagOnClick" IsEnabled="{Binding !IsCommandInFlight}" />
-					<Button Grid.Column="4" Content="Off" Click="OnSetFlagOffClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
-				<Grid ColumnDefinitions="*,6,*">
-					<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="Save data editor…" Click="OnOpenSaveDataEditorClick" />
-					<Button Grid.Column="2" HorizontalAlignment="Stretch" Content="Sync WRAM → SRAM" Click="OnSyncSramClick" IsEnabled="{Binding !IsCommandInFlight}" ToolTip.Tip="Write the live save block ($7EF000-$7EF4FF) into the active SRAM slot and its mirror" />
-				</Grid>
-
-				<!-- Frames -->
-				<TextBlock Classes="section" Text="Frames" />
-				<Grid ColumnDefinitions="*,6,Auto,6,Auto">
-					<Button Grid.Column="0" HorizontalAlignment="Stretch" Content="{Binding PauseButtonText}" Click="OnPauseClick" />
-					<TextBox Grid.Column="2" Width="56" Text="{Binding FrameAdvanceCount}" HorizontalContentAlignment="Right" />
-					<Button Grid.Column="4" Content="Step frames" Click="OnFrameAdvanceClick" IsEnabled="{Binding !IsCommandInFlight}" />
-				</Grid>
-
-				<!-- Macros -->
-				<Grid ColumnDefinitions="*,Auto">
-					<TextBlock Classes="section" Text="Macros" />
-					<CheckBox Grid.Column="1" Content="Show" IsChecked="{Binding IsMacrosOpen}" VerticalAlignment="Bottom" />
-				</Grid>
-				<StackPanel Spacing="4" IsVisible="{Binding IsMacrosOpen}">
-						<Grid ColumnDefinitions="*,6,Auto">
-							<TextBox Grid.Column="0" Text="{Binding MacroProfilePath}" Watermark="Macro profile JSON path" />
-							<Button Grid.Column="2" Content="Reload" Click="OnReloadMacrosClick" />
-						</Grid>
-						<TextBlock Classes="hint" Text="{Binding MacroStatus}" />
-						<ItemsControl ItemsSource="{Binding MacroButtons}">
-							<ItemsControl.ItemsPanel>
-								<ItemsPanelTemplate>
-									<WrapPanel Orientation="Horizontal" />
-								</ItemsPanelTemplate>
-							</ItemsControl.ItemsPanel>
-							<ItemsControl.ItemTemplate>
-								<DataTemplate x:DataType="vm:OracleMacroButtonViewModel">
-									<Button Margin="0,0,6,6" Tag="{Binding Id}" Click="OnRunMacroClick" Content="{Binding DisplayLabel}" />
-								</DataTemplate>
-							</ItemsControl.ItemTemplate>
-						</ItemsControl>
-				</StackPanel>
-
-				<!-- Log -->
-				<Grid ColumnDefinitions="*,Auto">
-					<TextBlock Classes="section" Text="Log" />
-					<CheckBox Grid.Column="1" Content="Show" IsChecked="{Binding IsLogOpen}" VerticalAlignment="Bottom" />
-				</Grid>
-				<StackPanel Spacing="4" IsVisible="{Binding IsLogOpen}">
-						<TextBox
-							Height="140"
-							AcceptsReturn="True"
-							IsReadOnly="True"
-							TextWrapping="NoWrap"
-							Text="{Binding SessionLog}"
-							FontFamily="{DynamicResource MesenMonospaceFont}"
-							FontSize="{DynamicResource MesenMonospaceFontSize}"
-							ScrollViewer.HorizontalScrollBarVisibility="Auto"
-							ScrollViewer.VerticalScrollBarVisibility="Auto"
-						/>
-						<StackPanel Orientation="Horizontal" Spacing="6">
-							<Button Content="Copy" Click="OnCopyLogClick" />
-							<Button Content="Save…" Click="OnSaveLogClick" />
-							<Button Content="Clear" Click="OnClearLogClick" />
+					<Expander Header="State details" HorizontalAlignment="Stretch" Margin="0,8,0,0">
+						<StackPanel>
+							<TextBlock Classes="section" Text="State" />
+							<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+								<TextBlock Grid.Row="0" Classes="key" Text="Mode" />
+								<TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding ModeText}" />
+								<TextBlock Grid.Row="1" Classes="key" Text="Where" />
+								<TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding WhereText}" ToolTip.Tip="{Binding WhereText}" />
+								<TextBlock Grid.Row="2" Classes="key" Text="Link" />
+								<TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding LinkDetailText}" />
+								<TextBlock Grid.Row="3" Classes="key" Text="Stats" />
+								<TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Text="{Binding StatsText}" />
+								<TextBlock Grid.Row="4" Classes="key" Text="Story" />
+								<TextBlock Grid.Row="4" Grid.Column="1" Classes="value" Text="{Binding StoryText}" />
+								<TextBlock Grid.Row="5" Classes="key" Text="ROM" />
+								<TextBlock Grid.Row="5" Grid.Column="1" Classes="value" Text="{Binding RomText}" ToolTip.Tip="{Binding RomText}" />
+							</Grid>
 						</StackPanel>
+					</Expander>
 				</StackPanel>
+			</ScrollViewer>
 
-				<TextBlock Classes="hint" Margin="0,10,0,0" Text="Cmd/Ctrl+Shift+O: tools pane · Cmd/Ctrl+Shift+H: hide strip" />
-			</StackPanel>
-		</ScrollViewer>
+			<ScrollViewer Grid.Row="2" IsVisible="{Binding IsCapturePage}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+				<StackPanel Spacing="4">
+					<TextBlock Classes="section" Text="Capture" />
+					<TextBox Classes="row" Text="{Binding CaptureLabel}" Watermark="Label, e.g. d6-room77-before-fight" />
+					<TextBox Classes="row" Text="{Binding CaptureTags}" Watermark="Tags, comma separated (e.g. d6, rc-test)" />
+					<TextBox Classes="row" Text="{Binding CaptureNotes}" Watermark="Notes (optional)" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="80" />
+					<Button HorizontalAlignment="Stretch" Content="Save state + screenshot" Click="OnCaptureStateClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					<TextBlock Classes="hint" Margin="0,4,0,0" Text="{Binding LastCaptureText}" IsVisible="{Binding LastCaptureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+				</StackPanel>
+			</ScrollViewer>
+
+			<ScrollViewer Grid.Row="2" IsVisible="{Binding IsMacrosPage}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+				<StackPanel Spacing="4">
+					<TextBlock Classes="section" Text="Macros" />
+					<Grid ColumnDefinitions="*,6,Auto">
+						<TextBox Grid.Column="0" Text="{Binding MacroProfilePath}" Watermark="Macro profile JSON path" />
+						<Button Grid.Column="2" Content="Reload" Click="OnReloadMacrosClick" />
+					</Grid>
+					<TextBlock Classes="hint" Text="{Binding MacroStatus}" />
+					<ItemsControl ItemsSource="{Binding MacroButtons}">
+						<ItemsControl.ItemsPanel>
+							<ItemsPanelTemplate>
+								<WrapPanel Orientation="Horizontal" />
+							</ItemsPanelTemplate>
+						</ItemsControl.ItemsPanel>
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:OracleMacroButtonViewModel">
+								<Button Margin="0,0,6,6" Tag="{Binding Id}" Click="OnRunMacroClick" Content="{Binding DisplayLabel}" />
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</StackPanel>
+			</ScrollViewer>
+
+			<Grid Grid.Row="2" RowDefinitions="*,Auto" IsVisible="{Binding IsLogPage}">
+				<TextBox
+					Grid.Row="0" MinHeight="0"
+					AcceptsReturn="True"
+					IsReadOnly="True"
+					TextWrapping="NoWrap"
+					Text="{Binding SessionLog}"
+					FontFamily="{DynamicResource MesenMonospaceFont}"
+					FontSize="{DynamicResource MesenMonospaceFontSize}"
+					ScrollViewer.HorizontalScrollBarVisibility="Auto"
+					ScrollViewer.VerticalScrollBarVisibility="Auto"
+				/>
+				<StackPanel Grid.Row="1" Margin="0,6,0,0" Orientation="Horizontal" Spacing="6">
+					<Button Content="Copy" Click="OnCopyLogClick" />
+					<Button Content="Save…" Click="OnSaveLogClick" />
+					<Button Content="Clear" Click="OnClearLogClick" />
+				</StackPanel>
+			</Grid>
+			<TextBlock Grid.Row="3" Classes="hint" Margin="0,8,0,0" Text="Cmd/Ctrl+Shift+O: tools pane · Cmd/Ctrl+Shift+H: hide strip" />
+		</Grid>
 	</Border>
 </UserControl>
