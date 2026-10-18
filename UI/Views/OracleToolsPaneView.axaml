@@ -97,6 +97,7 @@
 				<ListBox
 					Classes="warps row"
 					Grid.Row="1"
+					MinHeight="64"
 					ItemsSource="{Binding Cheats.WarpResults}"
 					SelectedItem="{Binding Cheats.SelectedWarp}"
 					DoubleTapped="OnWarpChoiceDoubleTapped"
@@ -130,7 +131,7 @@
 						</ComboBox>
 						<Button Grid.Column="2" Classes="cheat" Content="Jump" Click="OnJumpCheckpointClick" IsEnabled="{Binding !IsCommandInFlight}" />
 					</Grid>
-					<TextBlock Classes="hint" Text="{Binding Cheats.CheckpointHint}" MaxHeight="64" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Cheats.CheckpointHint}" />
+					<TextBlock Classes="hint" Text="Loads a checkpoint and replaces save slot 1." MaxHeight="32" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Cheats.CheckpointHint}" />
 				</StackPanel>
 			</Grid>
 
@@ -315,7 +316,7 @@
 					<Button Content="Clear" Click="OnClearLogClick" />
 				</StackPanel>
 			</Grid>
-			<TextBlock Grid.Row="3" Classes="hint" Margin="0,8,0,0" Text="Cmd/Ctrl+Shift+O: tools pane · Cmd/Ctrl+Shift+H: hide strip" />
+			<TextBlock Grid.Row="3" Classes="hint" Margin="0,8,0,0" Text="⌘/Ctrl+Shift: O tools · H hide" TextWrapping="NoWrap" ToolTip.Tip="Cmd/Ctrl+Shift+O: tools pane · Cmd/Ctrl+Shift+H: hide strip" />
 		</Grid>
 	</Border>
 </UserControl>
