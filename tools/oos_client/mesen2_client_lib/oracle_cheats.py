@@ -310,22 +310,43 @@ class OracleCheats:
                 return data[0x4F * 2 + i]
         return None
 
+    def _door_areas(self, eid: int) -> set[int]:
+        data = bytes(self.b.read_block(0x1BB96F, 0x81 * 5))
+        if len(data) != 0x81 * 5:
+            raise CheatsError("Could not read this ROM's entrance table")
+        return {int.from_bytes(data[i * 2:i * 2 + 2], "little")
+                for i in range(0x81)
+                if data[0x81 * 4 + i] == eid and
+                int.from_bytes(data[0x81 * 2 + i * 2:0x81 * 2 + i * 2 + 2], "little") != 0xFFFF}
+
+    def _hole_areas(self, eid: int) -> set[int]:
+        # Overworld holes (Overworld_GetPitDestination, usdasm bank_1B.asm): $13 rows of
+        # map16 words at $1B:B800, area words at $1B:B826 and entrance bytes at $1B:B84C.
+        data = bytes(self.b.read_block(0x1BB800, 0x13 * 5))
+        if len(data) != 0x13 * 5:
+            raise CheatsError("Could not read this ROM's hole table")
+        return {int.from_bytes(data[0x26 + i * 2:0x28 + i * 2], "little")
+                for i in range(0x13) if data[0x4C + i] == eid}
+
     def _entrance_destination(self, entrance: dict) -> tuple[int, int]:
         eid = hexint(entrance["id"])
         if not 0 <= eid < 0x85:
             raise CheatsError("Entrance must be between $00 and $84")
         room = self.r16(0x02C813 + eid * 2)
-        area = None if self._uses_cached_exit(room) else self._exit_area(room)
+        exit_area = None if self._uses_cached_exit(room) else self._exit_area(room)
+        # The exit table's unused rows also read room $0000 / area $00, so a room $0000
+        # match is only a last resort after the door and hole tables.
+        area = exit_area if room != 0 else None
         if area is None:
-            data = bytes(self.b.read_block(0x1BB96F, 0x81 * 5))
-            if len(data) != 0x81 * 5:
-                raise CheatsError("Could not read this ROM's entrance table")
-            areas = {int.from_bytes(data[i * 2:i * 2 + 2], "little")
-                     for i in range(0x81)
-                     if data[0x81 * 4 + i] == eid and
-                     int.from_bytes(data[0x81 * 2 + i * 2:0x81 * 2 + i * 2 + 2], "little") != 0xFFFF}
+            # A catalog area is useful only when the current ROM still has that door or hole.
             known = hexint(entrance["area"]) if entrance.get("area") is not None else None
-            area = known if known in areas else next(iter(areas)) if len(areas) == 1 else None
+            for areas in (self._door_areas, self._hole_areas):
+                found = areas(eid)
+                area = known if known in found else next(iter(found)) if len(found) == 1 else None
+                if area is not None:
+                    break
+            else:
+                area = exit_area
         if room > 0x1FF or area is None:
             raise CheatsError(f"Cannot resolve entrance ${eid:02X} from this ROM's door/exit tables")
         return room, area
