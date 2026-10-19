@@ -112,6 +112,7 @@ class OracleInventoryContract(unittest.TestCase):
         cap = int(self.symbols["!BOMBCHU_AMMO_MAX"].strip())
         self.assertEqual(self.grants.get(self.address("BombchuAmmo")), cap)
         self.assertEqual(self.grants.get(self.address("Flute")), 7)
+        self.assertEqual(self.grants.get(self.address("SongBits")), 0x3F)
         choices = block(self.bridge, "ItemChoiceDefs =")
         self.assertIn('(5, "Secrets"), (6, "Stone")', choices)
         self.assertIn('(7, "All Six Songs")', choices)

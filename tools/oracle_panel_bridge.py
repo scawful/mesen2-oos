@@ -34,6 +34,7 @@ FLAG_CHOICE_GROUPS: list[tuple[str, list[str]]] = [
 ]
 
 PRESET_ORDER = ["all_items", "early_game", "dungeon_ready", "clear_progress"]
+SONG_BITS_ADDRESS = 0x7EF3B1
 
 PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
     "all_items": {
@@ -49,8 +50,9 @@ PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
             "icerod": 1,
             "lamp": 1,
             "hammer": 1,
-            "flute": 5,
-            "ocarina_song": 4,
+            "flute": 7,
+            "song_bits": 0x3F,
+            "ocarina_song": 1,
             "feather": 1,
             "book": 1,
             "somaria": 1,
@@ -138,6 +140,7 @@ PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
             "lamp": 0,
             "hammer": 0,
             "flute": 0,
+            "song_bits": 0,
             "ocarina_song": 0,
             "feather": 0,
             "book": 0,
@@ -365,6 +368,11 @@ def _parse_assignment(raw: str) -> tuple[str, int | bool]:
 
 def _apply_items(client: Any, updates: dict[str, int | bool]) -> int:
     for key, value in updates.items():
+        if key == "song_bits":
+            # Older socket clients do not yet expose SongBits in their registry.
+            if not client.write_address(SONG_BITS_ADDRESS, int(value)):
+                raise RuntimeError("Failed to write Oracle song ownership")
+            continue
         if isinstance(value, bool):
             client.set_item(key, 1 if value else 0)
         else:
@@ -382,7 +390,10 @@ def _apply_preset(client: Any, preset_id: str) -> tuple[int, int]:
     if preset_id not in PRESET_DEFINITIONS:
         raise ValueError(f"Unknown preset: {preset_id}")
     preset = PRESET_DEFINITIONS[preset_id]
-    changed_items = _apply_items(client, dict(preset.get("items") or {}))
+    items = dict(preset.get("items") or {})
+    if preset_id == "all_items":
+        items["song_bits"] |= client.read_address(SONG_BITS_ADDRESS)
+    changed_items = _apply_items(client, items)
     changed_flags = _apply_flags(client, dict(preset.get("flags") or {}))
     return changed_items, changed_flags
 

@@ -255,7 +255,7 @@ namespace Mesen.Utilities
 		private static readonly Dictionary<string, uint> PresetItemAddresses = new() {
 			["bow"] = 0x7EF340, ["boomerang"] = 0x7EF341, ["hookshot"] = 0x7EF342, ["bombs"] = 0x7EF343, ["powder"] = 0x7EF344,
 			["firerod"] = 0x7EF345, ["icerod"] = 0x7EF346, ["zoramask"] = 0x7EF347, ["bunnymask"] = 0x7EF348, ["dekumask"] = 0x7EF349,
-			["lamp"] = 0x7EF34A, ["hammer"] = 0x7EF34B, ["flute"] = 0x7EF34C, ["ocarina_song"] = 0x7E030F, ["feather"] = 0x7EF34D,
+			["lamp"] = 0x7EF34A, ["hammer"] = 0x7EF34B, ["flute"] = 0x7EF34C, ["song_bits"] = 0x7EF3B1, ["ocarina_song"] = 0x7E030F, ["feather"] = 0x7EF34D,
 			["book"] = 0x7EF34E, ["somaria"] = 0x7EF350, ["stonemask"] = 0x7EF352, ["mirror"] = 0x7EF353, ["gloves"] = 0x7EF354,
 			["boots"] = 0x7EF355, ["flippers"] = 0x7EF356, ["moonpearl"] = 0x7EF357, ["wolfmask"] = 0x7EF358, ["sword"] = 0x7EF359,
 			["shield"] = 0x7EF35A, ["armor"] = 0x7EF35B, ["rupees"] = RupeesAddr, ["health"] = HealthCurrentAddr, ["maxhealth"] = HealthMaxAddr,
@@ -282,7 +282,7 @@ namespace Mesen.Utilities
 				Description = "Tools, masks, six songs, rings, maps, scrolls and Oracle collectibles, including 20 Bombchus and at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
 				Items = new Dictionary<string, int> {
 					["bow"] = 4, ["boomerang"] = 2, ["hookshot"] = 1, ["bombs"] = 50, ["powder"] = 2, ["firerod"] = 1,
-					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 7, ["ocarina_song"] = 1, ["feather"] = 1,
+					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 7, ["song_bits"] = 0x3F, ["ocarina_song"] = 1, ["feather"] = 1,
 					["book"] = 1, ["somaria"] = 1, ["mirror"] = 2, ["zoramask"] = 1, ["dekumask"] = 1, ["bunnymask"] = 1,
 					["stonemask"] = 1, ["wolfmask"] = 1, ["sword"] = 4, ["shield"] = 3, ["armor"] = 2, ["gloves"] = 2,
 					["boots"] = 1, ["flippers"] = 1, ["moonpearl"] = 1, ["health"] = 160, ["maxhealth"] = 160, ["magic"] = 128,
@@ -328,7 +328,7 @@ namespace Mesen.Utilities
 				Description = "Strip inventory and story bits back to a clean baseline.",
 				Items = new Dictionary<string, int> {
 					["bow"] = 0, ["boomerang"] = 0, ["hookshot"] = 0, ["bombs"] = 0, ["powder"] = 0, ["firerod"] = 0,
-					["icerod"] = 0, ["lamp"] = 0, ["hammer"] = 0, ["flute"] = 0, ["ocarina_song"] = 0, ["feather"] = 0,
+					["icerod"] = 0, ["lamp"] = 0, ["hammer"] = 0, ["flute"] = 0, ["song_bits"] = 0, ["ocarina_song"] = 0, ["feather"] = 0,
 					["book"] = 0, ["somaria"] = 0, ["mirror"] = 0, ["zoramask"] = 0, ["dekumask"] = 0, ["bunnymask"] = 0,
 					["stonemask"] = 0, ["wolfmask"] = 0, ["sword"] = 0, ["shield"] = 0, ["armor"] = 0, ["gloves"] = 0,
 					["boots"] = 0, ["flippers"] = 0, ["moonpearl"] = 0, ["health"] = 48, ["maxhealth"] = 48, ["magic"] = 128,
@@ -554,6 +554,7 @@ namespace Mesen.Utilities
 						case 0x7EF3A2: // Appraised rings
 						case 0x7EF396: // Purchased maps
 						case 0x7EF398: // Collected dungeon scrolls
+						case 0x7EF3B1: // Learned songs; retain reserved upper bits.
 							value |= current;
 							break;
 						case 0x7EF38B: case 0x7EF38D: case 0x7EF38F: // Magic Bag
