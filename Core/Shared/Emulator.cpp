@@ -1017,12 +1017,21 @@ void Emulator::PauseOnNextFrame()
 
 void Emulator::Pause()
 {
+	if(!TryPause()) {
+		MessageManager::Log("[Pause] Emulation thread did not respond within 500ms; pause request cancelled");
+	}
+}
+
+bool Emulator::TryPause(uint32_t timeoutMs)
+{
 	shared_ptr<Debugger> debugger = _debugger.lock();
 	if(debugger) {
-		debugger->Step(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause);
+		// Bound the actual break acquisition, not a separate preflight wait.
+		return debugger->TryStep(GetCpuTypes()[0], 1, StepType::Step, BreakSource::Pause, timeoutMs);
 	} else {
 		_paused = true;
 	}
+	return true;
 }
 
 void Emulator::Resume()

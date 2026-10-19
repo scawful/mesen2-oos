@@ -138,6 +138,7 @@ public:
 	void Run();
 	void PauseOnNextFrame();
 	void Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source = BreakSource::Unspecified);
+	bool TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs);
 	bool IsPaused();
 	bool IsExecutionStopped();
 

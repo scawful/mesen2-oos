@@ -677,7 +677,15 @@ void Debugger::PauseOnNextFrame()
 
 void Debugger::Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source)
 {
-	DebugBreakHelper helper(this);
+	TryStep(cpuType, stepCount, type, source, 0);
+}
+
+bool Debugger::TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs)
+{
+	DebugBreakHelper helper(this, false, timeoutMs);
+	if(!helper.IsAcquired()) {
+		return false;
+	}
 	IDebugger* debugger = _debuggers[(int)cpuType].Debugger.get();
 
 	if(debugger) {
@@ -699,6 +707,7 @@ void Debugger::Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSour
 	}
 
 	_waitForBreakResume = false;
+	return true;
 }
 
 bool Debugger::IsPaused()

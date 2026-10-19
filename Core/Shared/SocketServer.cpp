@@ -1143,7 +1143,13 @@ SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cm
 
 SocketResponse SocketServer::HandlePause(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
-	emu->Pause();
+	if(!emu->TryPause()) {
+		resp.success = false;
+		resp.error = "Emulation thread did not respond within 500ms; pause request cancelled";
+		resp.errorCode = SocketErrorCode::Timeout;
+		resp.retryable = true;
+		return resp;
+	}
 	resp.success = true;
 	resp.data = "\"OK\"";
 	return resp;

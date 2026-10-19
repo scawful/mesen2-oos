@@ -183,6 +183,7 @@ public:
 	void PauseOnNextFrame();
 
 	void Pause();
+	bool TryPause(uint32_t timeoutMs = 500);
 	void Resume();
 	bool IsPaused();
 
