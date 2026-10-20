@@ -908,7 +908,7 @@ class OracleDebugClient:
         run_bit = 0x04
         try:
             data = self.bridge.read_block(OracleRAM.ABILITY_FLAGS, 1)
-        except ConnectionError as exc:
+        except (ConnectionError, TimeoutError) as exc:
             self.last_error = f"Ability read failed: {exc}"
             return False
         if len(data) != 1:
@@ -916,14 +916,20 @@ class OracleDebugClient:
             return False
         ability = data[0] | run_bit if value else data[0] & ~run_bit
         try:
-            if not self.bridge.write_memory(addr, value):
-                self.last_error = "Boots write failed"
-                return False
-            if not self.bridge.write_memory(OracleRAM.ABILITY_FLAGS, ability):
-                self.last_error = "Ability write failed after boots write"
-                return False
-        except ConnectionError as exc:
+            boots_ok = self.bridge.write_memory(addr, value)
+        except (ConnectionError, TimeoutError) as exc:
             self.last_error = f"Boots write failed: {exc}"
+            return False
+        if not boots_ok:
+            self.last_error = "Boots write failed"
+            return False
+        try:
+            ability_ok = self.bridge.write_memory(OracleRAM.ABILITY_FLAGS, ability)
+        except (ConnectionError, TimeoutError) as exc:
+            self.last_error = f"Ability write failed after boots write: {exc}"
+            return False
+        if not ability_ok:
+            self.last_error = "Ability write failed after boots write"
             return False
         return True
 

@@ -16,10 +16,14 @@ class ItemBridge:
         self.fail_write = None
         self.read_result = None
         self.raise_read = False
+        self.read_exc = None
+        self.write_exc = {}
 
     def read_block(self, addr, length):
         if self.raise_read:
             raise ConnectionError("Socket error: down")
+        if self.read_exc:
+            raise self.read_exc
         if self.read_result is not None:
             return self.read_result
         return bytes(self.memory.get(addr + i, 0) for i in range(length))
@@ -29,6 +33,8 @@ class ItemBridge:
 
     def write_memory(self, addr, value):
         self.writes.append((addr, value))
+        if addr in self.write_exc:
+            raise self.write_exc[addr]
         if addr == self.fail_write:
             return False
         self.memory[addr] = value
@@ -119,3 +125,31 @@ def test_ability_read_connection_error_returns_false_without_writes():
     assert client.set_item("boots", 1) is False
     assert client.bridge.writes == []
     assert client.last_error
+
+
+def test_ability_read_timeout_returns_false_without_writes():
+    client = make_client({BOOTS: 0, ABILITY: 0xF8})
+    client.bridge.read_exc = TimeoutError("No response from Mesen2 within 5s")
+    assert client.set_item("boots", 1) is False
+    assert client.bridge.writes == []
+    assert client.last_error.startswith("Ability read failed")
+
+
+@pytest.mark.parametrize("exc_type", [TimeoutError, ConnectionError])
+def test_boots_write_exception_skips_ability_write(exc_type):
+    client = make_client({BOOTS: 0, ABILITY: 0xF8})
+    client.bridge.write_exc = {BOOTS: exc_type("down")}
+    assert client.set_item("boots", 1) is False
+    assert client.bridge.writes == [(BOOTS, 1)]
+    assert client.bridge.memory == {BOOTS: 0, ABILITY: 0xF8}
+    assert client.last_error.startswith("Boots write failed")
+
+
+@pytest.mark.parametrize("exc_type", [TimeoutError, ConnectionError])
+def test_ability_write_exception_after_boots_changed(exc_type):
+    client = make_client({BOOTS: 0, ABILITY: 0xF8})
+    client.bridge.write_exc = {ABILITY: exc_type("down")}
+    assert client.set_item("boots", 1) is False
+    assert client.bridge.writes == [(BOOTS, 1), (ABILITY, 0xFC)]
+    assert client.bridge.memory == {BOOTS: 1, ABILITY: 0xF8}
+    assert client.last_error.startswith("Ability write failed after boots write")
