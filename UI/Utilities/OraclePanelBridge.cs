@@ -542,9 +542,10 @@ namespace Mesen.Utilities
 				}
 
 				WriteValue(address, value, update.Key.Equals("rupees", StringComparison.OrdinalIgnoreCase));
-				// Dashing gates on AbilityFlags Run, not the Boots byte; item receipt only ever sets it.
-				if(address == BootsAddr && value != 0) {
-					WriteByte(AbilityFlagsAddr, ReadByte(AbilityFlagsAddr) | AbilityRunBit);
+				// Dashing gates on AbilityFlags Run ($079C32), not the Boots byte, so the editor keeps them paired.
+				if(address == BootsAddr) {
+					byte ability = ReadByte(AbilityFlagsAddr);
+					WriteByte(AbilityFlagsAddr, value != 0 ? ability | AbilityRunBit : ability & ~AbilityRunBit);
 				}
 				changed++;
 			}
