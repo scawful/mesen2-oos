@@ -899,7 +899,33 @@ class OracleDebugClient:
         addr, _, _ = ITEMS[item_name]
         if item_name == "rupees":
             return self.bridge.write_memory16(addr, value)
+        if item_name == "boots":
+            return self._set_boots(addr, value)
         return self.bridge.write_memory(addr, value)
+
+    def _set_boots(self, addr: int, value: int) -> bool:
+        # Dash is gated on the run bit in the ability byte, not the boots byte.
+        run_bit = 0x04
+        try:
+            data = self.bridge.read_block(OracleRAM.ABILITY_FLAGS, 1)
+        except ConnectionError as exc:
+            self.last_error = f"Ability read failed: {exc}"
+            return False
+        if len(data) != 1:
+            self.last_error = "Ability read failed"
+            return False
+        ability = data[0] | run_bit if value else data[0] & ~run_bit
+        try:
+            if not self.bridge.write_memory(addr, value):
+                self.last_error = "Boots write failed"
+                return False
+            if not self.bridge.write_memory(OracleRAM.ABILITY_FLAGS, ability):
+                self.last_error = "Ability write failed after boots write"
+                return False
+        except ConnectionError as exc:
+            self.last_error = f"Boots write failed: {exc}"
+            return False
+        return True
 
     def get_all_items(self) -> dict:
         """Get all items and their values."""
