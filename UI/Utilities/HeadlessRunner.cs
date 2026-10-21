@@ -70,7 +70,7 @@ namespace Mesen.Utilities
 
 			foreach(string file in cmdLine.FilesToLoad) {
 				string ext = Path.GetExtension(file).ToLowerInvariant();
-				if(FolderHelper.IsRomFile(file)) {
+				if(FolderHelper.IsRomFile(file) || FolderHelper.IsProjectFile(file)) {
 					romFile ??= file;
 					continue;
 				}

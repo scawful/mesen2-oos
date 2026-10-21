@@ -10,6 +10,7 @@
 #include "Utilities/safe_ptr.h"
 #include "Utilities/SimpleLock.h"
 #include "Utilities/VirtualFile.h"
+#include "Core/Shared/YazeProject.h"
 
 class Debugger;
 class DebugHud;
@@ -88,6 +89,9 @@ private:
 	const shared_ptr<RewindManager> _rewindManager;
 
 	unique_ptr<SocketServer> _socketServer;
+
+	YazeProjectInfo _project;
+	SimpleLock _projectLock;
 
 	thread::id _emulationThreadId;
 
@@ -209,6 +213,8 @@ public:
 	GameServer* GetGameServer() { return _gameServer.get(); }
 	GameClient* GetGameClient() { return _gameClient.get(); }
 	SocketServer* GetSocketServer() { return _socketServer.get(); }
+	// Project the current ROM was loaded from (empty ProjectPath when loaded directly).
+	YazeProjectInfo GetProjectInfo();
 	shared_ptr<SystemActionManager> GetSystemActionManager() { return _systemActionManager; }
 
 	BaseVideoFilter* GetVideoFilter(bool getDefaultFilter = false);

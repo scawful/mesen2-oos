@@ -16,6 +16,7 @@
 | Symbols | SYMBOLS_LOAD, SYMBOLS_RELOAD, SYMBOLS_RESOLVE |
 | ALTTP | GAMESTATE, SPRITES, COLLISION_OVERLAY, COLLISION_DUMP |
 | Events | SUBSCRIBE, LOGPOINT |
+| Capture | CAMERA, RECORD, LIVE, PROJECT, SCREENSHOT |
 | Utility | HELP, BATCH, ROMINFO, SPEED, REWIND, CHEAT, INPUT, DEBUG_LOG |
 
 ---
@@ -420,6 +421,80 @@ Set up triggers for watch value changes.
 → {"id":1}
 ```
 
+## Capture Commands
+
+These work in headless instances (`--headless`), need no window, and never
+change game state. `tools/studio/mesen_studio.py` wraps them.
+
+### CAMERA
+Virtual camera: crops, zooms, pans and follows over the rendered frame. It only
+affects camera screenshots, camera recordings and LIVE; the game and the normal
+window are unchanged.
+
+| action | Params |
+|--------|--------|
+| `get` (default) | — |
+| `set` | `mode` (full/manual/follow), `filter` (nearest/bilinear), `width`+`height` (output size, 0 = game size), `x`, `y` (view center in game pixels, negative = frame center), `zoom` (1 = largest crop of the output aspect), `clamp`, `smoothing` (0-1, follow only), `deadzone_x`, `deadzone_y`, follow source params |
+| `follow` | Same as `set`, with `mode=follow` |
+| `pan` | `x`, `y`, `zoom` (omitted = keep), `frames` (default 60), `ease` (smooth/linear). Switches to manual. |
+| `reset` | Back to full frame, no follow source |
+
+Follow source params: `follow_x`, `follow_y` (target position addresses),
+optional `scroll_x`, `scroll_y` (subtracted from the target), `offset_x`,
+`offset_y`, `size` (1 or 2 bytes), `memtype` (default `wram`). Addresses accept
+`0x`, `$` or decimal; `$7E0000-$7FFFFF` maps to WRAM. Use `-1` or `none` to clear.
+
+The output size cannot change while LIVE or a camera RECORD is active.
+```json
+{"type":"CAMERA","action":"follow","width":"1280","height":"720","zoom":"2","follow_x":"0x7E0022","follow_y":"0x7E0020","scroll_x":"0x7E00E2","scroll_y":"0x7E00E8","offset_x":"8","offset_y":"16"}
+{"type":"CAMERA","action":"pan","x":"128","y":"112","zoom":"1","frames":"120"}
+→ {"success":true,"data":{"mode":"manual","width":1280,"height":720,"x":...,"zoom":...,"view":{"x":..,"y":..,"w":..,"h":..},"follow":{...}}}
+```
+
+### RECORD
+Record video (AVI or GIF, with game audio in AVI) or audio only (WAV).
+
+| action | Params |
+|--------|--------|
+| `status` (default) | — |
+| `start` | `path` (absolute), `kind` (avi/gif/wav, default from extension), `codec` (zmbv/cscd/raw, default zmbv), `compression` (0-9, default 6), `camera` (record through CAMERA), `system_hud`, `input_hud`, `overwrite` |
+| `stop` | `kind` (video/audio/all, default all) |
+```json
+{"type":"RECORD","action":"start","path":"/abs/clip.avi","camera":"true"}
+→ {"success":true,"data":{"video":{"active":true,"path":"/abs/clip.avi","camera":true},"audio":{"active":false,"path":""}}}
+```
+A plain recording stops on its own if the game resolution changes; a camera
+recording keeps a fixed size.
+
+### LIVE
+Stream raw frames and audio to named pipes for a live viewer
+(`mesen_studio.py live` runs ffmpeg and a localhost browser page on top of this).
+Video is BGRA at the camera output size; audio is s16le stereo at the mixer rate.
+Frames are dropped, never queued without bound, when the reader falls behind.
+
+| action | Params |
+|--------|--------|
+| `status` (default) | — |
+| `start` | `video` (existing FIFO), `audio` (optional FIFO), `every` (send every Nth frame, default 1), `downscale` (1-8, box-filter the camera frame before the pipe, default 1) |
+| `stop` | — |
+```json
+{"type":"LIVE","action":"start","video":"/tmp/x/video.fifo","audio":"/tmp/x/audio.fifo"}
+→ {"success":true,"data":{"active":true,"width":256,"height":224,"pixel_format":"bgra","fps":60.0988,"every":1,"downscale":1,"sample_rate":48000,"channels":2,"sample_format":"s16le","video":{"connected":false,"sent":0,"dropped":0,"bytes":0},"audio":{...}}}
+```
+`width`/`height` are the streamed size (camera output size / `downscale`).
+A 1280x720 BGRA stream is 220 MB/s; under background QoS a macOS pipe moves far
+less, so large cameras should use `downscale`. When reading the audio pipe with
+ffmpeg, do not use `-use_wallclock_as_timestamps` on it (ffmpeg stops reading).
+LIVE is not available on Windows.
+
+### PROJECT
+Report the loaded yaze project. Loading a `.yaze` file as the ROM runs its
+`[build] build_target` (or `[files] rom_filename` if that file is missing).
+```json
+{"type":"PROJECT"}
+→ {"success":true,"data":{"loaded":true,"project":"/abs/Oracle-of-Secrets.yaze","name":"Oracle of Secrets","rom":"/abs/Roms/oos168x.sfc","symbols":"/abs/Roms/oos168x.sym","profile":"","current_rom":"/abs/Roms/oos168x.sfc"}}
+```
+
 ## Utility Commands
 
 ### HELP
@@ -453,11 +528,16 @@ Notes:
 - `SAVESTATE_LABEL` supports `action`: `get` (default), `set`, `clear`.
 
 ### SCREENSHOT
-Capture screen as base64 PNG.
+Capture screen as base64 PNG, or write it to a file. `camera=true` captures
+through the virtual camera (see CAMERA) at the camera output size.
 ```json
 {"type":"SCREENSHOT"}
 → {"success":true,"data":"<base64 PNG>"}
+{"type":"SCREENSHOT","path":"/abs/shot.png","camera":"true","overwrite":"true"}
+→ {"success":true,"data":{"path":"/abs/shot.png","bytes":51234,"width":1280,"height":720}}
 ```
+Output paths must be absolute, the folder must exist, and an existing file is
+only replaced with `overwrite=true`. This applies to RECORD as well.
 
 ### ROMINFO
 Get loaded ROM information.

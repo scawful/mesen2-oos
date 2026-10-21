@@ -25,6 +25,11 @@ namespace Mesen.Utilities
 			return _romExtensions.Contains(ext);
 		}
 
+		public static bool IsProjectFile(string path)
+		{
+			return Path.GetExtension(path).ToLower() == ".yaze";
+		}
+
 		public static bool IsArchiveFile(string path)
 		{
 			string ext = Path.GetExtension(path).ToLower();

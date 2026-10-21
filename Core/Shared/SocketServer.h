@@ -392,7 +392,16 @@ private:
 	static SocketResponse HandleStateDiff(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleWatchTrigger(Emulator* emu, const SocketCommand& cmd);
 
+	// Capture handlers (SocketServerCapture.cpp)
+	static SocketResponse HandleCamera(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleRecord(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleLive(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleProject(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleCaptureScreenshot(Emulator* emu, const SocketCommand& cmd);
+
 public:
+	static bool ParseMemoryTypeName(const string& name, MemoryType& type);
+
 	SocketServer(Emulator* emu);
 	~SocketServer();
 

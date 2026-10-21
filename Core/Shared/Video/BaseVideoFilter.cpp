@@ -163,6 +163,17 @@ void BaseVideoFilter::YiqToRgb(double y, double i, double q, double& r, double& 
 	b = std::max(0.0, std::min(1.0, (y + _yiqToRgbMatrix[4] * i + _yiqToRgbMatrix[5] * q)));
 }
 
+bool BaseVideoFilter::CopyOutputBuffer(vector<uint32_t>& buffer, FrameInfo& frameInfo)
+{
+	auto lock = _frameLock.AcquireSafe();
+	if(_bufferSize == 0 || !GetOutputBuffer() || (size_t)_frameInfo.Width * _frameInfo.Height > _bufferSize) {
+		return false;
+	}
+	frameInfo = _frameInfo;
+	buffer.assign(GetOutputBuffer(), GetOutputBuffer() + (size_t)frameInfo.Width * frameInfo.Height);
+	return true;
+}
+
 void BaseVideoFilter::TakeScreenshot(VideoFilterType filterType, string filename, std::stringstream *stream)
 {
 	uint32_t* pngBuffer;

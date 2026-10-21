@@ -394,6 +394,12 @@ void SocketServer::RegisterHandlers() {
 	_handlers["STATE_DIFF"] = HandleStateDiff;
 	_handlers["WATCH_TRIGGER"] = HandleWatchTrigger;
 
+	// Capture handlers
+	_handlers["CAMERA"] = HandleCamera;
+	_handlers["RECORD"] = HandleRecord;
+	_handlers["LIVE"] = HandleLive;
+	_handlers["PROJECT"] = HandleProject;
+
 	// Initialize validation rules
 	{
 		auto lock = _lock.AcquireSafe();
@@ -2185,6 +2191,11 @@ SocketResponse SocketServer::HandleExecLua(Emulator* emu, const SocketCommand& c
 	return resp;
 }
 
+bool SocketServer::ParseMemoryTypeName(const string& name, MemoryType& type)
+{
+	return TryParseMemoryType(name, type);
+}
+
 SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
 
@@ -2192,6 +2203,10 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 		resp.success = false;
 		resp.error = "No ROM loaded";
 		return resp;
+	}
+
+	if (cmd.HasParam("camera") || cmd.HasParam("path")) {
+		return HandleCaptureScreenshot(emu, cmd);
 	}
 
 	// Capture screenshot to PNG stream
@@ -6434,7 +6449,11 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"BREAKPOINT", "Manage breakpoints", "action (add/list/remove/enable/disable/clear), addr, bptype, condition", "{\"type\":\"BREAKPOINT\",\"action\":\"add\",\"addr\":\"0x008000\",\"bptype\":\"exec\"}"},
 			{"TRACE", "Get or control execution trace log", "action (start/stop/status/clear) or count/offset; format/condition/labels/indent", "{\"type\":\"TRACE\",\"action\":\"start\",\"clear\":\"true\"}"},
 			{"BATCH", "Execute multiple commands at once", "commands (JSON array as string)", "{\"type\":\"BATCH\",\"commands\":\"[{\\\"type\\\":\\\"PING\\\"}]\"}"},
-			{"SCREENSHOT", "Capture screen as base64 PNG", "", "{\"type\":\"SCREENSHOT\"}"},
+			{"SCREENSHOT", "Capture screen as base64 PNG, or write it to a file", "path (optional, absolute .png), camera (optional, frame through CAMERA), overwrite (optional)", "{\"type\":\"SCREENSHOT\",\"path\":\"/tmp/shot.png\",\"camera\":\"true\"}"},
+			{"CAMERA", "Virtual capture camera for recordings, screenshots and LIVE (never changes game state)", "action (get/set/pan/reset); set: mode (full/manual/follow), width, height, x, y, zoom, clamp, filter (nearest/bilinear), smoothing, deadzone_x, deadzone_y, follow_x, follow_y, scroll_x, scroll_y, offset_x, offset_y, memtype, size; pan: x, y, zoom, frames, ease (smooth/linear)", "{\"type\":\"CAMERA\",\"action\":\"set\",\"mode\":\"follow\",\"width\":\"1280\",\"height\":\"720\",\"zoom\":\"2\",\"follow_x\":\"0x7E0022\",\"follow_y\":\"0x7E0020\",\"scroll_x\":\"0x7E00E2\",\"scroll_y\":\"0x7E00E8\"}"},
+			{"RECORD", "Record video (AVI/GIF, with audio) or audio (WAV) to a file", "action (start/stop/status); start: path (absolute), kind (avi/gif/wav, default from extension), codec (zmbv/cscd/raw), compression, camera, system_hud, input_hud, overwrite; stop: kind (video/audio/all)", "{\"type\":\"RECORD\",\"action\":\"start\",\"path\":\"/tmp/clip.avi\",\"camera\":\"true\"}"},
+			{"LIVE", "Stream camera video (BGRA) and audio (s16le stereo) to named pipes for an external encoder", "action (start/stop/status); start: video (FIFO path), audio (FIFO path, optional), every (frame interval)", "{\"type\":\"LIVE\",\"action\":\"start\",\"video\":\"/tmp/live/video.fifo\",\"audio\":\"/tmp/live/audio.fifo\"}"},
+			{"PROJECT", "Show the yaze project (.yaze) the ROM was loaded from; load one with LOADROM path=<file>.yaze", "", "{\"type\":\"PROJECT\"}"},
 			{"SAVESTATE", "Save state to slot or file", "slot or path, label (optional), pause (optional), allow_external (optional)", "{\"type\":\"SAVESTATE\",\"slot\":\"1\",\"label\":\"Boss room\",\"pause\":\"true\"}"},
 			{"SAVESTATE_LABEL", "Get/set save state labels", "action (get/set/clear), slot or path, label (set only)", "{\"type\":\"SAVESTATE_LABEL\",\"action\":\"set\",\"slot\":\"1\",\"label\":\"Boss room\"}"},
 			{"LOADSTATE", "Load state from slot or file", "slot or path, pause (optional), allow_external (optional)", "{\"type\":\"LOADSTATE\",\"slot\":\"1\",\"pause\":\"true\"}"},
@@ -6501,7 +6520,8 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"COLLISION_OVERLAY", "COLLISION_DUMP", "DRAW_PATH",
 		"ROMINFO", "SPEED", "REWIND", "CHEAT", "INPUT",
 		"STATEINSPECT", "LOGPOINT", "SUBSCRIBE", "EXEC_LUA", "LOADSCRIPT", "HELP",
-		"GAMESTATE", "SPRITES"
+		"GAMESTATE", "SPRITES",
+		"CAMERA", "RECORD", "LIVE", "PROJECT"
 	};
 
 	stringstream ss;

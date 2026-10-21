@@ -12,6 +12,7 @@
 #include "Utilities/Video/IVideoRecorder.h"
 #include "Utilities/Video/AviRecorder.h"
 #include "Utilities/Video/GifRecorder.h"
+#include "Shared/Video/LiveStreamSink.h"
 
 VideoRenderer::VideoRenderer(Emulator* emu)
 {
@@ -201,7 +202,7 @@ void VideoRenderer::UpdateFrame(RenderedFrame& frame)
 		_systemHud->UpdateHud();
 	}
 
-	ProcessAviRecording(frame);
+	ProcessCapture(frame);
 
 	{
 		auto lock = _frameLock.AcquireSafe();
@@ -282,7 +283,171 @@ void VideoRenderer::ProcessAviRecording(RenderedFrame& frame)
 	}
 }
 
+double VideoRenderer::GetGamePixelScale(const RenderedFrame& frame)
+{
+	FrameInfo gameSize = _emu->GetVideoDecoder()->GetBaseFrameInfo(true);
+	if(gameSize.Height == 0) {
+		return 1.0;
+	}
+	return (double)frame.Height / gameSize.Height;
+}
+
+FrameInfo VideoRenderer::GetGameFrameSize()
+{
+	return _emu->GetVideoDecoder()->GetBaseFrameInfo(true);
+}
+
+void VideoRenderer::SetCameraFollow(const CaptureFollowSource& source)
+{
+	auto lock = _followLock.AcquireSafe();
+	_follow = source;
+}
+
+CaptureFollowSource VideoRenderer::GetCameraFollow()
+{
+	auto lock = _followLock.AcquireSafe();
+	return _follow;
+}
+
+bool VideoRenderer::ReadFollowTarget(double& x, double& y)
+{
+	CaptureFollowSource source = GetCameraFollow();
+	if(source.TargetXAddr < 0 || source.TargetYAddr < 0) {
+		return false;
+	}
+
+	ConsoleMemoryInfo mem = _emu->GetMemory(source.MemType);
+	if(!mem.Memory || mem.Size == 0) {
+		return false;
+	}
+	uint8_t* bytes = (uint8_t*)mem.Memory;
+	auto read = [&](int32_t addr, int32_t& value) {
+		if(addr < 0) {
+			value = 0;
+			return true;
+		}
+		if((uint32_t)addr + source.ValueSize > mem.Size) {
+			return false;
+		}
+		value = bytes[addr];
+		if(source.ValueSize > 1) {
+			value |= bytes[addr + 1] << 8;
+		}
+		return true;
+	};
+
+	int32_t targetX, targetY, scrollX, scrollY;
+	if(!read(source.TargetXAddr, targetX) || !read(source.TargetYAddr, targetY) || !read(source.ScrollXAddr, scrollX) || !read(source.ScrollYAddr, scrollY)) {
+		return false;
+	}
+	x = targetX - scrollX + source.OffsetX;
+	y = targetY - scrollY + source.OffsetY;
+	return true;
+}
+
+void VideoRenderer::ProcessCapture(RenderedFrame& frame)
+{
+	double pixelScale = GetGamePixelScale(frame);
+	uint32_t gameWidth = (uint32_t)std::lround(frame.Width / pixelScale);
+	uint32_t gameHeight = (uint32_t)std::lround(frame.Height / pixelScale);
+
+	double targetX = 0, targetY = 0;
+	bool hasTarget = _camera.GetState().Mode == CaptureCameraMode::Follow && ReadFollowTarget(targetX, targetY);
+	_camera.Tick(gameWidth, gameHeight, hasTarget, targetX, targetY);
+
+	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+	shared_ptr<LiveStreamSink> live = _liveSink.lock();
+	bool cameraRecording = recorder && _recordThroughCamera;
+
+	if(cameraRecording || live) {
+		_camera.Render((uint32_t*)frame.FrameBuffer, frame.Width, frame.Height, pixelScale, _cameraFrame, _cameraFrameWidth, _cameraFrameHeight);
+
+		if(cameraRecording) {
+			if(!recorder->IsRecording()) {
+				recorder->StartRecording(_cameraFrameWidth, _cameraFrameHeight, 4, _emu->GetSettings()->GetAudioConfig().SampleRate, _emu->GetFps());
+			}
+			if(!recorder->AddFrame(_cameraFrame.data(), _cameraFrameWidth, _cameraFrameHeight, _emu->GetFps())) {
+				StopRecording();
+			}
+		}
+
+		if(live) {
+			live->PushFrame(_cameraFrame.data(), _cameraFrameWidth, _cameraFrameHeight);
+		}
+	}
+
+	if(recorder && !_recordThroughCamera) {
+		ProcessAviRecording(frame);
+	}
+}
+
+bool VideoRenderer::RenderCameraSnapshot(vector<uint32_t>& buffer, uint32_t& width, uint32_t& height)
+{
+	vector<uint32_t> source;
+	FrameInfo sourceSize = {};
+	if(!_emu->GetVideoDecoder()->CopyLastFrame(source, sourceSize) || sourceSize.Height == 0) {
+		return false;
+	}
+	FrameInfo gameSize = GetGameFrameSize();
+	double pixelScale = gameSize.Height ? (double)sourceSize.Height / gameSize.Height : 1.0;
+	_camera.Render(source.data(), sourceSize.Width, sourceSize.Height, pixelScale, buffer, width, height);
+	return true;
+}
+
+bool VideoRenderer::StartLiveStream(string videoPath, string audioPath, uint32_t frameInterval, uint32_t downscale, string& error)
+{
+	if(!LiveStreamSink::IsSupported()) {
+		error = "Live streaming is not supported on this platform";
+		return false;
+	}
+	if(_liveSink) {
+		error = "A live stream is already active";
+		return false;
+	}
+
+	FrameInfo gameSize = GetGameFrameSize();
+	uint32_t width, height;
+	_camera.GetOutputSize(gameSize.Width, gameSize.Height, width, height);
+	if(width == 0 || height == 0) {
+		error = "No frame has been rendered yet";
+		return false;
+	}
+	if(width / downscale < 16 || height / downscale < 16) {
+		error = "downscale leaves a frame smaller than 16x16";
+		return false;
+	}
+
+	//The encoder reads fixed-size raw frames, so pin the camera output size for the stream's lifetime
+	CaptureCameraState state = _camera.GetState();
+	state.OutputWidth = width;
+	state.OutputHeight = height;
+	_camera.SetState(state);
+
+	_liveSink.reset(new LiveStreamSink(videoPath, audioPath, width, height, downscale, _emu->GetSettings()->GetAudioConfig().SampleRate, frameInterval));
+	return true;
+}
+
+void VideoRenderer::StopLiveStream()
+{
+	_liveSink.reset();
+}
+
+shared_ptr<LiveStreamSink> VideoRenderer::GetLiveStream()
+{
+	return _liveSink.lock();
+}
+
+bool VideoRenderer::NeedsRecordingSound()
+{
+	return _recorder || _liveSink;
+}
+
 void VideoRenderer::StartRecording(string filename, RecordAviOptions options)
+{
+	StartRecording(filename, options, false);
+}
+
+bool VideoRenderer::StartRecording(string filename, RecordAviOptions options, bool throughCamera)
 {
 	_recorderOptions = options;
 
@@ -294,15 +459,31 @@ void VideoRenderer::StartRecording(string filename, RecordAviOptions options)
 	}
 
 	if(recorder->Init(filename)) {
+		if(throughCamera) {
+			//Recorders need a constant frame size; pin the camera output for the recording
+			FrameInfo gameSize = GetGameFrameSize();
+			CaptureCameraState state = _camera.GetState();
+			_camera.GetOutputSize(gameSize.Width, gameSize.Height, state.OutputWidth, state.OutputHeight);
+			_camera.SetState(state);
+		}
+		_recordThroughCamera = throughCamera;
 		_recorder.reset(recorder);
 		
 		if(!options.RecordSystemHud) {
 			//Only display message if not recording the system HUD (otherwise the message is always visible on the recording, which isn't ideal)
 			MessageManager::DisplayMessage("VideoRecorder", "VideoRecorderStarted", filename);
 		}
+		return true;
 	} else {
 		MessageManager::DisplayMessage("VideoRecorder", "CouldNotWriteToFile", filename);
+		return false;
 	}
+}
+
+string VideoRenderer::GetRecordingFile()
+{
+	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+	return recorder ? recorder->GetOutputFile() : "";
 }
 
 void VideoRenderer::AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount, uint32_t sampleRate)
@@ -312,6 +493,11 @@ void VideoRenderer::AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount
 		if(!recorder->AddSound(soundBuffer, sampleCount, sampleRate)) {
 			StopRecording();
 		}
+	}
+
+	shared_ptr<LiveStreamSink> live = _liveSink.lock();
+	if(live) {
+		live->PushAudio(soundBuffer, sampleCount, sampleRate);
 	}
 }
 
@@ -323,6 +509,7 @@ void VideoRenderer::StopRecording()
 	}
 	_aviRecorderSurface.UpdateSize(0, 0);
 	_recorder.reset();
+	_recordThroughCamera = false;
 }
 
 bool VideoRenderer::IsRecording()

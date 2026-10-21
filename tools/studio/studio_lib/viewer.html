@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mesen Studio · Live</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d0f12; color: #d7dbe0; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; gap: 16px; align-items: center; padding: 8px 14px; background: #15181d; border-bottom: 1px solid #23272e; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block; margin-right: 6px; }
+  header .dot.on { background: #e5484d; box-shadow: 0 0 6px #e5484d; }
+  header button { background: #252a32; color: inherit; border: 1px solid #343a44; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  main { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  video { max-width: 100%; max-height: 100%; image-rendering: pixelated; background: #000; }
+  footer { padding: 6px 14px; color: #8b929c; font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #15181d; border-top: 1px solid #23272e; }
+  #notice { padding: 24px; max-width: 560px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dot" class="dot"></span><span id="label">Mesen Studio</span></h1>
+  <button id="unmute">Unmute</button>
+  <button id="edge">Jump to live</button>
+</header>
+<main><video id="video" autoplay muted playsinline></video></main>
+<footer id="status">connecting…</footer>
+<script>
+const video = document.getElementById("video");
+const playlist = "hls/live.m3u8";
+
+document.getElementById("unmute").onclick = () => { video.muted = !video.muted; document.getElementById("unmute").textContent = video.muted ? "Unmute" : "Mute"; video.play(); };
+document.getElementById("edge").onclick = () => jumpToEdge(0.5);
+
+function jumpToEdge(margin) {
+  const b = video.buffered;
+  if (b.length) video.currentTime = Math.max(b.start(b.length - 1), b.end(b.length - 1) - margin);
+}
+
+async function waitForPlaylist() {
+  for (;;) {
+    const r = await fetch(playlist, { cache: "no-store" }).catch(() => null);
+    if (r && r.ok) return;
+    await new Promise(res => setTimeout(res, 500));
+  }
+}
+
+async function startMse() {
+  const source = new MediaSource();
+  video.src = URL.createObjectURL(source);
+  await new Promise(res => source.addEventListener("sourceopen", res, { once: true }));
+  const buffer = source.addSourceBuffer('video/mp4; codecs="avc1.640028, mp4a.40.2"');
+  const appendAsync = data => new Promise((res, rej) => {
+    buffer.addEventListener("updateend", res, { once: true });
+    buffer.addEventListener("error", rej, { once: true });
+    buffer.appendBuffer(data);
+  });
+  const done = new Set();
+  let init = null;
+  for (;;) {
+    try {
+      const text = await (await fetch(playlist, { cache: "no-store" })).text();
+      const map = text.match(/#EXT-X-MAP:URI="([^"]+)"/);
+      if (map && map[1] !== init) {
+        init = map[1];
+        await appendAsync(await (await fetch("hls/" + init, { cache: "no-store" })).arrayBuffer());
+      }
+      for (const line of text.split("\n")) {
+        const name = line.trim();
+        if (!name || name.startsWith("#") || done.has(name)) continue;
+        const r = await fetch("hls/" + name, { cache: "no-store" });
+        if (!r.ok) continue;
+        await appendAsync(await r.arrayBuffer());
+        done.add(name);
+        if (done.size > 64) done.delete(done.values().next().value);
+      }
+      const b = video.buffered;
+      if (b.length && b.end(b.length - 1) - video.currentTime > 4) jumpToEdge(1);
+      if (b.length && video.currentTime - b.start(0) > 60 && !buffer.updating) {
+        await new Promise(res => { buffer.addEventListener("updateend", res, { once: true }); buffer.remove(b.start(0), video.currentTime - 30); });
+      }
+      if (video.paused) video.play().catch(() => {});
+    } catch (e) {
+      console.warn(e);
+    }
+    await new Promise(res => setTimeout(res, 500));
+  }
+}
+
+async function start() {
+  await waitForPlaylist();
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = playlist;
+    video.play().catch(() => {});
+  } else if (window.MediaSource) {
+    startMse();
+  } else {
+    document.querySelector("main").innerHTML = '<div id="notice">This browser cannot play the stream. Open <code>' + location.href + 'hls/live.m3u8</code> in IINA, VLC or QuickTime.</div>';
+  }
+}
+
+async function pollStatus() {
+  try {
+    const s = await (await fetch("status", { cache: "no-store" })).json();
+    if (s.label) document.getElementById("label").textContent = s.label;
+    const live = s.live || {};
+    const emu = s.emulator || {};
+    document.getElementById("dot").classList.toggle("on", !!(live.active && live.video && live.video.connected));
+    const parts = [];
+    if (live.active) parts.push(`${live.width}x${live.height} @ ${Number(live.fps).toFixed(1)}fps`);
+    if (emu.frame !== undefined) parts.push(`frame ${emu.frame}` + (emu.paused ? " (paused)" : ""));
+    if (live.video) parts.push(`video sent ${live.video.sent} dropped ${live.video.dropped}`);
+    if (live.audio) parts.push(`audio sent ${live.audio.sent} dropped ${live.audio.dropped}`);
+    if (s.error) parts.push(s.error);
+    document.getElementById("status").textContent = parts.join(" · ");
+  } catch (e) {
+    document.getElementById("status").textContent = "studio server not reachable";
+  }
+  setTimeout(pollStatus, 2000);
+}
+
+start();
+pollStatus();
+</script>
+</body>
+</html>
