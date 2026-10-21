@@ -69,15 +69,20 @@ bool YazeProject::Resolve(const string& projectPath, YazeProjectInfo& info, stri
 	info.ProjectPath = projectPath;
 	info.Name = values["project.name"];
 
-	//build_target is the assembled ROM that should run; rom_filename is the editable base ROM
+	//build_target is the assembled ROM that should run; rom_filename is the editable base ROM.
+	//A declared build_target that is missing means the hack is unbuilt; running the base ROM instead would look like the hack.
 	string buildTarget = resolve("build.build_target");
 	string baseRom = resolve("files.rom_filename");
-	if(!buildTarget.empty() && FileExists(buildTarget)) {
+	if(!buildTarget.empty()) {
+		if(!FileExists(buildTarget)) {
+			error = "Project build target not found: " + buildTarget + " (build the project first)";
+			return false;
+		}
 		info.RomPath = buildTarget;
 	} else if(!baseRom.empty() && FileExists(baseRom)) {
 		info.RomPath = baseRom;
 	} else {
-		error = "Project ROM not found (build_target='" + buildTarget + "', rom_filename='" + baseRom + "')";
+		error = "Project ROM not found (rom_filename='" + baseRom + "')";
 		return false;
 	}
 

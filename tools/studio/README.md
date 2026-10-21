@@ -91,8 +91,10 @@ do not drive input; use savestates, or wrap an agent run with `record start/stop
 
 ## Projects and other hacks
 
-Mesen2-OOS loads a `.yaze` project like a ROM: it runs `[build] build_target`
-(or `[files] rom_filename` when that is missing). The socket `PROJECT` command
+Mesen2-OOS loads a `.yaze` project like a ROM: it runs `[build] build_target`,
+or `[files] rom_filename` when the project has no build target. If the build
+target is set but the file does not exist, loading fails; build the project
+first. It never runs the base ROM in place of an unbuilt hack. The socket `PROJECT` command
 reports what was loaded, and the studio uses it to pick presets.
 
 Per-hack settings live in an optional sidecar next to the project,

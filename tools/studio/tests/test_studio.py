@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from studio_lib.client import MesenSocket, StudioError, resolve_socket  # noqa: E402
-from studio_lib.live import LiveHandler, plan_stream  # noqa: E402
+from studio_lib.live import LiveHandler, LiveSession, plan_stream  # noqa: E402
 from studio_lib.media import export_command, live_command  # noqa: E402
 from studio_lib.project import load_project, rom_title  # noqa: E402
 from studio_lib import reel  # noqa: E402
@@ -55,6 +55,7 @@ class ProjectTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "Roms").mkdir()
         (self.root / "Test.yaze").write_text(YAZE)
+        make_rom(self.root / "Roms/hack.sfc", "HACK")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -70,8 +71,15 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(project.adapter, "alttp")
         self.assertIsNone(project.profile_path)
 
-    def test_falls_back_to_base_rom(self) -> None:
+    def test_missing_build_target_refuses_instead_of_running_base_rom(self) -> None:
         make_rom(self.root / "Roms/base.sfc", "BASE")
+        (self.root / "Roms/hack.sfc").unlink()
+        with self.assertRaisesRegex(ValueError, "build the project first"):
+            load_project(self.root / "Test.yaze")
+
+    def test_project_without_build_target_runs_base_rom(self) -> None:
+        make_rom(self.root / "Roms/base.sfc", "BASE")
+        (self.root / "Test.yaze").write_text(YAZE.replace("build_target=Roms/hack.sfc", ""))
         project = load_project(self.root / "Test.yaze")
         self.assertEqual(project.rom_path, (self.root / "Roms/base.sfc").resolve())
         self.assertIsNone(project.symbols_path)
@@ -264,6 +272,61 @@ class ReelTests(unittest.TestCase):
             pan = [p for c, p in mesen.calls if c == "CAMERA"][2]
             self.assertEqual((pan["action"], pan["x"], pan["frames"]), ("pan", 200, 30))
             self.assertGreaterEqual(mesen.frame - 1000, 120)
+
+
+class FakeLiveMesen:
+    """One LIVE stream per instance, like the emulator."""
+
+    def __init__(self, video_path: str = "", connected: bool = True) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.video_path = video_path
+        self.connected = connected
+
+    def request(self, command: str, **params):
+        self.calls.append((command, params))
+        if command == "LIVE" and params.get("action") == "status":
+            if not self.video_path:
+                return {"active": False}
+            return {"active": True, "video_path": self.video_path, "video": {"connected": self.connected}}
+        if command == "LIVE" and params.get("action") == "stop":
+            self.video_path = ""
+        return {}
+
+    def stopped(self) -> bool:
+        return ("LIVE", {"action": "stop"}) in self.calls
+
+
+class LiveSessionTests(unittest.TestCase):
+    def make_session(self, mesen: FakeLiveMesen):
+        session = LiveSession(mesen, port=0, scale=None, every=1, audio=False)
+        self.addCleanup(session.stop)
+        return session
+
+    def test_refused_second_viewer_leaves_first_stream_running(self) -> None:
+        mesen = FakeLiveMesen("/tmp/first-viewer/video.fifo")
+        second = self.make_session(mesen)
+        with self.assertRaisesRegex(StudioError, "Another live viewer"):
+            second.start()
+        second.stop()
+        self.assertFalse(mesen.stopped())
+        self.assertEqual(mesen.video_path, "/tmp/first-viewer/video.fifo")
+        self.assertFalse(second.work_dir.exists())
+
+    def test_replaced_viewer_does_not_stop_the_replacement(self) -> None:
+        mesen = FakeLiveMesen()
+        replaced = self.make_session(mesen)
+        replaced._owns_stream = True
+        mesen.video_path = "/tmp/replacement/video.fifo"
+        replaced.stop()
+        self.assertFalse(mesen.stopped())
+
+    def test_owner_stops_its_stream(self) -> None:
+        mesen = FakeLiveMesen()
+        owner = self.make_session(mesen)
+        owner._owns_stream = True
+        mesen.video_path = str(owner.video_fifo)
+        owner.stop()
+        self.assertTrue(mesen.stopped())
 
 
 class LiveHandlerTests(unittest.TestCase):

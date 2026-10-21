@@ -454,6 +454,7 @@ SocketResponse SocketServer::HandleLive(Emulator* emu, const SocketCommand& cmd)
 			};
 			ss << ",\"width\":" << live->GetWidth() << ",\"height\":" << live->GetHeight();
 			ss << ",\"pixel_format\":\"bgra\"";
+			ss << ",\"video_path\":\"" << Escape(live->GetVideoPath()) << "\"";
 			ss << ",\"fps\":" << std::fixed << std::setprecision(4) << emu->GetFps() / live->GetFrameInterval();
 			ss << ",\"every\":" << live->GetFrameInterval() << ",\"downscale\":" << live->GetDownscale();
 			ss << ",\"sample_rate\":" << live->GetSampleRate() << ",\"channels\":2,\"sample_format\":\"s16le\"";

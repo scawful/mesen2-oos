@@ -166,7 +166,9 @@ def load_project(path: str | Path) -> StudioProject:
         project.name = sections.get("project", {}).get("name", path.stem)
         build_target = _resolve(root, sections.get("build", {}).get("build_target", ""))
         base_rom = _resolve(root, sections.get("files", {}).get("rom_filename", ""))
-        if build_target and build_target.exists():
+        if build_target:
+            if not build_target.exists():
+                raise ValueError(f"Project build target not found: {build_target} (build the project first)")
             project.rom_path = build_target
         elif base_rom and base_rom.exists():
             project.rom_path = base_rom

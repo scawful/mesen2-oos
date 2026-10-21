@@ -103,6 +103,7 @@ class LiveSession:
         self.ffmpeg: subprocess.Popen | None = None
         self.server: ThreadingHTTPServer | None = None
         self.stream: dict[str, Any] = {}
+        self._owns_stream = False
         self._stop = threading.Event()
 
     def status(self) -> dict[str, Any]:
@@ -130,6 +131,7 @@ class LiveSession:
         self.stream = self.mesen.request("LIVE", action="start", video=self.video_fifo,
                                          audio=self.audio_fifo if self.audio else None, every=self.every,
                                          downscale=downscale)
+        self._owns_stream = True
         cmd = live_command(self.video_fifo, self.audio_fifo if self.audio else None, self.hls_dir,
                            self.stream["width"], self.stream["height"], self.stream["fps"],
                            self.stream["sample_rate"], scale=upscale,
@@ -158,10 +160,16 @@ class LiveSession:
         return 0
 
     def stop(self) -> None:
-        try:
-            self.mesen.request("LIVE", action="stop")
-        except StudioError:
-            pass
+        # The instance has one stream; a refused viewer, or one replaced with --replace,
+        # must not stop the stream another viewer is reading.
+        if self._owns_stream:
+            try:
+                current = self.mesen.request("LIVE", action="status")
+                if current.get("active") and current.get("video_path") == str(self.video_fifo):
+                    self.mesen.request("LIVE", action="stop")
+            except StudioError:
+                pass
+            self._owns_stream = False
         if self.ffmpeg and self.ffmpeg.poll() is None:
             self.ffmpeg.terminate()
             try:

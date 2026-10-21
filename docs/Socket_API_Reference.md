@@ -489,7 +489,8 @@ LIVE is not available on Windows.
 
 ### PROJECT
 Report the loaded yaze project. Loading a `.yaze` file as the ROM runs its
-`[build] build_target` (or `[files] rom_filename` if that file is missing).
+`[build] build_target`, or `[files] rom_filename` when no build target is set.
+A build target that is set but missing fails the load instead of running the base ROM.
 ```json
 {"type":"PROJECT"}
 → {"success":true,"data":{"loaded":true,"project":"/abs/Oracle-of-Secrets.yaze","name":"Oracle of Secrets","rom":"/abs/Roms/oos168x.sfc","symbols":"/abs/Roms/oos168x.sym","profile":"","current_rom":"/abs/Roms/oos168x.sfc"}}

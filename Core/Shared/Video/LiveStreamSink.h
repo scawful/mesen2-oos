@@ -49,6 +49,7 @@ private:
 		~Channel();
 		void Push(const void* data, size_t size);
 		ChannelStats GetStats() const;
+		const std::string& GetPath() const { return _path; }
 	};
 
 	std::unique_ptr<Channel> _video;
@@ -79,6 +80,7 @@ public:
 	uint32_t GetFrameInterval() const { return _frameInterval; }
 	uint32_t GetDownscale() const { return _downscale; }
 	bool HasAudio() const { return _audio != nullptr; }
+	const std::string& GetVideoPath() const { return _video->GetPath(); }
 	ChannelStats GetVideoStats() const;
 	ChannelStats GetAudioStats() const;
 };
