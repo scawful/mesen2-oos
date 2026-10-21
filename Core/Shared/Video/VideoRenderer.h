@@ -7,8 +7,11 @@
 #include "Utilities/AutoResetEvent.h"
 #include "Utilities/SimpleLock.h"
 #include "Utilities/safe_ptr.h"
+#include "Shared/MemoryType.h"
+#include "Shared/Video/CaptureCamera.h"
 
 class IRenderingDevice;
+class LiveStreamSink;
 class Emulator;
 class SystemHud;
 class DebugHud;
@@ -24,6 +27,20 @@ struct RecordAviOptions
 	uint32_t CompressionLevel;
 	bool RecordSystemHud;
 	bool RecordInputHud;
+};
+
+// Screen-space follow target for the capture camera: target - scroll + offset, read
+// from emulator memory each frame. Addresses are offsets into MemType; -1 = unused.
+struct CaptureFollowSource
+{
+	MemoryType MemType = MemoryType::SnesWorkRam;
+	int32_t TargetXAddr = -1;
+	int32_t TargetYAddr = -1;
+	int32_t ScrollXAddr = -1;
+	int32_t ScrollYAddr = -1;
+	int32_t OffsetX = 0;
+	int32_t OffsetY = 0;
+	uint8_t ValueSize = 2;
 };
 
 class VideoRenderer
@@ -60,6 +77,15 @@ private:
 	SimpleLock _frameLock;
 
 	safe_ptr<IVideoRecorder> _recorder;
+	atomic<bool> _recordThroughCamera = false;
+
+	CaptureCamera _camera;
+	CaptureFollowSource _follow;
+	SimpleLock _followLock;
+	safe_ptr<LiveStreamSink> _liveSink;
+	vector<uint32_t> _cameraFrame;
+	uint32_t _cameraFrameWidth = 0;
+	uint32_t _cameraFrameHeight = 0;
 
 	void RenderThread();
 	bool DrawScriptHud(RenderedFrame& frame);
@@ -67,6 +93,9 @@ private:
 	FrameInfo GetEmuHudSize(FrameInfo baseFrameSize);
 
 	void ProcessAviRecording(RenderedFrame& frame);
+	void ProcessCapture(RenderedFrame& frame);
+	bool ReadFollowTarget(double& x, double& y);
+	double GetGamePixelScale(const RenderedFrame& frame);
 
 public:
 	VideoRenderer(Emulator* emu);
@@ -91,7 +120,22 @@ public:
 	void UnregisterRenderingDevice(IRenderingDevice *renderer);
 
 	void StartRecording(string filename, RecordAviOptions options);
+	bool StartRecording(string filename, RecordAviOptions options, bool throughCamera);
 	void AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount, uint32_t sampleRate);
 	void StopRecording();
 	bool IsRecording();
+	bool IsRecordingThroughCamera() { return _recordThroughCamera; }
+	string GetRecordingFile();
+	bool NeedsRecordingSound();
+
+	CaptureCamera& GetCaptureCamera() { return _camera; }
+	void SetCameraFollow(const CaptureFollowSource& source);
+	CaptureFollowSource GetCameraFollow();
+	// Game frame size (native pixels) of the last rendered frame.
+	FrameInfo GetGameFrameSize();
+	bool RenderCameraSnapshot(vector<uint32_t>& buffer, uint32_t& width, uint32_t& height);
+
+	bool StartLiveStream(string videoPath, string audioPath, uint32_t frameInterval, uint32_t downscale, string& error);
+	void StopLiveStream();
+	shared_ptr<LiveStreamSink> GetLiveStream();
 };

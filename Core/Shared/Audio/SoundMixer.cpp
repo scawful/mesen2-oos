@@ -72,7 +72,7 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	EmuSettings* settings = _emu->GetSettings();
 	AudioPlayerHud* audioPlayer = _emu->GetAudioPlayerHud();
 	AudioConfig cfg = settings->GetAudioConfig();
-	bool isRecording = _waveRecorder || _emu->GetVideoRenderer()->IsRecording();
+	bool isRecording = _waveRecorder || _emu->GetVideoRenderer()->NeedsRecordingSound();
 
 	uint32_t masterVolume = audioPlayer ? audioPlayer->GetVolume() : cfg.MasterVolume;
 	if(!isRecording) {

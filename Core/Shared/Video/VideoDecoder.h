@@ -52,6 +52,7 @@ public:
 	void DecodeFrame(bool synchronous = false);
 	void TakeScreenshot();
 	void TakeScreenshot(std::stringstream &stream);
+	bool CopyLastFrame(vector<uint32_t>& buffer, FrameInfo& frameInfo);
 	
 	void ForceFilterUpdate() { _forceFilterUpdate = true; }
 

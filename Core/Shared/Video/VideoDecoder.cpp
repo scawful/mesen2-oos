@@ -253,3 +253,8 @@ void VideoDecoder::TakeScreenshot(std::stringstream &stream)
 		_videoFilter->TakeScreenshot(_videoFilterType, "", &stream);
 	}
 }
+
+bool VideoDecoder::CopyLastFrame(vector<uint32_t>& buffer, FrameInfo& frameInfo)
+{
+	return _videoFilter && _videoFilter->CopyOutputBuffer(buffer, frameInfo);
+}

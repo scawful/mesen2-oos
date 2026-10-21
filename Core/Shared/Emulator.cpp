@@ -469,10 +469,39 @@ void Emulator::PowerCycle()
 	ReloadRom(true);
 }
 
+YazeProjectInfo Emulator::GetProjectInfo()
+{
+	auto lock = _projectLock.AcquireSafe();
+	return _project;
+}
+
 bool Emulator::LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
 {
+	if(YazeProject::IsProjectFile(romFile.GetFilePath())) {
+		YazeProjectInfo project;
+		string error;
+		if(!YazeProject::Resolve(romFile.GetFilePath(), project, error)) {
+			MessageManager::DisplayMessage("Error", "CouldNotLoadFile", error);
+			return false;
+		}
+		if(!LoadRom(VirtualFile(project.RomPath), patchFile, stopRom, forPowerCycle)) {
+			return false;
+		}
+		auto lock = _projectLock.AcquireSafe();
+		_project = project;
+		return true;
+	}
+
 	try {
-		return InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
+		bool result = InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
+		if(result) {
+			//Reloading the project's own ROM (reset, power cycle, reload) keeps the project
+			auto lock = _projectLock.AcquireSafe();
+			if(_project.RomPath != romFile.GetFilePath()) {
+				_project = {};
+			}
+		}
+		return result;
 	} catch(std::exception& ex) {
 		_videoDecoder->StartThread();
 		_videoRenderer->StartThread();
