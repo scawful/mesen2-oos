@@ -16,6 +16,8 @@ class MemoryBridge:
             self.memory[address] = 0xFF
         for address in range(0x1BB96F, 0x1BBBF4):
             self.memory[address] = 0xFF
+        for address in range(0x1BB800, 0x1BB85F):
+            self.memory[address] = 0xFF
         self.memory.update({oc.MODULE: 9, oc.AREA: 0x40 if world else 0x33,
                             oc.SAVED_WORLD: world, oc.WORLD_FLAG: int(world != 0),
                             0x7E02B2: 8, 0x7E00BC: 0x42})
@@ -32,6 +34,11 @@ class MemoryBridge:
         self.seed_word(0x1BB96F + index * 2, area)
         self.seed_word(0x1BBA71 + index * 2, 0x1234)
         self.memory[0x1BBB73 + index] = entrance
+
+    def seed_hole(self, index, entrance, area, map16=0x011E):
+        self.seed_word(0x1BB800 + index * 2, map16)
+        self.seed_word(0x1BB826 + index * 2, area)
+        self.memory[0x1BB84C + index] = entrance
 
     def read_memory(self, address):
         return self.memory.get(address, 0)
@@ -192,3 +199,45 @@ def test_checkpoint_saves_destination_before_reload_and_preserves_no_warp(make_c
         assert (oc.MODULE, 5) in bridge.writes
     else:
         assert not any(address == oc.WORLD_FLAG for address, _ in bridge.writes)
+
+
+def seed_room_zero_hole(bridge, hole_area=0x57):
+    # Entrance $7B: room $0000, whose zero-filled unused exit rows read area $00.
+    bridge.seed_word(0x02C813 + 0x7B * 2, 0x0000)
+    bridge.seed_exit(0x3E, 0x0000, 0x00)
+    bridge.seed_exit(0x46, 0x0000, 0x00)
+    if hole_area is not None:
+        for index, map16 in enumerate((0x011E, 0x019E, 0x01A0, 0x0120)):
+            bridge.seed_hole(index, 0x7B, hole_area, map16)
+
+
+@pytest.mark.parametrize("warp", ["entrance", "checkpoint"])
+def test_room_zero_hole_entrance_uses_hole_area_world(make_cheats, warp):
+    bridge, cheats = make_cheats()
+    seed_room_zero_hole(bridge)
+    if warp == "entrance":
+        result = cheats.warp_entrance("0x7B")
+    else:
+        cheats._checkpoints = {"checkpoints": [{"id": "kyd", "location": {"entrance": "0x7B"}, "writes": []}]}
+        result = cheats.apply_checkpoint("kyd")
+        assert bridge.saved[0][1][0x3CA] == 0x40
+    assert result["ok"]
+    assert (oc.MODULE, 5) in bridge.writes
+    assert bridge.read_memory16(oc.ROOM) == 0
+    assert_world(bridge, 0x40)
+
+
+def test_room_zero_without_door_or_hole_keeps_exit_row(make_cheats):
+    bridge, cheats = make_cheats(0x40)
+    seed_room_zero_hole(bridge, hole_area=None)
+    assert cheats.warp_entrance("0x7B")["ok"]
+    assert_world(bridge, 0)
+
+
+def test_door_table_resolves_before_hole_table(make_cheats):
+    bridge, cheats = make_cheats(0x40)
+    bridge.seed_word(0x02C813 + 5 * 2, 0x0055)  # No exit-table row for this room.
+    bridge.seed_door(2, 5, 0x10)
+    bridge.seed_hole(0, 5, 0x50)
+    assert cheats.warp_entrance("0x05")["ok"]
+    assert_world(bridge, 0)
