@@ -258,7 +258,14 @@ namespace Mesen.Utilities
 			["book"] = 0x7EF34E, ["somaria"] = 0x7EF350, ["stonemask"] = 0x7EF352, ["mirror"] = 0x7EF353, ["gloves"] = 0x7EF354,
 			["boots"] = 0x7EF355, ["flippers"] = 0x7EF356, ["moonpearl"] = 0x7EF357, ["wolfmask"] = 0x7EF358, ["sword"] = 0x7EF359,
 			["shield"] = 0x7EF35A, ["armor"] = 0x7EF35B, ["rupees"] = RupeesAddr, ["health"] = HealthCurrentAddr, ["maxhealth"] = HealthMaxAddr,
-			["magic"] = MagicAddr, ["arrows"] = 0x7EF377, ["keys"] = 0x7EF36F
+			["magic"] = MagicAddr, ["arrows"] = 0x7EF377, ["keys"] = 0x7EF36F,
+			// Oracle RC inventory: 0 is absent, 2 is an empty bottle, 3..10 are contents.
+			["bottle1"] = 0x7EF35C, ["bottle2"] = 0x7EF35D, ["bottle3"] = 0x7EF35E, ["bottle4"] = 0x7EF35F,
+			["customrods"] = 0x7EF351, ["portalrod"] = 0x7EF3A6, ["goldstar"] = 0x7EF3A9,
+			["goldstar_inventory_version"] = 0x7EF3AA, ["saved_ocarina_song"] = 0x7EF3AB, ["rings"] = 0x7EF3A2,
+			["bananas"] = 0x7EF38B, ["pineapples"] = 0x7EF38D, ["rockmeat"] = 0x7EF38F,
+			["seashells"] = 0x7EF391, ["honeycombs"] = 0x7EF393, ["dekusticks"] = 0x7EF395,
+			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398
 		};
 
 		private static readonly Dictionary<string, FlagBitDef> FlagBitIndex = FlagToggleDefs.ToDictionary(def => def.Key, def => def, StringComparer.OrdinalIgnoreCase);
@@ -269,14 +276,21 @@ namespace Mesen.Utilities
 			new() {
 				Id = "all_items",
 				Label = "All Items",
-				Description = "Full gameplay loadout without story progress bits.",
+				Description = "Tools, masks, rings, maps, scrolls and Oracle collectibles, including at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
 				Items = new Dictionary<string, int> {
-					["bow"] = 4, ["boomerang"] = 2, ["hookshot"] = 2, ["bombs"] = 50, ["powder"] = 2, ["firerod"] = 1,
+					["bow"] = 4, ["boomerang"] = 2, ["hookshot"] = 1, ["bombs"] = 50, ["powder"] = 2, ["firerod"] = 1,
 					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 5, ["ocarina_song"] = 4, ["feather"] = 1,
 					["book"] = 1, ["somaria"] = 1, ["mirror"] = 2, ["zoramask"] = 1, ["dekumask"] = 1, ["bunnymask"] = 1,
 					["stonemask"] = 1, ["wolfmask"] = 1, ["sword"] = 4, ["shield"] = 3, ["armor"] = 2, ["gloves"] = 2,
 					["boots"] = 1, ["flippers"] = 1, ["moonpearl"] = 1, ["health"] = 160, ["maxhealth"] = 160, ["magic"] = 128,
-					["rupees"] = 9999, ["arrows"] = 70, ["keys"] = 9
+					["rupees"] = 9999, ["arrows"] = 70, ["keys"] = 9,
+					["bottle1"] = 3, ["bottle2"] = 4, ["bottle3"] = 5, ["bottle4"] = 6,
+					["customrods"] = 2, ["portalrod"] = 1, ["goldstar"] = 1, ["goldstar_inventory_version"] = 0xA5,
+					["saved_ocarina_song"] = 4, ["rings"] = 0x3F, ["tinglemaps"] = 0x7F, ["dungeonscrolls"] = 0x7F,
+					// Magic Bag uses the 00..59 TimeLabels table. Five Rock Meat meets
+					// the Goron's normal dialogue gate; do not set its world event.
+					["bananas"] = 10, ["pineapples"] = 10, ["rockmeat"] = 5,
+					["seashells"] = 10, ["honeycombs"] = 10, ["dekusticks"] = 10
 				}
 			},
 			new() {
@@ -402,7 +416,7 @@ namespace Mesen.Utilities
 				if(preset == null) {
 					return Task.FromResult<OraclePanelApplyResult?>(null);
 				}
-				changedItems += ApplyItemValues(preset.Items.Select(entry => new OraclePanelValueUpdate() { Key = entry.Key, Value = entry.Value }).ToList());
+				changedItems += ApplyItemValues(preset.Items.Select(entry => new OraclePanelValueUpdate() { Key = entry.Key, Value = entry.Value }).ToList(), preserveInventory: preset.Id == "all_items");
 				changedFlags += ApplyFlagValues(preset.Flags.Select(entry => new OraclePanelValueUpdate() { Key = entry.Key, Value = entry.Value }).ToList());
 			}
 
@@ -494,7 +508,7 @@ namespace Mesen.Utilities
 			};
 		}
 
-		private static int ApplyItemValues(IReadOnlyList<OraclePanelValueUpdate> updates)
+		private static int ApplyItemValues(IReadOnlyList<OraclePanelValueUpdate> updates, bool preserveInventory = false)
 		{
 			int changed = 0;
 			foreach(OraclePanelValueUpdate update in updates) {
@@ -502,7 +516,29 @@ namespace Mesen.Utilities
 					continue;
 				}
 
-				WriteValue(address, update.Value, update.Key.Equals("rupees", StringComparison.OrdinalIgnoreCase));
+				int value = update.Value;
+				if(preserveInventory) {
+					int current = ReadChoiceValue(address);
+					// Fill missing/empty bottles without deleting valid contents (3..10).
+					if(address >= 0x7EF35C && address <= 0x7EF35F && current >= 3 && current <= 10) {
+						continue;
+					}
+					switch(address) {
+						case 0x7EF3A2: // Appraised rings
+						case 0x7EF396: // Purchased maps
+						case 0x7EF398: // Collected dungeon scrolls
+							value |= current;
+							break;
+						case 0x7EF38B: case 0x7EF38D: case 0x7EF38F: // Magic Bag
+						case 0x7EF391: case 0x7EF393: case 0x7EF395:
+						case 0x7EF343: case 0x7EF377: case 0x7EF36F: // Ammo and keys
+						case RupeesAddr: case HealthCurrentAddr: case HealthMaxAddr: case MagicAddr:
+							value = Math.Max(current, value);
+							break;
+					}
+				}
+
+				WriteValue(address, value, update.Key.Equals("rupees", StringComparison.OrdinalIgnoreCase));
 				changed++;
 			}
 			return changed;
