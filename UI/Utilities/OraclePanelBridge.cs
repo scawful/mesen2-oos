@@ -115,6 +115,9 @@ namespace Mesen.Utilities
 		private const uint SideQuestAddr = 0x7EF3D7;
 		private const uint CrystalsAddr = 0x7EF37A;
 		private const uint PendantsAddr = 0x7EF374;
+		private const uint BootsAddr = 0x7EF355;
+		private const uint AbilityFlagsAddr = 0x7EF379;
+		private const byte AbilityRunBit = 0x04;
 		private const uint MakuTreeQuestAddr = 0x7EF3D4;
 		private const uint DekuQuestDoneAddr = 0x7EF301;
 		private const uint ZoraQuestDoneAddr = 0x7EF302;
@@ -539,6 +542,11 @@ namespace Mesen.Utilities
 				}
 
 				WriteValue(address, value, update.Key.Equals("rupees", StringComparison.OrdinalIgnoreCase));
+				// Dashing gates on AbilityFlags Run ($079C32), not the Boots byte, so the editor keeps them paired.
+				if(address == BootsAddr) {
+					byte ability = ReadByte(AbilityFlagsAddr);
+					WriteByte(AbilityFlagsAddr, value != 0 ? ability | AbilityRunBit : ability & ~AbilityRunBit);
+				}
 				changed++;
 			}
 			return changed;
