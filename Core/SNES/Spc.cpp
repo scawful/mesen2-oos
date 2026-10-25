@@ -471,6 +471,13 @@ void Spc::Serialize(Serializer &s)
 		Run();
 	}
 
+	if(!s.IsSaving() && s.GetFormat() != SerializeFormat::Map) {
+		// Older states omit this key. Do not inherit a halt from the live SPC;
+		// partial Lua state updates must still leave unspecified fields alone.
+		_state.StopState = SnesCpuStopState::Running;
+	}
+	SV(_state.StopState);
+
 	SV(_state.A); SV(_state.Cycle); SV(_state.PC); SV(_state.PS); SV(_state.SP); SV(_state.X); SV(_state.Y);
 	SV(_state.CpuRegs[0]); SV(_state.CpuRegs[1]); SV(_state.CpuRegs[2]); SV(_state.CpuRegs[3]);
 	SV(_state.OutputReg[0]); SV(_state.OutputReg[1]); SV(_state.OutputReg[2]); SV(_state.OutputReg[3]);
@@ -497,55 +504,10 @@ void Spc::Serialize(Serializer &s)
 	if(s.GetFormat() != SerializeFormat::Map) {
 		if(!s.IsSaving()) {
 			UpdateClockRatio();
-			AfterStateLoad();
 		}
 
+		// Restore execution latches without running or resetting the loaded SPC state.
 		SV(_operandA); SV(_operandB); SV(_tmp1); SV(_tmp2); SV(_tmp3); SV(_opCode); SV(_opStep); SV(_opSubStep); SV(_enabled);
-	}
-}
-
-void Spc::AfterStateLoad()
-{
-	// Reapply timer enables and clock ratios after a savestate load
-	// Saved states taken mid‑handshake often resume with timers/ports disabled,
-	// leaving the CPU spinning on APUIO reads. Force a clean, running SPC surface.
-	_state.TimersDisabled = false;
-	_state.TimersEnabled = true;
-	bool timersEnabled = true;
-	_state.Timer0.SetGlobalEnabled(timersEnabled);
-	_state.Timer1.SetGlobalEnabled(timersEnabled);
-	_state.Timer2.SetGlobalEnabled(timersEnabled);
-	_state.Timer0.SetEnabled(true);
-	_state.Timer1.SetEnabled(true);
-	_state.Timer2.SetEnabled(true);
-
-	// Re-seed the IPL handshake ports to a sane ready state ($AA/$BB)
-	_state.OutputReg[0] = 0xAA;
-	_state.OutputReg[1] = 0xBB;
-	_state.OutputReg[2] = 0x00;
-	_state.OutputReg[3] = 0x00;
-
-	// Clear CPU-facing ports so the host sees a consistent state
-	_state.CpuRegs[0] = 0x00;
-	_state.CpuRegs[1] = 0x00;
-	_state.CpuRegs[2] = 0x00;
-	_state.CpuRegs[3] = 0x00;
-
-	// Ensure ROM access flag and execution state are consistent
-	_state.RomEnabled = true;
-	_state.StopState = SnesCpuStopState::Running;
-	_enabled = true;
-	_opStep = SpcOpStep::ReadOpCode;
-	_opSubStep = 0;
-
-	// Give the timers one tick so queued outputs propagate after the restore
-	_state.Timer0.Run(1);
-	_state.Timer1.Run(1);
-	_state.Timer2.Run(1);
-
-	// Nudge the SPC forward a few instructions to exit any half-restored IPL wait
-	for(int i = 0; i < 64; i++) {
-		ProcessCycle();
 	}
 }
 
