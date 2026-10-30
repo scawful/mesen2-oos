@@ -158,6 +158,10 @@ if [[ ! -d "$SRC_APP" ]]; then
 fi
 
 DEST_APP="${DEST_DIR}/${DEST_NAME}"
+SRC_APP="$(cd "$SRC_APP" && pwd -P)"
+DEST_APP="$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$DEST_APP")"
+case "$SRC_APP/" in "$DEST_APP/"*) echo "Source overlaps destination: $SRC_APP" >&2; exit 1;; esac
+case "$DEST_APP/" in "$SRC_APP/"*) echo "Destination overlaps source: $DEST_APP" >&2; exit 1;; esac
 CORE_DEST="${DEST_APP}/Contents/MacOS/MesenCore.dylib"
 DEFAULT_CORE_SRC="${ROOT_DIR}/InteropDLL/obj.osx-arm64/MesenCore.dylib"
 if [[ -z "$CORE_SRC" ]]; then
@@ -197,8 +201,34 @@ if [[ ! -d "$DEST_DIR" ]]; then
   $SUDO mkdir -p "$DEST_DIR"
 fi
 
-timestamp="$(date +"%Y%m%d-%H%M%S")"
+timestamp="$(date +"%Y%m%d-%H%M%S")-$$"
 backup_dir="${DEST_DIR}/Mesen2-Backups/${timestamp}"
+replacement_started=0
+replacement_verified=0
+
+assert_target_idle() {
+  local active
+  active="$(/usr/sbin/lsof -t "$DEST_APP/Contents/MacOS/Mesen" 2>/dev/null || :)"
+  if [[ -n "$active" ]]; then
+    echo "Destination is running (PID $active); leave its session intact." >&2
+    exit 1
+  fi
+}
+
+restore_on_failure() {
+  local status=$?
+  if [[ "$status" -ne 0 && "$replacement_started" -eq 1 && "$replacement_verified" -eq 0 ]]; then
+    if [[ -d "$DEST_APP" ]]; then
+      $SUDO mv "$DEST_APP" "${DEST_APP}.failed-${timestamp}" || return "$status"
+    fi
+    if [[ -d "$backup_dir/$DEST_NAME" ]]; then
+      $SUDO mv "$backup_dir/$DEST_NAME" "$DEST_APP"
+      echo "Restored previous app: $DEST_APP" >&2
+    fi
+  fi
+  return "$status"
+}
+trap restore_on_failure EXIT
 
 backup_or_remove() {
   local path="$1"
@@ -232,7 +262,12 @@ resign_app_if_needed() {
     return 0
   fi
 
-  /usr/bin/codesign --force --deep --sign - "$DEST_APP"
+  if /usr/bin/codesign --verify --deep --strict "$DEST_APP" 2>/dev/null; then
+    echo "Preserved valid signature: $DEST_APP"
+    return 0
+  fi
+  /usr/bin/codesign --force --deep --sign - --preserve-metadata=identifier,flags,runtime "$DEST_APP"
+  /usr/bin/codesign --verify --deep --strict "$DEST_APP"
   echo "Codesigned: $DEST_APP"
 }
 
@@ -261,6 +296,8 @@ if [[ "$DO_PRUNE" -eq 1 ]]; then
   fi
 fi
 
+assert_target_idle
+if [[ "$DRY_RUN" -eq 0 ]]; then replacement_started=1; fi
 backup_or_remove "$DEST_APP" "$backup_dir"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -285,6 +322,12 @@ if [[ "$DEPLOY_CORE" -eq 1 ]]; then
 fi
 
 resign_app_if_needed
+
+# A prebuilt app must remain the exact bundle that was accepted for deployment.
+if [[ "$DEPLOY_CORE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+  /usr/bin/diff -qr "$SRC_APP" "$DEST_APP"
+fi
+replacement_verified=1
 
 if [[ "$DO_SYMLINK" -eq 1 ]]; then
   link_path="${DEST_DIR}/Mesen.app"
