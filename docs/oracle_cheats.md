@@ -16,16 +16,11 @@ checkpoint rules, citations and limits).
 | `warps.json` generator | `tools/oracle_cheats/gen_warps.py` |
 | Headless check | `tools/oracle_cheats/test_cheats_headless.py` |
 
-`tools/oos_client` is untracked in the main checkout. To install the client side
-there:
-
-```bash
-cd ~/src/hobby/mesen2-oos
-cp ~/src/hobby/mesen2-oos-cheats/tools/oracle_cheats/oracle_cheats.py tools/oos_client/mesen2_client_lib/
-patch -p1 < ~/src/hobby/mesen2-oos-cheats/docs/oracle_cheats_client.patch   # cli.py hook + D1/D6 crystal bits
-```
-
-(Applied to the main checkout on 2026-09-26 10:29, after `oos_client_fixes.patch`.)
+The client is tracked in this consolidated Mac branch. Use the maintained
+`tools/oos_client/mesen2_client_lib/oracle_cheats.py` implementation; the old
+`tools/oracle_cheats/oracle_cheats.py` path forwards to it. Historical patch
+files are retained as provenance. Do not copy their older implementations over
+the maintained client.
 
 ## Warp paths
 

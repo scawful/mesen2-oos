@@ -19,11 +19,11 @@ Client (`tools/oos_client/mesen2_client.py`, reached from Oracle through
 
 ```bash
 C=~/src/hobby/oracle-of-secrets/Scripts/Mesen2/mesen2_client.py
-python3 $C --socket /tmp/mesen2-oos-rc-play.sock offer-rom Roms/TestBuilds/v10/oos168x.sfc --label v10 --notes "D6 door fix"
-python3 $C --socket /tmp/mesen2-oos-rc-play.sock offer-status
-python3 $C --socket /tmp/mesen2-oos-rc-play.sock offer-clear
-python3 $C --socket /tmp/mesen2-oos-rc-play.sock load-rom-live            # accept the pending offer
-python3 $C --socket /tmp/mesen2-oos-rc-play.sock load-rom-live <rom.sfc>  # "just load it"
+python3 $C --socket /tmp/OWNED.sock offer-rom Roms/TestBuilds/v10/oos168x.sfc --label v10 --notes "D6 door fix"
+python3 $C --socket /tmp/OWNED.sock offer-status
+python3 $C --socket /tmp/OWNED.sock offer-clear
+python3 $C --socket /tmp/OWNED.sock load-rom-live            # accept the pending offer
+python3 $C --socket /tmp/OWNED.sock load-rom-live <rom.sfc>  # "just load it"
 python3 $C --socket ... load-rom-live <rom.sfc> --no-state                # skip the backup state
 ```
 
@@ -38,15 +38,11 @@ All four print the offer JSON:
                "backup": "<home>/Saves/SrmBackups/romA_20260926-083012.srm", "at_ms": ...}}
 ```
 
-The client changes live in `tools/oos_client`, which is untracked in the main
-checkout. Already applied there on 2026-09-26: `docs/offer_rom_client.patch`
-(offer commands) and `docs/oos_client_fixes.patch` (registry `close` by pid,
-`save <path>`, `health` on a dead socket). Pending: `docs/oos_client_resume.patch`
-(`load-rom-live --no-resume`):
-
-```bash
-cd ~/src/hobby/mesen2-oos && patch -p1 < ~/src/hobby/mesen2-oos-offer-rom/docs/oos_client_resume.patch
-```
+The client is tracked in `tools/oos_client` on this consolidated Mac branch.
+Offer, status, clear and live-load commands are already integrated. Historical
+`docs/*.patch` files record their original delivery and must not be reapplied
+over the maintained client. Agent commands require an explicitly owned test
+session; the examples use `/tmp/OWNED.sock`.
 
 ## What the player sees (GUI)
 

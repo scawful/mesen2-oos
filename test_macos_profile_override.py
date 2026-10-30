@@ -158,9 +158,19 @@ def test_headless_sigterm_stops_before_native_teardown(
                 def request(command, expect_success=True, **params):
                     connection.sendall((json.dumps({"type": command, **params}) + "\n").encode())
                     response = json.loads(reader.readline())
+                    if expect_success is None:
+                        return response
                     assert response["success"] is expect_success, response
                     return response.get("data", {})
-                state = request("STATE")
+                # The socket opens during InitializeEmu, before LoadFiles.
+                response = request("STATE", expect_success=None)
+                while not response["success"]:
+                    assert response.get("error") == "No ROM loaded", response
+                    assert process.poll() is None, "private app exited during ROM load"
+                    assert time.monotonic() < deadline, "private ROM did not load"
+                    time.sleep(0.02)
+                    response = request("STATE", expect_success=None)
+                state = response["data"]
                 while state.get("frame", 0) < 5:
                     assert time.monotonic() < deadline, "private ROM did not run"
                     time.sleep(0.02)
@@ -206,3 +216,7 @@ def test_headless_sigterm_stops_before_native_teardown(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+        if process.stdout is not None and not process.stdout.closed:
+            stdout, stderr = process.communicate(timeout=5)
+        (tmp_path / "process.stdout.log").write_text(stdout)
+        (tmp_path / "process.stderr.log").write_text(stderr)
