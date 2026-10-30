@@ -156,7 +156,7 @@ def test_headless_sigterm_stops_before_native_teardown(
             connection.connect(str(private_socket_path))
             with connection.makefile("rb") as reader:
                 def request(kind, **params):
-                    connection.sendall((json.dumps({"type": kind, "params": params}) + "\n").encode())
+                    connection.sendall((json.dumps({"type": kind, **params}) + "\n").encode())
                     response = json.loads(reader.readline())
                     assert response["success"], response
                     return response.get("data", {})
