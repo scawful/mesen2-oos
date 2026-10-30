@@ -18,7 +18,6 @@ private:
 
 	static uint32_t ResolveMaxIndex();
 	static string GetLabelFilepathFromStatePath(const string& statePath);
-	string GetStateFilenameBase();
 
 	void SaveVideoData(ostream& stream);
 	bool GetVideoData(vector<uint8_t>& out, RenderedFrame& frame, istream& stream);
@@ -32,6 +31,7 @@ public:
 	static void SetConfiguredMaxIndex(uint32_t maxIndex);
 	static uint32_t GetMaxIndex();
 	static uint32_t GetAutoSaveIndex();
+	string GetStateFilenameBase();
 
 	SaveStateManager(Emulator* emu);
 

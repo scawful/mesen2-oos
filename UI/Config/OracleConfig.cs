@@ -1,3 +1,4 @@
+using Mesen.Interop;
 using Mesen.ViewModels;
 using ReactiveUI.Fody.Helpers;
 
@@ -18,13 +19,21 @@ namespace Mesen.Config
         [Reactive] public OracleDebugPanelVisibility DebugPanelVisibility { get; set; } = OracleDebugPanelVisibility.Collapsed;
         [Reactive] public string DebugPanelMacroProfilePath { get; set; } = "";
 
+        // Opt-in: Oracle ROMs (ALTTP header title, expanded past 1 MiB) all use Saves/<name>.srm,
+        // whatever the ROM file is called. Empty keeps the default per-filename save.
+        [Reactive] public string PersistentSaveName { get; set; } = "";
+
+        // Marks this instance as the player's window: the title shows "Oracle <build> [play]"
+        // instead of the agent markers (ACTIVE, [instance], [src:...]).
+        [Reactive] public bool PlayerWindow { get; set; } = false;
+
         public OracleConfig()
         {
         }
-        
+
         public void ApplyConfig()
         {
-            // Nothing to apply to core specifically for these UI-only settings right now
+            EmuApi.SetOracleSaveName(PersistentSaveName.Trim());
         }
     }
 }

@@ -9,26 +9,9 @@ namespace Mesen.Utilities
 	{
 		public static string GetSaveStateBaseName()
 		{
-			RomInfo info = EmuApi.GetRomInfo();
-			ResourcePath romPath = info.RomPath;
-			string romName = Path.GetFileNameWithoutExtension(romPath.FileName);
-			if(string.IsNullOrWhiteSpace(romName)) {
-				romName = "rom";
-			}
-			if(!ConfigManager.Config.Preferences.SeparateSaveStatesByPatch || string.IsNullOrWhiteSpace(info.PatchPath)) {
-				return romName;
-			}
-
-			ResourcePath patchPath = info.PatchPath;
-			string patchName = Path.GetFileNameWithoutExtension(patchPath.FileName);
-			if(string.IsNullOrWhiteSpace(patchName)) {
-				return romName;
-			}
-			if(string.Equals(patchName, romName, StringComparison.OrdinalIgnoreCase)) {
-				return romName;
-			}
-
-			return romName + "_" + patchName;
+			//The core names the slot files (ROM name, patch, or a shared Oracle save name)
+			string baseName = EmuApi.GetSaveStateBaseName();
+			return string.IsNullOrWhiteSpace(baseName) ? "rom" : baseName;
 		}
 
 		public static string GetSaveStatePath(int slot)

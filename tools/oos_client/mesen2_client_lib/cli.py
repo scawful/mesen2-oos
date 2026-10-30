@@ -1164,6 +1164,15 @@ def main():
     wait_agent = agent_sub.add_parser("wait", help="Sleep for seconds")
     wait_agent.add_argument("seconds", type=float)
 
+    scene_parser = subparsers.add_parser("scene-plan", help="Resolve a hash-verified overworld map/preset fixture (offline)")
+    scene_parser.add_argument("catalog", type=Path)
+    scene_parser.add_argument("--map-id", required=True, type=lambda v: int(v, 0))
+    scene_parser.add_argument("--preset", required=True)
+    video_parser = subparsers.add_parser("video-record", help="Native video/audio recorder on an explicit owned instance")
+    video_parser.add_argument("action", choices=["start", "stop", "status"])
+    video_parser.add_argument("--token", default="")
+    video_parser.add_argument("--path", type=Path)
+
     args = parser.parse_args()
     logger = SessionLogger(args.log) if args.log else None
     if logger:
@@ -1171,6 +1180,32 @@ def main():
 
     if not args.command:
         parser.print_help()
+        return
+
+    if args.command == "scene-plan":
+        from .gameplay import plan_scene
+        try:
+            print(json.dumps(plan_scene(args.catalog, args.map_id, args.preset), indent=2))
+        except (ValueError, KeyError, OSError) as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+            sys.exit(1)
+        return
+
+    if args.command == "video-record":
+        from .bridge import MesenBridge
+        from .gameplay import video_record
+        # Do not allow fallback discovery to select a user's play session.
+        if not args.socket:
+            parser.error("video-record requires an explicit --socket and an owned native lease")
+        if args.action != "status" and not args.token:
+            parser.error("video-record start/stop requires --token")
+        try:
+            result = video_record(MesenBridge(socket_path=args.socket), args.action,
+                                  token=args.token, path=args.path)
+            print(json.dumps(result, indent=2))
+        except (ValueError, OSError, ConnectionError) as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+            sys.exit(1)
         return
 
     if args.command == "commands":

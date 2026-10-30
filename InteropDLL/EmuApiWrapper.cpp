@@ -6,6 +6,7 @@
 #include "Core/Shared/SystemActionManager.h"
 #include "Core/Shared/MessageManager.h"
 #include "Core/Shared/SaveStateManager.h"
+#include "Core/Shared/SocketServer.h"
 #include "Core/Shared/Interfaces/INotificationListener.h"
 #include "Core/Shared/KeyManager.h"
 #include "Core/Shared/ShortcutKeyHandler.h"
@@ -296,7 +297,7 @@ extern "C" {
 						_renderer.reset(new SdlRenderer(_emu.get(), _viewerHandle));
 					#endif
 				}
-			} 
+			}
 
 			if(!noAudio) {
 				#ifdef _WIN32
@@ -313,11 +314,11 @@ extern "C" {
 				#elif __APPLE__
 					_keyManager.reset(new MacOSKeyManager(_emu.get()));
 					_mouseManager.reset(new MacOSMouseManager());
-				#else 
+				#else
 					_keyManager.reset(new LinuxKeyManager(_emu.get()));
 					_mouseManager.reset(new LinuxMouseManager(_windowHandle));
 				#endif
-					
+
 				KeyManager::RegisterKeyManager(_keyManager.get());
 			}
 		}
@@ -337,6 +338,38 @@ extern "C" {
 		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
 		_emu->GetGameClient()->Disconnect();
 		return _emu->LoadRom((VirtualFile)filename, patchFile ? (VirtualFile)patchFile : VirtualFile());
+	}
+
+	DllExport void __stdcall GetRomOffer(char* outBuffer, uint32_t maxLength)
+	{
+		StringUtilities::CopyToBuffer(SocketServer::GetRomOfferJson(), outBuffer, maxLength);
+	}
+
+	DllExport bool __stdcall AcceptRomOffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		std::lock_guard<std::recursive_mutex> operationLock(_interopOperationMutex);
+		_emu->GetGameClient()->Disconnect();
+		string error;
+		return SocketServer::AcceptRomOffer(_emu.get(), error);
+	}
+
+	DllExport void __stdcall SnoozeRomOffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		SocketServer::SnoozeRomOffer(_emu.get());
+	}
+
+	DllExport void __stdcall GetSaveStateBaseName(char* outBuffer, uint32_t maxLength)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		StringUtilities::CopyToBuffer(_emu->GetSaveStateManager()->GetStateFilenameBase(), outBuffer, maxLength);
+	}
+
+	DllExport void __stdcall SetOracleSaveName(char* saveName)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->SetOracleSaveName(saveName ? saveName : "");
 	}
 
 	DllExport void __stdcall AddKnownGameFolder(char* folder) { FolderUtilities::AddKnownGameFolder(folder); }
@@ -389,7 +422,7 @@ extern "C" {
 		}
 	}
 
-	DllExport void __stdcall GetArchiveRomList(char* filename, char* outBuffer, uint32_t maxLength) { 
+	DllExport void __stdcall GetArchiveRomList(char* filename, char* outBuffer, uint32_t maxLength) {
 		std::ostringstream out;
 		unique_ptr<ArchiveReader> reader = ArchiveReader::GetReader(filename);
 		if(reader) {
@@ -460,7 +493,7 @@ extern "C" {
 	}
 
 	DllExport void __stdcall DisplayMessage(char* title, char* message, char* param1) { MessageManager::DisplayMessage(title, message, param1 ? param1 : ""); }
-	
+
 	DllExport void __stdcall GetLog(char* outBuffer, uint32_t maxLength)
 	{
 		StringUtilities::CopyToBuffer(MessageManager::GetLog(), outBuffer, maxLength);
@@ -507,7 +540,7 @@ extern "C" {
 		}
 		return { 256, 240 };
 	}
-	
+
 	DllExport uint32_t __stdcall GetGameMemorySize(MemoryType type)
 	{
 		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
@@ -598,7 +631,7 @@ extern "C" {
 				//turn on debugger to profile the debugger's code too
 				_emu->GetDebugger(true);
 			}
-				
+
 			std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(5000));
 			std::cout << "Ran for " << _emu->GetFrameCount() << " frames" << std::endl;
 

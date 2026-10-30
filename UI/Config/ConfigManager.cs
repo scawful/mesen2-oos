@@ -302,11 +302,15 @@ namespace Mesen.Config
 		public static void CreateConfig(bool portable)
 		{
 			string homeFolder;
-			if(portable) {
+			string? overrideFolder = Environment.GetEnvironmentVariable("MESEN2_HOME");
+			if(!string.IsNullOrWhiteSpace(overrideFolder)) {
+				homeFolder = overrideFolder;
+			} else if(portable) {
 				homeFolder = DefaultPortableFolder;
 			} else {
 				homeFolder = DefaultDocumentsFolder;
 			}
+			Directory.CreateDirectory(homeFolder);
 			Program.ExtractNativeDependencies(homeFolder);
 			_homeFolder = homeFolder;
 			Config.Save();

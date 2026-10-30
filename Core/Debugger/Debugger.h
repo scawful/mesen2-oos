@@ -92,7 +92,7 @@ private:
 	uint32_t _inputOverrideFrames[8] = {};  // Frame counter for auto-clearing overrides
 
 	bool _waitForBreakResume = false;
-	
+
 	void Reset();
 
 	__noinline bool ProcessStepBack(IDebugger* debugger);
@@ -101,7 +101,7 @@ private:
 	template<CpuType type> uint64_t GetCpuCycleCount();
 	template<CpuType type, typename T> void ProcessScripts(uint32_t addr, T& value, MemoryOperationType opType);
 	template<CpuType type, typename T> void ProcessScripts(uint32_t addr, T& value, MemoryType memType, MemoryOperationType opType);
-	
+
 	bool IsDebugWindowOpened(CpuType cpuType);
 	bool IsBreakOptionEnabled(BreakSource src);
 	template<CpuType type> void SleepOnBreakRequest();
@@ -138,6 +138,7 @@ public:
 	void Run();
 	void PauseOnNextFrame();
 	void Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source = BreakSource::Unspecified);
+	bool TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs);
 	bool IsPaused();
 	bool IsExecutionStopped();
 
@@ -179,7 +180,7 @@ public:
 
 	void SetInputOverrides(uint32_t index, DebugControllerState state, uint32_t frames = 0);
 	void GetAvailableInputOverrides(uint8_t* availableIndexes);
-	
+
 	void Log(string message);
 	string GetLog();
 
@@ -187,7 +188,7 @@ public:
 
 	void ClearExecutionTrace();
 	uint32_t GetExecutionTrace(TraceRow output[], uint32_t startOffset, uint32_t maxLineCount);
-	
+
 	CpuType GetMainCpuType() { return _mainCpuType; }
 
 	TraceLogFileSaver* GetTraceLogFileSaver() { return _traceLogSaver.get(); }

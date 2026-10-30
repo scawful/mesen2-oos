@@ -28,15 +28,17 @@ namespace Mesen.ViewModels
 		[Reactive] public RecentGamesViewModel RecentGames { get; private set; }
 
 		[Reactive] public string WindowTitle { get; private set; } = "Mesen";
+		[Reactive] public string BuildLabel { get; set; } = "";
 		[Reactive] public Size RendererSize { get; set; }
 
 		[Reactive] public bool IsMenuVisible { get; set; }
-		
+
 		[Reactive] public bool IsNativeRendererVisible { get; set; }
 		[Reactive] public bool IsSoftwareRendererVisible { get; set; }
 
 		public SoftwareRendererViewModel SoftwareRenderer { get; } = new();
 		public OracleDebugPanelViewModel OracleDebugPanel { get; } = new();
+		public RomOfferViewModel RomOffer { get; } = new();
 
 		public Configuration Config { get; }
 
@@ -62,7 +64,7 @@ namespace Mesen.ViewModels
 				IsNativeRendererVisible = !RecentGames.Visible && SoftwareRenderer.FrameSurface == null;
 				IsSoftwareRendererVisible = !RecentGames.Visible && SoftwareRenderer.FrameSurface != null;
 			});
-			
+
 			this.WhenAnyValue(x => x.RomInfo).Subscribe(x => {
 				bool showAudioPlayer = x.Format == RomFormat.Nsf || x.Format == RomFormat.Spc || x.Format == RomFormat.Gbs || x.Format == RomFormat.PceHes;
 				if(AudioPlayer == null && showAudioPlayer) {
@@ -77,7 +79,9 @@ namespace Mesen.ViewModels
 				x => x.RendererSize,
 				x => x.Config.Preferences.ShowTitleBarInfo,
 				x => x.Config.Video.AspectRatio,
-				x => x.Config.Video.VideoFilter
+				x => x.Config.Video.VideoFilter,
+				x => x.BuildLabel,
+				x => x.Config.Oracle.PlayerWindow
 			).Subscribe(x => {
 				UpdateWindowTitle();
 			});
@@ -87,8 +91,14 @@ namespace Mesen.ViewModels
 
 		private void UpdateWindowTitle()
 		{
-			string title = "Mesen";
 			string romName = RomInfo.GetRomName();
+			if(ConfigManager.Config.Oracle.PlayerWindow) {
+				string build = string.IsNullOrWhiteSpace(BuildLabel) ? romName : BuildLabel;
+				WindowTitle = string.IsNullOrWhiteSpace(build) ? "Oracle [play]" : "Oracle " + build + " [play]";
+				return;
+			}
+
+			string title = "Mesen";
 			if(!string.IsNullOrWhiteSpace(romName)) {
 				title += " - " + romName;
 				if(ConfigManager.Config.Preferences.ShowTitleBarInfo) {

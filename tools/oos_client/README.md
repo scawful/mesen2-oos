@@ -48,3 +48,10 @@ quadrant without changing the room ID. Passing a nearby object or merely moving
 closer to a door is not door-traversal evidence. Object catalog names describe
 vanilla objects; hacks may reuse their art or behavior. Overlays show anchors and
 render bounds, not live collision footprints.
+
+## Scene requests and native video/audio
+
+`scene-plan` resolves an exact hash-verified overworld fixture by map ID and
+preset. `video-record` exposes the versioned native AVI/audio recorder on an
+explicit owned socket. See [the capture foundation contract](../../docs/Gameplay_Capture_Engine.md)
+for supported interfaces, lease requirements, validation scope and pending native acceptance.

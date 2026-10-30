@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Platform;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -38,11 +39,19 @@ namespace Mesen.Windows
 		private ContentControl _audioPlayer;
 		private MainMenuView _mainMenu;
 		private Control _oracleDebugPanel;
+		private Control _oracleToolsPane;
+		private Control _romOfferBanner;
+		private (PixelPoint Position, Size ClientSize, WindowState State)? _liveLoadWindow;
 		private CommandLineHelper? _cmdLine;
 
 		private bool _testModeEnabled;
 		private bool _needResume = false;
 		private bool _needCloseValidation = true;
+		private bool _stopSignalReceived = false;
+		private bool _placeDefaultWindowFrame = false;
+		private DispatcherTimer? _windowFrameSaveTimer;
+		private readonly PosixSignalRegistration _sigTerm;
+		private readonly PosixSignalRegistration _sigInt;
 		private bool _shutdownStarted = false;
 		private bool _shutdownCompleted = false;
 		private readonly CancellationTokenSource _shutdownCts = new();
@@ -53,7 +62,7 @@ namespace Mesen.Windows
 		private Task _fullscreenTask = Task.CompletedTask;
 		private Task _notificationShutdownTask = Task.CompletedTask;
 		private Task _emulatorOperationShutdownTask = Task.CompletedTask;
-		
+
 		private bool _preventFullscreenToggle = false;
 		private bool _headlessRequested = false;
 
@@ -112,14 +121,40 @@ namespace Mesen.Windows
 
 			_rendererPanel = this.GetControl<Panel>("RendererPanel");
 			_rendererPanel.LayoutUpdated += RendererPanel_LayoutUpdated;
+			_rendererPanel.AddHandler(InputElement.PointerPressedEvent, OnRendererPointerPressed, RoutingStrategies.Tunnel, true);
+			AddHandler(InputElement.GotFocusEvent, OnFocusedElementChanged, RoutingStrategies.Bubble, true);
+			AddHandler(InputElement.LostFocusEvent, OnFocusedElementChanged, RoutingStrategies.Bubble, true);
 
 			_renderer = this.GetControl<NativeRenderer>("Renderer");
 			_softwareRenderer = this.GetControl<SoftwareRendererView>("SoftwareRenderer");
 			_audioPlayer = this.GetControl<ContentControl>("AudioPlayer");
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
 			_oracleDebugPanel = this.GetControl<Control>("OracleDebugPanel");
+			_oracleToolsPane = this.GetControl<Control>("OracleToolsPane");
+			_romOfferBanner = this.GetControl<Control>("RomOfferBanner");
+			_model.OracleDebugPanel.VisibilityModeChanged += Chrome_VisibilityChanged;
+			_model.RomOffer.VisibilityChanged += Chrome_VisibilityChanged;
+			_model.RomOffer.LiveLoadStarted += RomOffer_LiveLoadStarted;
+			_model.RomOffer.LiveLoadFinished += RomOffer_LiveLoadFinished;
 			_mouseManager = new MouseManager(this, _usesSoftwareRenderer ? _softwareRenderer : _renderer, _mainMenu, _usesSoftwareRenderer);
-			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
+			//Always open as a normal window: the last frame when it fits on a screen (a profile seeded
+			//from another display may not), otherwise the default frame once the first game loads
+			MainWindowConfig windowConfig = ConfigManager.Config.MainWindow;
+			windowConfig.WindowIsMaximized = false;
+			_placeDefaultWindowFrame = !SavedWindowFrameFits(windowConfig);
+			if(_placeDefaultWindowFrame) {
+				windowConfig.WindowSize = new PixelSize(0, 0);
+			}
+			windowConfig.LoadWindowSettings(this);
+
+			//Remember the frame as soon as it changes, not only on a clean exit (Force Quit, crashes)
+			PositionChanged += (s, e) => ScheduleWindowFrameSave();
+			this.GetPropertyChangedObservable(ClientSizeProperty).Subscribe(x => ScheduleWindowFrameSave());
+
+			//kill -TERM / Ctrl+C: close through the normal shutdown path (saves config and SRAM).
+			//The runtime default exits mid-frame (exit 143 or a crash in the render thread).
+			_sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnStopSignal);
+			_sigInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnStopSignal);
 
 #if DEBUG
 			this.AttachDevTools();
@@ -181,6 +216,7 @@ namespace Mesen.Windows
 			}
 
 			_shutdownStarted = true;
+			InstanceLog.QuitRequested("main window closing (" + e.CloseReason + ")");
 			_shutdownCts.Cancel();
 			_emulatorOperationShutdownTask = EmulatorOperationTracker.BeginShutdownAsync();
 			_pendingLoadShutdownTask = LoadRomHelper.BeginShutdownAsync();
@@ -270,6 +306,104 @@ namespace Mesen.Windows
 			return !string.IsNullOrWhiteSpace(value) && value != "0" && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
 		}
 
+		private static double GetPositionScale(double deviceScale)
+		{
+			//Screen areas and window positions are device pixels on Windows/Linux but points on macOS
+			return OperatingSystem.IsMacOS() ? 1.0 : deviceScale;
+		}
+
+		private bool SavedWindowFrameFits(MainWindowConfig config)
+		{
+			if(config.WindowSize.Width <= 0 || config.WindowSize.Height <= 0) {
+				return false;
+			}
+
+			foreach(Screen screen in Screens.All) {
+				//WindowSize is the client size in DIPs; leave room for the title bar
+				PixelSize size = PixelSize.FromSize(new Size(config.WindowSize.Width, config.WindowSize.Height + 30), GetPositionScale(screen.Scaling));
+				PixelRect frame = new PixelRect(config.WindowLocation, size);
+				PixelRect visible = screen.WorkingArea.Intersect(frame);
+				if(size.Width <= screen.WorkingArea.Width && size.Height <= screen.WorkingArea.Height && visible.Width * visible.Height >= frame.Width * frame.Height * 0.9) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private void PlaceDefaultWindowFrame()
+		{
+			//Largest integer scale whose window uses at most 60% of the usable height and width,
+			//centered horizontally with a third of the spare height above it
+			//(1512x982 display: 2x = 512x525, scawful's pick)
+			Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+			if(screen == null || WindowState != WindowState.Normal || IsShutdownPending) {
+				return;
+			}
+
+			double layoutScale = LayoutHelper.GetLayoutScale(this);
+			double positionScale = GetPositionScale(layoutScale);
+			PixelRect area = screen.WorkingArea;
+			Size areaSize = area.Size.ToSize(positionScale);
+			FrameInfo baseSize = EmuApi.GetBaseScreenSize();
+			double pictureHeight = baseSize.Height > 0 ? baseSize.Height : 224;
+			double pictureWidth = Math.Round(pictureHeight * EmuApi.GetAspectRatio());
+			Size frame = FrameSize ?? ClientSize;
+			double chromeHeight = frame.Height - _rendererPanel.Bounds.Height;
+			double chromeWidth = frame.Width - _rendererPanel.Bounds.Width;
+
+			int scale = 1;
+			for(int i = 2; i <= 8; i++) {
+				if(pictureHeight * i + chromeHeight <= areaSize.Height * 0.6 && pictureWidth * i + chromeWidth <= areaSize.Width * 0.6) {
+					scale = i;
+				}
+			}
+
+			//SetScale counts physical pixels per game pixel
+			SetScale(scale * layoutScale);
+			double frameWidth = (pictureWidth * scale + chromeWidth) * positionScale;
+			double frameHeight = (pictureHeight * scale + chromeHeight) * positionScale;
+			Position = new PixelPoint(
+				area.X + (int)Math.Max(0, (area.Width - frameWidth) / 2),
+				area.Y + (int)Math.Max(0, (area.Height - frameHeight) / 3)
+			);
+			InstanceLog.Write($"window placed at the default frame: scale {scale}, {Math.Round(frameWidth / positionScale)}x{Math.Round(frameHeight / positionScale)} in {area}");
+		}
+
+		private void ScheduleWindowFrameSave()
+		{
+			if(_shutdownStarted) {
+				return;
+			}
+			if(_windowFrameSaveTimer == null) {
+				_windowFrameSaveTimer = new DispatcherTimer() { Interval = TimeSpan.FromSeconds(1) };
+				_windowFrameSaveTimer.Tick += (s, e) => {
+					_windowFrameSaveTimer.Stop();
+					if(!_shutdownStarted && IsVisible && WindowState == WindowState.Normal) {
+						ConfigManager.Config.MainWindow.SaveWindowSettings(this);
+						ConfigManager.Config.Save();
+					}
+				};
+			}
+			_windowFrameSaveTimer.Stop();
+			_windowFrameSaveTimer.Start();
+		}
+
+		private void OnStopSignal(PosixSignalContext context)
+		{
+			if(_stopSignalReceived) {
+				InstanceLog.Write($"received {context.Signal} again: default termination");
+				return;
+			}
+
+			_stopSignalReceived = true;
+			context.Cancel = true;
+			InstanceLog.QuitRequested($"received {context.Signal}: closing the main window (send it again to force)");
+			Dispatcher.UIThread.Post(() => {
+				_needCloseValidation = false;
+				Close();
+			});
+		}
+
 		private async void ValidateExit()
 		{
 			if(!ConfigManager.Config.Preferences.ConfirmExitResetPower || await MesenMsgBox.Show(null, "ConfirmExit", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes) {
@@ -312,7 +446,7 @@ namespace Mesen.Windows
 			_timerBackgroundFlag.Interval = TimeSpan.FromMilliseconds(200);
 			_timerBackgroundFlag.Tick += timerUpdateBackgroundFlag;
 			_timerBackgroundFlag.Start();
-			
+
 			CancellationToken shutdownToken = _shutdownCts.Token;
 			_initializationTask = Task.Run(async () => {
 				shutdownToken.ThrowIfCancellationRequested();
@@ -334,7 +468,7 @@ namespace Mesen.Windows
 				_oraclePanelRefreshEnabled = true;
 
 				ConfigManager.Config.RemoveObsoleteConfig();
-				
+
 				//InitializeDefaults must be after InitializeEmu, otherwise keybindings will be empty
 				ConfigManager.Config.InitializeDefaults();
 				ConfigManager.Config.UpgradeConfig();
@@ -405,7 +539,14 @@ namespace Mesen.Windows
 				case ConsoleNotificationType.GameLoaded:
 					CheatCodes.ApplyCheats();
 					RomInfo romInfo = EmuApi.GetRomInfo();
-					
+					InstanceLog.Write("game loaded: " + romInfo.RomPath);
+					string buildLabel = BuildLabelHelper.Find(romInfo.RomPath);
+					PostUnlessShuttingDown(() => _model.BuildLabel = buildLabel);
+					if(_placeDefaultWindowFrame) {
+						_placeDefaultWindowFrame = false;
+						PostUnlessShuttingDown(() => DispatcherTimer.RunOnce(PlaceDefaultWindowFrame, TimeSpan.FromMilliseconds(200)));
+					}
+
 					PostUnlessShuttingDown(() => {
 						bool wasAudioFile = _model.AudioPlayer != null;
 						_model.RomInfo = romInfo;
@@ -419,7 +560,6 @@ namespace Mesen.Windows
 					});
 
 					GameConfig.LoadGameConfig(romInfo).ApplyConfig();
-					OracleAgentManager.CheckAutoStart();
 
 					GameLoadedEventParams evtParams = new();
 					if(e.Parameter != IntPtr.Zero) {
@@ -514,6 +654,11 @@ namespace Mesen.Windows
 					});
 					break;
 
+				case ConsoleNotificationType.RomOfferChanged:
+					string romOffer = EmuApi.GetRomOffer();
+					PostUnlessShuttingDown(() => _model.RomOffer.Update(romOffer));
+					break;
+
 				case ConsoleNotificationType.RefreshSoftwareRenderer:
 					if(e.Parameter == IntPtr.Zero) {
 						break;
@@ -600,16 +745,69 @@ namespace Mesen.Windows
 
 				//When menu is set to auto-hide, don't count its height when calculating the window's final size
 				double menuHeight = ConfigManager.Config.Preferences.AutoHideMenu ? 0 : _mainMenu.Bounds.Height;
-				double oraclePanelHeight = _oracleDebugPanel.Bounds.Height;
+				double oraclePanelHeight = _oracleDebugPanel.IsVisible ? _oracleDebugPanel.Bounds.Height : 0;
+				double oracleToolsWidth = _oracleToolsPane.IsVisible ? _oracleToolsPane.Bounds.Width : 0;
+				double romOfferHeight = _romOfferBanner.IsVisible ? _romOfferBanner.Bounds.Height : 0;
 
 				double width = Math.Max(MinWidth, Math.Round(screenSize.Height * aspectRatio) * scale);
 				double height = Math.Max(MinHeight, screenSize.Height * scale);
-				ClientSize = new Size(width, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight);
+				ClientSize = new Size(width + oracleToolsWidth, height + menuHeight + _audioPlayer.Bounds.Height + oraclePanelHeight + romOfferHeight);
 				ResizeRenderer();
 			} else if(WindowState == WindowState.Maximized || WindowState == WindowState.FullScreen) {
 				_rendererSize = new Size(Math.Floor(screenSize.Width * scale), Math.Floor(screenSize.Height * scale));
 				ResizeRenderer();
 			}
+		}
+
+		private void RomOffer_LiveLoadStarted(object? sender, EventArgs e)
+		{
+			_liveLoadWindow = (Position, ClientSize, WindowState);
+		}
+
+		private void RomOffer_LiveLoadFinished(object? sender, RomOfferLoadResult result)
+		{
+			if(!result.Ok) {
+				_liveLoadWindow = null;
+				return;
+			}
+
+			ConfigManager.Config.RecentFiles.AddRecentFile(result.Path, null);
+			ConfigManager.Config.Save();
+			if(string.IsNullOrWhiteSpace(_model.BuildLabel)) {
+				//No manifest or version in the file name: the offer's label names the build
+				_model.BuildLabel = result.Label;
+			}
+
+			//Put the player's window and input settings back the way they were before the swap
+			ConfigManager.Config.ApplyConfig();
+			if(_liveLoadWindow is { } saved) {
+				_liveLoadWindow = null;
+				if(WindowState != saved.State) {
+					WindowState = saved.State;
+				}
+				if(saved.State == WindowState.Normal) {
+					Position = saved.Position;
+					ClientSize = saved.ClientSize;
+				}
+			}
+		}
+
+		private void Chrome_VisibilityChanged(object? sender, EventArgs e)
+		{
+			if(WindowState != WindowState.Normal) {
+				ResizeRenderer();
+				return;
+			}
+
+			//Keep the game at its current scale: grow or shrink the window around the
+			//status strip and tools pane instead of squeezing the renderer.
+			double dpiScale = LayoutHelper.GetLayoutScale(this);
+			FrameInfo baseScreenSize = EmuApi.GetBaseScreenSize();
+			if(baseScreenSize.Height == 0 || _rendererPanel.Bounds.Height <= 0) {
+				return;
+			}
+			double scale = Math.Round(_rendererPanel.Bounds.Height * dpiScale / baseScreenSize.Height, 2);
+			Dispatcher.UIThread.Post(() => SetScale(scale), DispatcherPriority.Background);
 		}
 
 		private void ResizeRenderer()
@@ -848,8 +1046,34 @@ namespace Mesen.Windows
 
 		private void OnActiveChanged()
 		{
-			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive);
+			UpdateBackgroundFlag();
 			InputApi.ResetKeyState();
+		}
+
+		private void OnFocusedElementChanged(object? sender, RoutedEventArgs e)
+		{
+			bool wasTextInputFocused = _model.OracleDebugPanel.IsTextInputFocused;
+			UpdateBackgroundFlag();
+			if(wasTextInputFocused != _model.OracleDebugPanel.IsTextInputFocused) {
+				InputApi.ResetKeyState();
+			}
+		}
+
+		private void UpdateBackgroundFlag()
+		{
+			//A focused text box (e.g. in the Oracle tools pane) counts as background so key
+			//presses reach the text box instead of the game. On macOS the native key monitor
+			//swallows every key while the main window is in the foreground.
+			bool textInputFocused = IsActive && IsTextInputFocused();
+			_model.OracleDebugPanel.IsTextInputFocused = textInputFocused;
+			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive || textInputFocused);
+		}
+
+		private void OnRendererPointerPressed(object? sender, PointerPressedEventArgs e)
+		{
+			if(IsTextInputFocused()) {
+				FocusManager?.ClearFocus();
+			}
 		}
 
 		private void timerUpdateBackgroundFlag(object? sender, EventArgs e)

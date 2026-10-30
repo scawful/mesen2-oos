@@ -5,6 +5,7 @@
 #include "SaveStateManager.h"
 #include "EmuSettings.h"
 #include "MessageManager.h"
+#include "NotificationManager.h"
 #include "RewindManager.h"
 #include "CheatManager.h"
 #include "RomInfo.h"
@@ -26,6 +27,7 @@
 #include "Shared/Video/VideoRenderer.h"
 #include "Shared/Video/DebugHud.h"
 #include "Utilities/HexUtilities.h"
+#include "Utilities/Video/AviWriter.h"
 #include "Utilities/VirtualFile.h"
 #include "Utilities/FolderUtilities.h"
 #include "SNES/SnesPpuTypes.h"
@@ -114,6 +116,13 @@ SimpleLock SocketServer::_saveLoadLock;
 SimpleLock SocketServer::_saveLoadStatusLock;
 SaveLoadResult SocketServer::_lastSaveResult;
 SaveLoadResult SocketServer::_lastLoadResult;
+RomOfferState SocketServer::_romOffer;
+SimpleLock SocketServer::_romOfferLock;
+atomic<bool> SocketServer::_romLiveLoadBusy(false);
+atomic<int> SocketServer::_resumeFile(-1);
+uint32_t SocketServer::_resumeStartFrame = 0;
+uint32_t SocketServer::_resumeNextPressFrame = 0;
+bool SocketServer::_resumeSeenTitle = false;
 
 // Static member definitions for validation rules
 // Static member definitions for validation rules
@@ -293,6 +302,7 @@ void SocketServer::InitializeValidationRules() {
 	CommandValidation loadRomRule = defaultRule;
 	loadRomRule.requiredParams.insert("path");
 	SocketServer::_validationRules["LOADROM"] = loadRomRule;
+	SocketServer::_validationRules["OFFER_ROM"] = loadRomRule;
 	SocketServer::_validationRules["CPU"] = defaultRule;
 	SocketServer::_validationRules["GAMESTATE"] = defaultRule;
 	SocketServer::_validationRules["SPRITES"] = defaultRule;
@@ -310,6 +320,11 @@ void SocketServer::RegisterHandlers() {
 	_handlers["RESUME"] = HandleResume;
 	_handlers["RESET"] = HandleReset;
 	_handlers["LOADROM"] = HandleLoadRom;
+	_handlers["OFFER_ROM"] = HandleOfferRom;
+	_handlers["OFFER_ROM_STATUS"] = HandleOfferRomStatus;
+	_handlers["OFFER_ROM_CLEAR"] = HandleOfferRomClear;
+	_handlers["LOAD_ROM_LIVE"] = HandleLoadRomLive;
+	_handlers["LOG"] = HandleEmuLog;
 	_handlers["READ"] = HandleRead;
 	_handlers["READ16"] = HandleRead16;
 	_handlers["WRITE"] = HandleWrite;
@@ -380,6 +395,7 @@ void SocketServer::RegisterHandlers() {
 
 	// Agent discovery & health handlers
 	_handlers["CAPABILITIES"] = HandleCapabilities;
+	_handlers["VIDEO_RECORD"] = HandleVideoRecord;
 	_handlers["AGENT_REGISTER"] = HandleAgentRegister;
 	_handlers["METRICS"] = HandleMetrics;
 	_handlers["LOG_LEVEL"] = HandleLogLevel;
@@ -522,7 +538,7 @@ void SocketServer::Start() {
 	_serverThread = make_unique<thread>(&SocketServer::ServerLoop, this);
 
 	MessageManager::Log("[SocketServer] Started on " + _socketPath);
-	
+
 	// Create initial status file
 	UpdateStatusFile();
 }
@@ -561,7 +577,7 @@ void SocketServer::Stop() {
 
 	// Remove socket file
 	unlink(_socketPath.c_str());
-	
+
 	// Remove status file
 	string statusPath = GetStatusFilePath();
 	unlink(statusPath.c_str());
@@ -712,7 +728,7 @@ bool SocketServer::HandleClient(int clientFd) {
 	auto startTime = std::chrono::steady_clock::now();
 	string request;
 	string readError;
-	
+
 	if (!ReadRequestLine(clientFd, _running, request, readError)) {
 		if (!readError.empty()) {
 			SocketResponse response;
@@ -800,7 +816,7 @@ bool SocketServer::HandleClient(int clientFd) {
 		entry.timestamp = timeStr;
 		entry.errorCode = response.errorCode;
 		entry.latencyUs = latencyUs;
-		
+
 		_commandHistory.push_back(entry);
 		while (_commandHistory.size() > _commandHistoryMaxSize) {
 			_commandHistory.pop_front();
@@ -809,7 +825,7 @@ bool SocketServer::HandleClient(int clientFd) {
 
 	string responseJson = response.ToJson() + "\n";
 	WriteAll(clientFd, responseJson);
-	
+
 	// If the command was SUBSCRIBE, we definitely keep it open,
 	// but generally we keep all open now until they disconnect.
 	return true;
@@ -848,7 +864,7 @@ bool SocketServer::ParseCommand(const string& json, SocketCommand& cmd, string& 
 bool SocketServer::ValidateCommand(const SocketCommand& cmd, string& error, SocketErrorCode& errorCode) {
 	auto lock = _validationLock.AcquireSafe();
 	auto it = _validationRules.find(cmd.type);
-	
+
 	// If no specific rule, use default validation
 	CommandValidation rule;
 	if (it != _validationRules.end()) {
@@ -1048,7 +1064,13 @@ SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cm
 
 SocketResponse SocketServer::HandlePause(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
-	emu->Pause();
+	if(!emu->TryPause()) {
+		resp.success = false;
+		resp.error = "Emulation thread did not respond within 500ms; pause request cancelled";
+		resp.errorCode = SocketErrorCode::Timeout;
+		resp.retryable = true;
+		return resp;
+	}
 	resp.success = true;
 	resp.data = "\"OK\"";
 	return resp;
@@ -1120,6 +1142,375 @@ SocketResponse SocketServer::HandleLoadRom(Emulator* emu, const SocketCommand& c
 		resp.data = "\"OK\"";
 	} else {
 		resp.error = "Failed to load ROM";
+		resp.errorCode = SocketErrorCode::InternalError;
+	}
+	return resp;
+}
+
+void SocketServer::NotifyRomOfferChanged(Emulator* emu) {
+	if(emu && emu->GetNotificationManager()) {
+		emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::RomOfferChanged);
+	}
+}
+
+string SocketServer::GetRomOfferJson() {
+	auto lock = _romOfferLock.AcquireSafe();
+	const RomOfferState& o = _romOffer;
+	stringstream ss;
+	ss << "{\"pending\":" << (o.pending ? "true" : "false");
+	ss << ",\"id\":" << o.id;
+	ss << ",\"path\":\"" << JsonEscape(o.pending ? o.path : "") << "\"";
+	ss << ",\"label\":\"" << JsonEscape(o.pending ? o.label : "") << "\"";
+	ss << ",\"notes\":\"" << JsonEscape(o.pending ? o.notes : "") << "\"";
+	ss << ",\"offered_at_ms\":" << (o.pending ? o.offeredAtMs : 0);
+	ss << ",\"snoozed\":" << (o.snoozed ? "true" : "false");
+	ss << ",\"loading\":" << (o.loading ? "true" : "false");
+	ss << ",\"last_load\":";
+	if(o.loadCount == 0) {
+		ss << "null";
+	} else {
+		ss << "{\"count\":" << o.loadCount;
+		ss << ",\"ok\":" << (o.lastOk ? "true" : "false");
+		ss << ",\"path\":\"" << JsonEscape(o.lastPath) << "\"";
+		ss << ",\"label\":\"" << JsonEscape(o.lastLabel) << "\"";
+		ss << ",\"error\":\"" << JsonEscape(o.lastError) << "\"";
+		ss << ",\"state\":\"" << JsonEscape(o.lastStatePath) << "\"";
+		ss << ",\"save\":\"" << JsonEscape(o.lastSavePath) << "\"";
+		ss << ",\"backup\":\"" << JsonEscape(o.lastBackupPath) << "\"";
+		ss << ",\"resume_file\":" << o.lastResumeFile;
+		ss << ",\"at_ms\":" << o.lastAtMs << "}";
+	}
+	ss << "}";
+	return ss.str();
+}
+
+//ALTTP-layout save RAM: $1FFE (SRAMOFF) = file index * 2 + 2 while a file is in use (0 at the
+//title and file select), each file's $03E5 holds $55AA when it exists
+static int GetActiveAlttpSaveFile(Emulator* emu)
+{
+	ConsoleMemoryInfo sram = emu->GetMemory(MemoryType::SnesSaveRam);
+	if(emu->GetConsoleType() != ConsoleType::Snes || !sram.Memory || sram.Size < 0x2000) {
+		return -1;
+	}
+	uint8_t* data = (uint8_t*)sram.Memory;
+	int sramOffset = data[0x1FFE] | (data[0x1FFF] << 8);
+	if(sramOffset != 2 && sramOffset != 4 && sramOffset != 6) {
+		return -1;
+	}
+	return sramOffset / 2 - 1;
+}
+
+static bool IsAlttpSaveFileValid(Emulator* emu, int file)
+{
+	ConsoleMemoryInfo sram = emu->GetMemory(MemoryType::SnesSaveRam);
+	if(file < 0 || !sram.Memory || sram.Size < 0x2000) {
+		return false;
+	}
+	uint8_t* marker = (uint8_t*)sram.Memory + file * 0x500 + 0x3E5;
+	return marker[0] == 0xAA && marker[1] == 0x55;
+}
+
+static void FinishRomResume(const string& message)
+{
+	MessageManager::Log("[Resume] " + message);
+}
+
+void SocketServer::ProcessRomResume(Emulator* emu) {
+	//Runs on the emulation thread after each frame while a live load resumes a save file:
+	//press Start through the intro/title, then pick the file at the file select
+	int file = _resumeFile.load();
+	if(file < 0) {
+		return;
+	}
+
+	ConsoleMemoryInfo wram = emu->GetMemory(MemoryType::SnesWorkRam);
+	uint32_t frame = emu->GetFrameCount();
+	if(emu->GetConsoleType() != ConsoleType::Snes || !wram.Memory || wram.Size < 0x100) {
+		_resumeFile = -1;
+		return;
+	}
+
+	uint8_t* ram = (uint8_t*)wram.Memory;
+	uint8_t module = ram[0x10];
+	uint8_t submodule = ram[0x11];
+	bool atTitle = module == 0x00 || module == 0x01 || module == 0x14;
+	if(!atTitle && _resumeSeenTitle) {
+		_resumeFile = -1;
+		FinishRomResume("file " + std::to_string(file + 1) + " is loading (module $" + HexUtilities::ToHex(module) + ")");
+		return;
+	}
+	//Until the title shows, WRAM still holds boot garbage: only wait
+	_resumeSeenTitle |= atTitle;
+	if(frame - _resumeStartFrame > 1200) {
+		_resumeFile = -1;
+		FinishRomResume("gave up after 20 s at module $" + HexUtilities::ToHex(module) + "/$" + HexUtilities::ToHex(submodule));
+		return;
+	}
+	if(!atTitle || frame < _resumeNextPressFrame || (module == 0x01 && submodule != 0x05)) {
+		return;
+	}
+
+	DebugControllerState state = {};
+	if(module == 0x01) {
+		//File select waiting for input: put the cursor on the file and press A
+		ram[0xC8] = (uint8_t)file;
+		state.A = true;
+	} else {
+		state.Start = true;
+	}
+	auto dbg = emu->GetDebugger(false);
+	if(dbg.GetDebugger()) {
+		dbg.GetDebugger()->SetInputOverrides(0, state, 4);
+	}
+	_resumeNextPressFrame = frame + 30;
+}
+
+bool SocketServer::LoadRomLive(Emulator* emu, const string& romPath, const string& label, bool saveState, bool resume, string& error) {
+	bool expected = false;
+	if(!_romLiveLoadBusy.compare_exchange_strong(expected, true)) {
+		error = "A live ROM load is already in progress";
+		return false;
+	}
+
+	VirtualFile romFile(romPath);
+	if(!romFile.IsValid()) {
+		error = "Invalid ROM path: " + romPath;
+		_romLiveLoadBusy = false;
+		return false;
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.loading = true;
+	}
+	NotifyRomOfferChanged(emu);
+
+	string statePath;
+	string savePath;
+	//The file in play is only known before the swap: booting the new ROM clears $1FFE
+	int resumeFile = resume && emu->IsRunning() ? GetActiveAlttpSaveFile(emu) : -1;
+	if(emu->IsRunning()) {
+		//Keep the running game's save file name so the new ROM reads the same .srm
+		string batteryName = emu->GetCurrentBatteryName();
+		if(saveState) {
+			statePath = FolderUtilities::CombinePath(FolderUtilities::GetSaveStateFolder(), batteryName + "_before_live_load.mss");
+			if(!emu->GetSaveStateManager()->SaveState(statePath, false)) {
+				statePath.clear();
+			}
+		}
+		emu->SetBatteryNameOverride(romPath, batteryName);
+		savePath = FolderUtilities::CombinePath(FolderUtilities::GetSaveFolder(), batteryName + ".srm");
+	}
+
+	//LoadRom writes the running game's SRAM to disk (and backs it up) before the new ROM reads it
+	string previousBackup = emu->GetLastSaveBackupPath();
+	bool ok = emu->LoadRom(romFile, VirtualFile());
+	string backupPath = emu->GetLastSaveBackupPath();
+	if(backupPath == previousBackup) {
+		backupPath.clear();
+	}
+	if(!ok) {
+		error = "Failed to load ROM";
+	}
+
+	if(ok && resumeFile >= 0) {
+		if(IsAlttpSaveFileValid(emu, resumeFile)) {
+			//Input overrides need the debugger; create it here, off the emulation thread
+			emu->GetDebugger(true);
+			_resumeStartFrame = emu->GetFrameCount();
+			_resumeNextPressFrame = 0;
+			_resumeSeenTitle = false;
+			_resumeFile = resumeFile;
+			MessageManager::Log("[Resume] continuing save file " + std::to_string(resumeFile + 1) + " after the live load");
+		} else {
+			resumeFile = -1;
+		}
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		RomOfferState& o = _romOffer;
+		o.loading = false;
+		o.loadCount++;
+		o.lastOk = ok;
+		o.lastPath = romPath;
+		o.lastLabel = label;
+		o.lastError = ok ? "" : error;
+		o.lastStatePath = statePath;
+		o.lastSavePath = savePath;
+		o.lastBackupPath = backupPath;
+		o.lastResumeFile = resumeFile + 1;
+		o.lastAtMs = NowMs();
+		if(ok && o.pending && o.path == romPath) {
+			o.pending = false;
+			o.snoozed = false;
+		}
+	}
+	NotifyRomOfferChanged(emu);
+	_romLiveLoadBusy = false;
+	return ok;
+}
+
+bool SocketServer::AcceptRomOffer(Emulator* emu, string& error) {
+	string path;
+	string label;
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		if(!_romOffer.pending) {
+			error = "No ROM offer pending";
+			return false;
+		}
+		path = _romOffer.path;
+		label = _romOffer.label;
+	}
+	return LoadRomLive(emu, path, label, true, true, error);
+}
+
+void SocketServer::SnoozeRomOffer(Emulator* emu) {
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		if(!_romOffer.pending) {
+			return;
+		}
+		_romOffer.snoozed = true;
+	}
+	NotifyRomOfferChanged(emu);
+}
+
+SocketResponse SocketServer::HandleOfferRom(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	string romPath = cmd.GetParam("path");
+	if(!VirtualFile(romPath).IsValid()) {
+		resp.success = false;
+		resp.error = "Invalid ROM path: " + romPath;
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+
+	string label = cmd.GetParam("label");
+	if(label.empty()) {
+		label = FolderUtilities::GetFilename(romPath, true);
+	}
+
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.pending = true;
+		_romOffer.snoozed = false;
+		_romOffer.id++;
+		_romOffer.path = romPath;
+		_romOffer.label = label;
+		_romOffer.notes = cmd.GetParam("notes");
+		_romOffer.offeredAtMs = NowMs();
+	}
+	NotifyRomOfferChanged(emu);
+
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOfferRomStatus(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOfferRomClear(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	{
+		auto lock = _romOfferLock.AcquireSafe();
+		_romOffer.pending = false;
+		_romOffer.snoozed = false;
+	}
+	NotifyRomOfferChanged(emu);
+	resp.success = true;
+	resp.data = GetRomOfferJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleEmuLog(Emulator* emu, const SocketCommand& cmd) {
+	//Tail of the Mesen log window (ROM loads, save warnings, [Save]/[SaveState] lines)
+	int lines = 50;
+	if(cmd.HasParam("lines") && (!TryParseInt(cmd.GetParam("lines"), lines) || lines <= 0)) {
+		SocketResponse resp;
+		resp.success = false;
+		resp.error = "Invalid lines value";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+
+	string log = MessageManager::GetLog();
+	size_t start = log.size();
+	for(int i = 0; i <= lines && start > 0; i++) {
+		size_t pos = log.rfind('\n', start - 1);
+		start = pos == string::npos ? 0 : pos;
+	}
+	if(start > 0) {
+		start++;
+	}
+
+	//Log lines can carry raw ROM header bytes; keep the JSON valid UTF-8
+	string text;
+	for(size_t i = start; i < log.size();) {
+		uint8_t c = (uint8_t)log[i];
+		size_t len = c < 0x80 ? 1 : (c >> 5) == 0x06 ? 2 : (c >> 4) == 0x0E ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+		bool valid = len > 0 && i + len <= log.size();
+		for(size_t j = 1; valid && j < len; j++) {
+			valid = ((uint8_t)log[i + j] >> 6) == 0x02;
+		}
+		if(valid) {
+			text.append(log, i, len);
+			i += len;
+		} else {
+			text += '?';
+			i++;
+		}
+	}
+
+	SocketResponse resp;
+	resp.success = true;
+	resp.data = "\"" + JsonEscape(text) + "\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleLoadRomLive(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	if(!emu) {
+		resp.success = false;
+		resp.error = "Emulator not available";
+		return resp;
+	}
+
+	bool saveState = cmd.HasParam("state") ? ParseBoolValue(cmd.GetParam("state")) : true;
+	bool resume = cmd.HasParam("resume") ? ParseBoolValue(cmd.GetParam("resume")) : true;
+	string romPath = cmd.GetParam("path");
+	string label = cmd.GetParam("label");
+	string error;
+	bool ok;
+	if(romPath.empty()) {
+		//No path: accept the pending offer, same as the UI's "Load now" button
+		{
+			auto lock = _romOfferLock.AcquireSafe();
+			if(!_romOffer.pending) {
+				resp.success = false;
+				resp.error = "No path given and no ROM offer pending";
+				resp.errorCode = SocketErrorCode::MissingParameter;
+				return resp;
+			}
+			romPath = _romOffer.path;
+			label = _romOffer.label;
+		}
+		ok = LoadRomLive(emu, romPath, label, saveState, resume, error);
+	} else {
+		ok = LoadRomLive(emu, romPath, label.empty() ? FolderUtilities::GetFilename(romPath, true) : label, saveState, resume, error);
+	}
+
+	resp.success = ok;
+	if(ok) {
+		resp.data = GetRomOfferJson();
+	} else {
+		resp.error = error;
 		resp.errorCode = SocketErrorCode::InternalError;
 	}
 	return resp;
@@ -4955,7 +5346,7 @@ SocketResponse SocketServer::HandleLogpoint(Emulator* emu, const SocketCommand& 
 		lp.id = _nextLogpointId++;
 		lp.addr = std::stoul(addrIt->second, nullptr, 0);
 		lp.enabled = true;
-		
+
 		auto dbg = emu->GetDebugger(true);
 		lp.cpuType = dbg.GetDebugger()->GetMainCpuType();
 
@@ -5034,7 +5425,7 @@ void SocketServer::CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu) {
 			hit.logpointId = lp.id;
 			hit.pc = pc;
 			hit.cpuType = cpuType;
-			
+
 			auto dbg = emu->GetDebugger(true);
 			if (dbg.GetDebugger()) {
 				hit.cycleCount = dbg.GetDebugger()->GetInstructionProgress(cpuType).CurrentCycle;
@@ -5084,7 +5475,7 @@ SocketResponse SocketServer::HandleSubscribe(Emulator* emu, const SocketCommand&
 			size_t pos = 0;
 			while (pos < eventsStr.size()) {
 				// Skip whitespace and delimiters
-				while (pos < eventsStr.size() && (eventsStr[pos] == ' ' || eventsStr[pos] == ',' || 
+				while (pos < eventsStr.size() && (eventsStr[pos] == ' ' || eventsStr[pos] == ',' ||
 				       eventsStr[pos] == '[' || eventsStr[pos] == ']' || eventsStr[pos] == '"')) {
 					pos++;
 				}
@@ -5092,7 +5483,7 @@ SocketResponse SocketServer::HandleSubscribe(Emulator* emu, const SocketCommand&
 
 				// Find end of event name
 				size_t endPos = pos;
-				while (endPos < eventsStr.size() && eventsStr[endPos] != ',' && 
+				while (endPos < eventsStr.size() && eventsStr[endPos] != ',' &&
 				       eventsStr[endPos] != ']' && eventsStr[endPos] != '"' && eventsStr[endPos] != ' ') {
 					endPos++;
 				}
@@ -6432,6 +6823,11 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"RESUME", "Resume emulation", "", "{\"type\":\"RESUME\"}"},
 			{"RESET", "Reset the emulator", "", "{\"type\":\"RESET\"}"},
 			{"LOADROM", "Load ROM from path", "path, patch (optional), stop (optional), powercycle (optional)", "{\"type\":\"LOADROM\",\"path\":\"/path/to/rom.sfc\"}"},
+			{"OFFER_ROM", "Offer a new ROM to the player (UI banner: Load now / Later); replaces any pending offer", "path, label (optional), notes (optional)", "{\"type\":\"OFFER_ROM\",\"path\":\"/path/to/rom.sfc\",\"label\":\"v10\"}"},
+			{"OFFER_ROM_STATUS", "Get the pending ROM offer and the last live load result", "", "{\"type\":\"OFFER_ROM_STATUS\"}"},
+			{"OFFER_ROM_CLEAR", "Withdraw the pending ROM offer", "", "{\"type\":\"OFFER_ROM_CLEAR\"}"},
+			{"LOG", "Last lines of the Mesen log window", "lines (optional, default 50)", "{\"type\":\"LOG\",\"lines\":\"20\"}"},
+			{"LOAD_ROM_LIVE", "Load a ROM keeping the running game's .srm (optional backup state first); no path accepts the pending offer. ALTTP-layout saves: continues the file in play past the title", "path (optional), label (optional), state (optional, default true), resume (optional, default true)", "{\"type\":\"LOAD_ROM_LIVE\",\"path\":\"/path/to/rom.sfc\"}"},
 			{"FRAME", "Run one frame", "", "{\"type\":\"FRAME\"}"},
 			{"STEP", "Step CPU execution", "count (optional), mode (into/over/out/cycle/ppu/scanline/frame/nmi/irq/back)", "{\"type\":\"STEP\",\"count\":\"10\",\"mode\":\"over\"}"},
 			{"READ", "Read 1 byte from memory", "addr, memtype (optional)", "{\"type\":\"READ\",\"addr\":\"0x7E0022\"}"},
@@ -6484,6 +6880,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"SUBSCRIBE", "Subscribe to event notifications", "events (array)", "{\"type\":\"SUBSCRIBE\",\"events\":\"[\\\"breakpoint_hit\\\"]\"}"},
 			{"EXEC_LUA", "Execute one-off Lua", "code (base64)", "{\"type\":\"EXEC_LUA\",\"code\":\"...\"}"},
 			{"LOADSCRIPT", "Load Lua script", "path or content", "{\"type\":\"LOADSCRIPT\",\"path\":\"/path/to/script.lua\"}"},
+			{"VIDEO_RECORD", "Native video/audio recording", "action (start/stop/status), token, path (start)", "{\"type\":\"VIDEO_RECORD\",\"action\":\"status\"}"},
 			{"HELP", "Get API help", "command (optional)", "{\"type\":\"HELP\",\"command\":\"BREAKPOINT\"}"},
 		};
 
@@ -6508,6 +6905,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 	// List all commands
 	static const vector<string> commands = {
 		"PING", "STATE", "HEALTH", "PAUSE", "RESUME", "RESET", "FRAME", "STEP",
+		"OFFER_ROM", "OFFER_ROM_STATUS", "OFFER_ROM_CLEAR", "LOAD_ROM_LIVE", "LOG",
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",
@@ -6520,7 +6918,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"COLLISION_OVERLAY", "COLLISION_DUMP", "DRAW_PATH",
 		"ROMINFO", "SPEED", "REWIND", "CHEAT", "INPUT",
 		"STATEINSPECT", "LOGPOINT", "SUBSCRIBE", "EXEC_LUA", "LOADSCRIPT", "HELP",
-		"GAMESTATE", "SPRITES",
+		"GAMESTATE", "SPRITES", "VIDEO_RECORD",
 		"CAMERA", "RECORD", "LIVE", "PROJECT"
 	};
 
@@ -6553,7 +6951,7 @@ namespace ALTTP {
 	constexpr uint32_t LINK_DIRECTION = 0x7E002F;  // Link facing direction
 	constexpr uint32_t LINK_STATE = 0x7E005D;      // Link action state
 	constexpr uint32_t LINK_POSE = 0x7E0046;       // Link pose/animation
-	
+
 	// Health/Items
 	constexpr uint32_t HEALTH_CURRENT = 0x7EF36D;  // Current health
 	constexpr uint32_t HEALTH_MAX = 0x7EF36C;      // Max health
@@ -6562,20 +6960,20 @@ namespace ALTTP {
 	constexpr uint32_t RUPEES_HIGH = 0x7EF361;     // Rupees high byte
 	constexpr uint32_t BOMBS = 0x7EF343;           // Bomb count
 	constexpr uint32_t ARROWS = 0x7EF377;          // Arrow count
-	
+
 	// Game State
 	constexpr uint32_t GAME_MODE = 0x7E0010;       // Main game mode
 	constexpr uint32_t GAME_SUBMODE = 0x7E0011;    // Game submode
 	constexpr uint32_t MODULE = 0x7E0010;          // Module index
 	constexpr uint32_t SUBMODULE = 0x7E0011;       // Submodule index
-	
+
 	// Room/Area
 	constexpr uint32_t ROOM_ID_LOW = 0x7E00A0;     // Current room ID (low)
 	constexpr uint32_t ROOM_ID_HIGH = 0x7E00A1;    // Current room ID (high)
 	constexpr uint32_t OVERWORLD_AREA = 0x7E008A;  // Overworld area ID
 	constexpr uint32_t INDOORS = 0x7E001B;         // Indoor flag
 	constexpr uint32_t DUNGEON_ID = 0x7E040C;      // Current dungeon ID
-	
+
 	// Sprites
 	constexpr uint32_t SPRITE_TABLE = 0x7E0D00;    // Sprite table start
 	constexpr uint32_t SPRITE_COUNT = 16;          // Max sprites
@@ -6651,7 +7049,7 @@ SocketResponse SocketServer::HandleGameState(Emulator* emu, const SocketCommand&
 	// Build response
 	stringstream ss;
 	ss << "{";
-	
+
 	// Link section
 	ss << "\"link\":{";
 	ss << "\"x\":" << linkX;
@@ -6803,7 +7201,7 @@ SocketResponse SocketServer::HandleCallstack(Emulator* emu, const SocketCommand&
         resp.errorCode = SocketErrorCode::DebuggerNotAvailable;
         return resp;
     }
-    
+
     uint32_t size = 512;
     vector<StackFrameInfo> frames(size);
     callstackManager->GetCallstack(frames.data(), size);
@@ -6852,9 +7250,86 @@ SocketResponse SocketServer::HandleOsd(Emulator* emu, const SocketCommand& cmd) 
 }
 
 // Agent discovery handlers
+// Recording uses the native decoder/audio pipeline, independent of UI rendering.
+// The token prevents one automation client from stopping another client's take.
+SocketResponse SocketServer::HandleVideoRecord(Emulator* emu, const SocketCommand& cmd) {
+    SocketResponse resp;
+    auto fail = [&](const string& message) {
+        resp.success = false;
+        resp.error = message;
+        resp.errorCode = SocketErrorCode::InvalidParameter;
+        return resp;
+    };
+    if(!emu || !emu->IsRunning() || !emu->GetVideoRenderer()) {
+        return fail("A loaded running emulator is required");
+    }
+    auto server = emu->GetSocketServer();
+    if(!server) { return fail("Socket server unavailable"); }
+    auto lock = server->_lock.AcquireSafe();
+    auto renderer = emu->GetVideoRenderer();
+    auto actionIt = cmd.params.find("action");
+    string action = actionIt == cmd.params.end() ? "status" : actionIt->second;
+    auto tokenIt = cmd.params.find("token");
+    string token = tokenIt == cmd.params.end() ? "" : tokenIt->second;
+    if(action != "status" && action != "start" && action != "stop") {
+        return fail("action must be start, stop or status");
+    }
+    if(action != "status" && (token.empty() || token.size() > 128)) {
+        return fail("A nonempty ownership token (max 128 bytes) is required");
+    }
+    if(action != "status" && !emu->IsPaused()) {
+        return fail("Pause the owned instance before starting or stopping recording");
+    }
+    if(action == "start") {
+        if(renderer->IsRecording() || !server->_videoRecordOwner.empty()) {
+            return fail("Recording already active or awaiting owner cleanup");
+        }
+        auto pathIt = cmd.params.find("path");
+        if(pathIt == cmd.params.end() || pathIt->second.find('\0') != string::npos) {
+            return fail("An absolute new .avi output path is required");
+        }
+        fs::path path(pathIt->second);
+        std::error_code ec;
+        if(!path.is_absolute() || path.extension() != ".avi" || fs::exists(path, ec) || ec) {
+            return fail("Output must be an absolute, nonexistent .avi path");
+        }
+        // Reserve exclusively. AviRecorder::Init normally truncates existing files.
+        int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if(fd < 0) { return fail("Cannot exclusively create recording output"); }
+        close(fd);
+        RecordAviOptions options = {};
+        options.Codec = VideoCodec::ZMBV;
+        options.CompressionLevel = 6;
+        renderer->StartRecording(path.string(), options);
+        if(!renderer->IsRecording()) { return fail("Native recorder initialization failed; retain output for diagnosis"); }
+        server->_videoRecordOwner = token;
+        server->_videoRecordPath = path.string();
+        server->_videoRecordStartFrame = emu->GetFrameCount();
+    } else if(action == "stop") {
+        if(server->_videoRecordOwner.empty() || token != server->_videoRecordOwner) {
+            return fail("Recording ownership token mismatch");
+        }
+        renderer->StopRecording();
+        server->_videoRecordOwner.clear();
+    }
+    stringstream ss;
+    ss << "{\"schema\":\"mesen.native-video.v1\",\"active\":"
+       << (renderer->IsRecording() ? "true" : "false")
+       << ",\"owned\":" << (!server->_videoRecordOwner.empty() && token == server->_videoRecordOwner ? "true" : "false")
+       << ",\"path\":\"" << JsonEscape(server->_videoRecordPath) << "\""
+       << ",\"start_frame\":" << server->_videoRecordStartFrame
+       << ",\"frame\":" << emu->GetFrameCount()
+       << ",\"fps\":" << emu->GetFps()
+       << ",\"codec\":\"ZMBV\",\"audio_source\":\"emulator_mixer\""
+       << ",\"media_verified\":false}";
+    resp.success = true;
+    resp.data = ss.str();
+    return resp;
+}
+
 SocketResponse SocketServer::HandleCapabilities(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     size_t handlerCount = 0;
     if(emu) {
         SocketServer* server = emu->GetSocketServer();
@@ -6863,14 +7338,14 @@ SocketResponse SocketServer::HandleCapabilities(Emulator* emu, const SocketComma
             handlerCount = server->_handlers.size();
         }
     }
-    
+
     stringstream ss;
     ss << "{";
     ss << "\"version\":\"1.1.0\",";
     ss << "\"commands\":" << handlerCount << ",";
-    ss << "\"features\":[\"error_codes\",\"validation\",\"yaze_sync\",\"p_watch\",\"mem_blame\",\"stack_retaddr\",\"batch\",\"gamestate\",\"sprites\",\"script_running\",\"savestate_labels\",\"savestate_slots\"]";
+    ss << "\"features\":[\"error_codes\",\"validation\",\"yaze_sync\",\"p_watch\",\"mem_blame\",\"stack_retaddr\",\"batch\",\"gamestate\",\"sprites\",\"script_running\",\"savestate_labels\",\"savestate_slots\",\"native_video_record_v1\"]";
     ss << "}";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -6878,16 +7353,16 @@ SocketResponse SocketServer::HandleCapabilities(Emulator* emu, const SocketComma
 
 SocketResponse SocketServer::HandleAgentRegister(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     auto idIt = cmd.params.find("agentId");
     string agentId = idIt != cmd.params.end() ? idIt->second : "unknown";
-    
+
     auto nameIt = cmd.params.find("agentName");
     string agentName = nameIt != cmd.params.end() ? nameIt->second : "Unknown Agent";
-    
+
     auto versionIt = cmd.params.find("version");
     string version = versionIt != cmd.params.end() ? versionIt->second : "1.0.0";
-    
+
     // Register agent
     {
         auto lock = _agentLock.AcquireSafe();
@@ -6901,10 +7376,10 @@ SocketResponse SocketServer::HandleAgentRegister(Emulator* emu, const SocketComm
         info.lastSeen = nowEpoch;
         _registeredAgents[cmd.clientFd] = info;
     }
-    
+
     stringstream ss;
     ss << "{\"registered\":true,\"agentId\":\"" << JsonEscape(agentId) << "\"}";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -6912,13 +7387,13 @@ SocketResponse SocketServer::HandleAgentRegister(Emulator* emu, const SocketComm
 
 SocketResponse SocketServer::HandleMetrics(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     size_t totalCommands = 0;
     size_t errorCount = 0;
     uint64_t totalLatency = 0;
     size_t agentCount = 0;
     size_t subscriptionCount = 0;
-    
+
     {
         auto lock = _historyLock.AcquireSafe();
         totalCommands = _commandHistory.size();
@@ -6929,20 +7404,20 @@ SocketResponse SocketServer::HandleMetrics(Emulator* emu, const SocketCommand& c
             totalLatency += entry.latencyUs;
         }
     }
-    
+
     {
         auto lock = _agentLock.AcquireSafe();
         agentCount = _registeredAgents.size();
     }
-    
+
     {
         auto lock = _eventLock.AcquireSafe();
         subscriptionCount = _eventSubscriptions.size();
     }
-    
+
     double avgLatency = totalCommands > 0 ? (double)totalLatency / totalCommands : 0;
     double errorRate = totalCommands > 0 ? (double)errorCount / totalCommands : 0;
-    
+
     stringstream ss;
     ss << "{";
     ss << "\"totalCommands\":" << totalCommands << ",";
@@ -6952,7 +7427,7 @@ SocketResponse SocketServer::HandleMetrics(Emulator* emu, const SocketCommand& c
     ss << "\"registeredAgents\":" << agentCount << ",";
     ss << "\"activeSubscriptions\":" << subscriptionCount;
     ss << "}";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -6960,7 +7435,7 @@ SocketResponse SocketServer::HandleMetrics(Emulator* emu, const SocketCommand& c
 
 SocketResponse SocketServer::HandleCommandHistory(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     auto countIt = cmd.params.find("count");
     size_t count = 20;
     if (countIt != cmd.params.end()) {
@@ -6968,10 +7443,10 @@ SocketResponse SocketServer::HandleCommandHistory(Emulator* emu, const SocketCom
             count = std::stoul(countIt->second);
         } catch (...) {}
     }
-    
+
     stringstream ss;
     ss << "[";
-    
+
     {
         auto lock = _historyLock.AcquireSafe();
         size_t start = _commandHistory.size() > count ? _commandHistory.size() - count : 0;
@@ -6979,7 +7454,7 @@ SocketResponse SocketServer::HandleCommandHistory(Emulator* emu, const SocketCom
         for (size_t i = start; i < _commandHistory.size(); i++) {
             if (!first) ss << ",";
             first = false;
-            
+
             const auto& entry = _commandHistory[i];
             ss << "{";
             ss << "\"command\":\"" << JsonEscape(entry.command) << "\",";
@@ -6989,9 +7464,9 @@ SocketResponse SocketServer::HandleCommandHistory(Emulator* emu, const SocketCom
             ss << "}";
         }
     }
-    
+
     ss << "]";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -7068,7 +7543,7 @@ SocketResponse SocketServer::HandleDebugLog(Emulator* emu, const SocketCommand& 
 
 SocketResponse SocketServer::HandleLogLevel(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
-	
+
 	auto actionIt = cmd.params.find("action");
 	string action = actionIt != cmd.params.end() ? actionIt->second : "get";
 
@@ -7108,7 +7583,7 @@ SocketResponse SocketServer::HandleLogLevel(Emulator* emu, const SocketCommand& 
 
 	stringstream ss;
 	ss << "{\"level\":\"" << currentLevel << "\"}";
-	
+
 	resp.success = true;
 	resp.data = ss.str();
 	return resp;
@@ -7116,7 +7591,7 @@ SocketResponse SocketServer::HandleLogLevel(Emulator* emu, const SocketCommand& 
 
 SocketResponse SocketServer::HandleSaveStateSync(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     auto pathIt = cmd.params.find("path");
     if (pathIt == cmd.params.end()) {
         resp.success = false;
@@ -7124,19 +7599,19 @@ SocketResponse SocketServer::HandleSaveStateSync(Emulator* emu, const SocketComm
         resp.errorCode = SocketErrorCode::MissingParameter;
         return resp;
     }
-    
+
     string path = pathIt->second;
     uint64_t frameCount = emu->GetFrameCount();
-    
+
     // Update the path being watched by the bridge
     YazeStateBridge::SetStatePath(path);
 
     // Notify YAZE via the bridge
     YazeStateBridge::NotifyStateSaved(path, frameCount);
-    
+
     stringstream ss;
     ss << "{\"synced\":true,\"path\":\"" << JsonEscape(path) << "\",\"frame\":" << frameCount << "}";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -7144,17 +7619,17 @@ SocketResponse SocketServer::HandleSaveStateSync(Emulator* emu, const SocketComm
 
 SocketResponse SocketServer::HandleSaveStateWatch(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
+
     string lastState = YazeStateBridge::GetLastSyncedState();
     uint64_t lastFrame = YazeStateBridge::GetLastSyncedFrame();
-    
+
     stringstream ss;
     ss << "{";
     ss << "\"watching\":true,";
     ss << "\"lastState\":\"" << JsonEscape(lastState) << "\",";
     ss << "\"lastFrame\":" << lastFrame;
     ss << "}";
-    
+
     resp.success = true;
     resp.data = ss.str();
     return resp;
@@ -7171,11 +7646,11 @@ SocketResponse SocketServer::HandleStateDiff(Emulator* emu, const SocketCommand&
 
 	// Calculate current state values
 	unordered_map<string, string> currentState;
-	
+
 	currentState["frame"] = std::to_string(emu->GetFrameCount());
 	currentState["paused"] = emu->IsPaused() ? "true" : "false";
 	currentState["fps"] = std::to_string(emu->GetFps());
-	
+
 	// Add PC, etc if debugging
 	if (emu->IsDebugging()) {
 		auto debugger = emu->GetDebugger(false);
@@ -7185,10 +7660,10 @@ SocketResponse SocketServer::HandleStateDiff(Emulator* emu, const SocketCommand&
 	}
 
 	auto lock = _stateLock.AcquireSafe();
-	
+
 	stringstream ss;
 	ss << "{";
-	
+
 	if (_lastState.empty()) {
 		// First call, return everything
 		ss << "\"firstCall\":true,";
@@ -7225,10 +7700,10 @@ SocketResponse SocketServer::HandleStateDiff(Emulator* emu, const SocketCommand&
 
 SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
-	
+
 	auto actionIt = cmd.params.find("action");
 	string action = actionIt != cmd.params.end() ? actionIt->second : "list";
-	
+
 	if (action == "add") {
 		// Parse addr, value, condition
 		if (!cmd.HasParam("addr") || !cmd.HasParam("value") || !cmd.HasParam("condition")) {
@@ -7236,7 +7711,7 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 			resp.error = "Missing required parameters (addr, value, condition)";
 			return resp;
 		}
-		
+
 		uint32_t addr = 0;
 		string addrStr = cmd.GetParam("addr");
 		if (addrStr.substr(0, 2) == "0x" || addrStr.substr(0, 2) == "0X") {
@@ -7254,7 +7729,7 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 		}
 
 		string condition = cmd.GetParam("condition");
-		
+
 		auto lock = _watchTriggerLock.AcquireSafe();
 		WatchTrigger trigger;
 		trigger.id = _nextWatchTriggerId++;
@@ -7263,9 +7738,9 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 		trigger.condition = condition;
 		trigger.enabled = true;
 		trigger.triggered = false;
-		
+
 		_watchTriggers.push_back(trigger);
-		
+
 		resp.success = true;
 		resp.data = "{\"id\":" + std::to_string(trigger.id) + "}";
 	}
@@ -7276,11 +7751,11 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 			return resp;
 		}
 		uint32_t id = std::stoul(cmd.GetParam("trigger_id"));
-		
+
 		auto lock = _watchTriggerLock.AcquireSafe();
-		auto it = std::remove_if(_watchTriggers.begin(), _watchTriggers.end(), 
+		auto it = std::remove_if(_watchTriggers.begin(), _watchTriggers.end(),
 			[id](const WatchTrigger& t) { return t.id == id; });
-			
+
 		bool found = it != _watchTriggers.end();
 		if (found) {
 			_watchTriggers.erase(it, _watchTriggers.end());
@@ -7298,7 +7773,7 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 		bool first = true;
 		for (const auto& t : _watchTriggers) {
 			if (!first) ss << ",";
-			ss << "{\"id\":" << t.id << ",\"addr\":" << t.addr << ",\"value\":" << t.value 
+			ss << "{\"id\":" << t.id << ",\"addr\":" << t.addr << ",\"value\":" << t.value
 			   << ",\"condition\":\"" << t.condition << "\",\"triggered\":" << (t.triggered ? "true" : "false") << "}";
 			first = false;
 		}
@@ -7312,16 +7787,16 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 		stringstream ss;
 		ss << "{\"triggered\":[";
 		bool first = true;
-		
+
 		auto dbg = emu->GetDebugger(true);
 		if (dbg.GetDebugger()) {
 			auto dumper = dbg.GetDebugger()->GetMemoryDumper();
-			
+
 			for (auto& t : _watchTriggers) {
 				if (!t.enabled) continue;
-				
+
 				uint8_t memVal = dumper->GetMemoryValue(MemoryType::SnesMemory, t.addr);
-				
+
 				bool match = false;
 				if (t.condition == "eq") match = (memVal == t.value);
 				else if (t.condition == "ne") match = (memVal != t.value);
@@ -7329,7 +7804,7 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 				else if (t.condition == "lt") match = (memVal < t.value);
 				else if (t.condition == "gte") match = (memVal >= t.value);
 				else if (t.condition == "lte") match = (memVal <= t.value);
-				
+
 				if (match) {
 					t.triggered = true;
 					if (!first) ss << ",";
@@ -7339,7 +7814,7 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 			}
 		}
 		ss << "]}";
-		
+
 		resp.success = true;
 		resp.data = ss.str();
 	}
@@ -7347,6 +7822,6 @@ SocketResponse SocketServer::HandleWatchTrigger(Emulator* emu, const SocketComma
 		resp.success = false;
 		resp.error = "Unknown action";
 	}
-	
+
 	return resp;
 }

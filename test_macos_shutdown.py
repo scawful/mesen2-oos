@@ -20,7 +20,8 @@ import os
 import sys
 import time
 
-core_path, rom_path, home = sys.argv[1:]
+core_path, rom_path, home = sys.argv[1:4]
+mode = sys.argv[4] if len(sys.argv) > 4 else "paused"
 os.makedirs(home, exist_ok=True)
 os.environ["MESEN2_SOCKET_PATH"] = os.path.join(home, "mesen.sock")
 
@@ -49,14 +50,18 @@ core.IsExecutionStopped.restype = ctypes.c_bool
 core.InitDll()
 core.InitializeEmu(home.encode(), None, None, True, True, True, True)
 assert core.LoadRom(rom_path.encode(), None), "ROM load failed"
-core.InitializeDebugger()
-core.Pause()
-
-deadline = time.monotonic() + 5
-while time.monotonic() < deadline and not core.IsExecutionStopped():
-    time.sleep(0.005)
-assert core.IsExecutionStopped(), "debugger did not pause"
-print("paused", flush=True)
+if mode == "paused":
+    core.InitializeDebugger()
+    core.Pause()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not core.IsExecutionStopped():
+        time.sleep(0.005)
+    assert core.IsExecutionStopped(), "debugger did not pause"
+else:
+    core.IsRunning.restype = ctypes.c_bool
+    time.sleep(0.1)
+    assert core.IsRunning(), "emulation did not start"
+print(mode, os.getpid(), flush=True)
 
 # Deliberately skip Release(). Process-exit destruction must stop and join the
 # paused emulation thread before Emulator members are destroyed.
@@ -546,7 +551,8 @@ def _write_minimal_snes_rom(path: Path) -> None:
     path.write_bytes(rom)
 
 
-def test_process_exit_while_debugger_is_paused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["paused", "running"])
+def test_process_exit_while_debugger_is_paused(tmp_path: Path, mode: str) -> None:
     rom_path = tmp_path / "minimal.sfc"
     _write_minimal_snes_rom(rom_path)
 
@@ -558,6 +564,7 @@ def test_process_exit_while_debugger_is_paused(tmp_path: Path) -> None:
             str(_core_path()),
             str(rom_path),
             str(tmp_path / "home"),
+            mode,
         ],
         capture_output=True,
         text=True,
@@ -565,7 +572,7 @@ def test_process_exit_while_debugger_is_paused(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "paused" in result.stdout
+    assert mode in result.stdout
 
 
 def test_process_exit_disables_foreign_notification_callbacks(tmp_path: Path) -> None:

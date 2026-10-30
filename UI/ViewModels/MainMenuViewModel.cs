@@ -38,7 +38,7 @@ namespace Mesen.ViewModels
 		[Reactive] public List<object> DebugMenuItems { get; set; } = new();
 		[Reactive] public List<object> OracleMenuItems { get; set; } = new();
 		[Reactive] public List<object> HelpMenuItems { get; set; } = new();
-		
+
 		[Reactive] private List<object> _netPlayControllers { get; set; } = new();
 
 		private OracleStatusSnapshot _oracleStatus = OracleStatusSnapshot.Empty();
@@ -116,6 +116,12 @@ namespace Mesen.ViewModels
 				new MainMenuAction(EmulatorShortcut.LoadLastSession) {
 					ActionType = ActionType.LoadLastSession,
 					IsEnabled = () => File.Exists(SaveStateSlotHelper.GetRecentGamePath())
+				},
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					DynamicText = () => "Load Offered ROM: " + MainWindow.RomOffer.Label,
+					IsVisible = () => MainWindow.RomOffer.IsPending,
+					OnClick = () => MainWindow.RomOffer.LoadNow()
 				},
 
 				new ContextMenuSeparator(),
@@ -273,9 +279,9 @@ namespace Mesen.ViewModels
 				new MainMenuAction(EmulatorShortcut.ReloadRom) { ActionType = ActionType.ReloadRom },
 				new ContextMenuSeparator(),
 				new MainMenuAction(EmulatorShortcut.PowerOff) { ActionType = ActionType.PowerOff },
-				
+
 				new ContextMenuSeparator() { IsVisible = () => IsGameRunning && RomInfo.ConsoleType != ConsoleType.Gameboy && RomInfo.Format != RomFormat.GameGear && RomInfo.ConsoleType != ConsoleType.Gba },
-				new MainMenuAction() { 
+				new MainMenuAction() {
 					ActionType = ActionType.GameConfig,
 					IsVisible = () => IsGameRunning && RomInfo.ConsoleType != ConsoleType.Gameboy && RomInfo.Format != RomFormat.GameGear && RomInfo.ConsoleType != ConsoleType.Gba,
 					IsEnabled = () => IsGameRunning,
@@ -300,7 +306,7 @@ namespace Mesen.ViewModels
 						GetFdsInsertDiskItem(7),
 					}
 				},
-				
+
 				new MainMenuAction(EmulatorShortcut.FdsEjectDisk) {
 					ActionType = ActionType.EjectDisk,
 					IsVisible = () => IsFdsGame,
@@ -314,7 +320,7 @@ namespace Mesen.ViewModels
 				new MainMenuAction(EmulatorShortcut.VsInsertCoin4) { ActionType = ActionType.InsertCoin4, IsVisible = () => IsVsDualSystemGame },
 
 				new ContextMenuSeparator() { IsVisible = () => EmuApi.IsShortcutAllowed(EmulatorShortcut.InputBarcode) || EmuApi.IsShortcutAllowed(EmulatorShortcut.RecordTape) || EmuApi.IsShortcutAllowed(EmulatorShortcut.StopRecordTape) },
-				
+
 				new MainMenuAction(EmulatorShortcut.InputBarcode) {
 					ActionType = ActionType.InputBarcode,
 					IsVisible = () => EmuApi.IsShortcutAllowed(EmulatorShortcut.InputBarcode)
@@ -463,7 +469,7 @@ namespace Mesen.ViewModels
 					ActionType = ActionType.Region,
 					IsEnabled = () => IsGameRunning,
 					IsVisible = () => (
-						!IsGameRunning || 
+						!IsGameRunning ||
 						MainWindow.RomInfo.ConsoleType != ConsoleType.Gameboy && MainWindow.RomInfo.ConsoleType != ConsoleType.Gba
 					),
 					SubActions = new List<object>() {
@@ -778,7 +784,7 @@ namespace Mesen.ViewModels
 				},
 
 				new ContextMenuSeparator(),
-				
+
 				new MainMenuAction() {
 					ActionType = ActionType.LogWindow,
 					OnClick = () => {

@@ -5,14 +5,24 @@ using ReactiveUI;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace Mesen.ViewModels
 {
+	public enum OracleToolPage
+	{
+		Travel,
+		Items,
+		Progress,
+		Capture,
+		Macros,
+		Log
+	}
+
 	public class OracleMacroButtonViewModel
 	{
 		public string Id { get; init; } = string.Empty;
@@ -21,49 +31,80 @@ namespace Mesen.ViewModels
 		public bool IsPrimary { get; init; }
 		public string DisplayLabel {
 			get {
-				string baseLabel = IsPrimary ? "[P] " + Label : Label;
+				string baseLabel = IsPrimary ? "★ " + Label : Label;
 				return string.IsNullOrWhiteSpace(Shortcut) ? baseLabel : $"{baseLabel} ({Shortcut})";
 			}
 		}
 	}
 
+	public class OracleWarpTargetViewModel
+	{
+		public OracleWarpTarget Target { get; init; } = new();
+		public string DisplayLabel => Target.Kind == OracleWarpKind.Entrance
+			? $"{Target.Label} · entrance ${Target.Value:X2}"
+			: $"{Target.Label} · fall";
+	}
+
+	public class OraclePresetOptionViewModel
+	{
+		public string Id { get; init; } = string.Empty;
+		public string Label { get; init; } = string.Empty;
+		public string Description { get; init; } = string.Empty;
+	}
+
+	public class OracleFlagOptionViewModel
+	{
+		public string Key { get; init; } = string.Empty;
+		public string Label { get; init; } = string.Empty;
+	}
+
+	/// <summary>
+	/// Shared model for the Oracle status strip (top) and tools pane (right).
+	/// All actions run in-process through <see cref="OracleDebugActions"/>.
+	/// </summary>
 	public class OracleDebugPanelViewModel : ViewModelBase
 	{
+		public const double ToolsPaneWidth = 300;
+		private const int MaxSessionEntries = 200;
+
 		private OracleDebugPanelVisibility _visibilityMode;
 		private bool _isTextInputFocused;
 		private bool _refreshInFlight;
 		private bool _commandInFlight;
+		private bool _canFallToRoom;
+		private bool _hasMacroError;
+		private OracleToolPage _selectedToolPage = OracleToolPage.Travel;
 		private readonly List<string> _sessionEntries = new();
 		private readonly Dictionary<string, List<MacroStep>> _macroStepsById = new(StringComparer.OrdinalIgnoreCase);
-		private const int MaxSessionEntries = 200;
 
-		private string _collapsedSummary = "Oracle panel ready";
-		private string _romSummary = "ROM: not loaded";
-		private string _locationSummary = "Location: unavailable";
-		private string _modeSummary = "Mode: unavailable";
-		private string _playerSummary = "Link: unavailable";
-		private string _progressSummary = "Progress: unavailable";
-		private string _emulationSummary = "Emulation: stopped";
-		private string _timingSummary = "Frame: n/a";
-		private string _gatewaySummary = "Gateway: unknown";
-		private string _socketSummary = "Socket: unknown";
-		private string _yazeSummary = "Yaze: unknown";
-		private string _lastRefreshSummary = "Last update: never";
-		private string _statusLine = "Ready.";
+		private string _locationText = "No game";
+		private string _linkText = "";
+		private string _healthText = "";
+		private string _formText = "";
+		private string _frameText = "";
+		private string _modeText = "-";
+		private string _whereText = "-";
+		private string _linkDetailText = "-";
+		private string _statsText = "-";
+		private string _storyText = "-";
+		private string _romText = "-";
+		private string _pauseButtonText = "Pause";
+		private string _statusLine = "";
 		private string _sessionLog = "";
+		private string _lastCaptureText = "";
 		private string _captureLabel = "";
 		private string _captureTags = "";
-		private bool _captureVerifyNow;
-		private string _captureVerifier = "";
-		private string _captureTrustedSeedTask = "";
-		private string _saveDataProfile = "";
-		private string _setFlagName = "";
-		private string _setFlagValue = "";
-		private string _flyDestination = "";
+		private string _captureNotes = "";
+		private string _warpEntranceHex = "";
+		private string _fallRoomHex = "";
 		private string _frameAdvanceCount = "1";
 		private string _macroProfilePath = "";
 		private string _macroStatus = "No macro profile loaded.";
-		private bool _hasMacroError;
+		private OracleWarpTargetViewModel? _selectedWarpTarget;
+		private OraclePresetOptionViewModel? _selectedPreset;
+		private OracleFlagOptionViewModel? _selectedFlag;
+
+		public event EventHandler? VisibilityModeChanged;
 
 		public OracleDebugPanelViewModel()
 		{
@@ -72,8 +113,23 @@ namespace Mesen.ViewModels
 				_visibilityMode = OracleDebugPanelVisibility.Collapsed;
 			}
 
-			MacroProfilePath = ExpandHome(ConfigManager.Config.Oracle.DebugPanelMacroProfilePath);
+			WarpTargets = new ObservableCollection<OracleWarpTargetViewModel>(
+				OracleDebugActions.WarpTargets.Select(t => new OracleWarpTargetViewModel() { Target = t })
+			);
+			_selectedWarpTarget = WarpTargets.FirstOrDefault();
+
+			Presets = new ObservableCollection<OraclePresetOptionViewModel>();
+			ReloadPresets();
+
+			FlagOptions = new ObservableCollection<OracleFlagOptionViewModel>(
+				OracleDebugActions.GetFlags().Select(f => new OracleFlagOptionViewModel() { Key = f.Key, Label = f.Description })
+			);
+			_selectedFlag = FlagOptions.FirstOrDefault();
+
+			Cheats = new OracleCheatsViewModel(RunActionAsync);
+
 			MacroButtons = new ObservableCollection<OracleMacroButtonViewModel>();
+			MacroProfilePath = ExpandHome(ConfigManager.Config.Oracle.DebugPanelMacroProfilePath);
 			if(!string.IsNullOrWhiteSpace(MacroProfilePath)) {
 				_ = ReloadMacrosAsync();
 			}
@@ -82,14 +138,17 @@ namespace Mesen.ViewModels
 		public OracleDebugPanelVisibility VisibilityMode {
 			get => _visibilityMode;
 			private set {
+				if(_visibilityMode == value) {
+					return;
+				}
 				this.RaiseAndSetIfChanged(ref _visibilityMode, value);
-				this.RaisePropertyChanged(nameof(IsPanelVisible));
+				this.RaisePropertyChanged(nameof(IsStripVisible));
 				this.RaisePropertyChanged(nameof(IsHidden));
 				this.RaisePropertyChanged(nameof(IsCollapsed));
 				this.RaisePropertyChanged(nameof(IsExpanded));
-				this.RaisePropertyChanged(nameof(DetailsButtonText));
-				this.RaisePropertyChanged(nameof(VisibilityButtonText));
-				PersistVisibilityState(value);
+				this.RaisePropertyChanged(nameof(ToolsButtonText));
+				ConfigManager.Config.Oracle.DebugPanelVisibility = value;
+				VisibilityModeChanged?.Invoke(this, EventArgs.Empty);
 			}
 		}
 
@@ -98,136 +157,91 @@ namespace Mesen.ViewModels
 			set => this.RaiseAndSetIfChanged(ref _isTextInputFocused, value);
 		}
 
-		public bool IsPanelVisible => true;
 		public bool IsHidden => VisibilityMode == OracleDebugPanelVisibility.Hidden;
 		public bool IsCollapsed => VisibilityMode == OracleDebugPanelVisibility.Collapsed;
 		public bool IsExpanded => VisibilityMode == OracleDebugPanelVisibility.Expanded;
-		public string DetailsButtonText => VisibilityMode == OracleDebugPanelVisibility.Expanded ? "Collapse" : "Expand";
-		public string VisibilityButtonText => VisibilityMode == OracleDebugPanelVisibility.Hidden ? "Show" : "Hide";
+		public bool IsStripVisible => !IsHidden;
+		public string ToolsButtonText => IsExpanded ? "Close tools" : "Tools";
+
+		public OracleToolPage SelectedToolPage {
+			get => _selectedToolPage;
+			set {
+				if(!Enum.IsDefined(value) || _selectedToolPage == value) {
+					return;
+				}
+				this.RaiseAndSetIfChanged(ref _selectedToolPage, value);
+				this.RaisePropertyChanged(nameof(IsTravelPage));
+				this.RaisePropertyChanged(nameof(IsItemsPage));
+				this.RaisePropertyChanged(nameof(IsProgressPage));
+				this.RaisePropertyChanged(nameof(IsCapturePage));
+				this.RaisePropertyChanged(nameof(IsMacrosPage));
+				this.RaisePropertyChanged(nameof(IsLogPage));
+				// These gates also refresh the values when a page becomes visible.
+				Cheats.IsItemsOpen = IsItemsPage;
+				Cheats.IsFlagsOpen = IsProgressPage;
+			}
+		}
+
+		public bool IsTravelPage => SelectedToolPage == OracleToolPage.Travel;
+		public bool IsItemsPage => SelectedToolPage == OracleToolPage.Items;
+		public bool IsProgressPage => SelectedToolPage == OracleToolPage.Progress;
+		public bool IsCapturePage => SelectedToolPage == OracleToolPage.Capture;
+		public bool IsMacrosPage => SelectedToolPage == OracleToolPage.Macros;
+		public bool IsLogPage => SelectedToolPage == OracleToolPage.Log;
+
 		public bool IsCommandInFlight {
 			get => _commandInFlight;
 			private set => this.RaiseAndSetIfChanged(ref _commandInFlight, value);
 		}
 
-		public string CollapsedSummary {
-			get => _collapsedSummary;
-			private set => this.RaiseAndSetIfChanged(ref _collapsedSummary, value);
-		}
+		// Status strip
+		public string LocationText { get => _locationText; private set => this.RaiseAndSetIfChanged(ref _locationText, value); }
+		public string LinkText { get => _linkText; private set => this.RaiseAndSetIfChanged(ref _linkText, value); }
+		public string HealthText { get => _healthText; private set => this.RaiseAndSetIfChanged(ref _healthText, value); }
+		public string FormText { get => _formText; private set => this.RaiseAndSetIfChanged(ref _formText, value); }
+		public string FrameText { get => _frameText; private set => this.RaiseAndSetIfChanged(ref _frameText, value); }
+		public string StatusLine { get => _statusLine; private set => this.RaiseAndSetIfChanged(ref _statusLine, value); }
 
-		public string RomSummary {
-			get => _romSummary;
-			private set => this.RaiseAndSetIfChanged(ref _romSummary, value);
-		}
+		// Tools pane: state
+		public string ModeText { get => _modeText; private set => this.RaiseAndSetIfChanged(ref _modeText, value); }
+		public string WhereText { get => _whereText; private set => this.RaiseAndSetIfChanged(ref _whereText, value); }
+		public string LinkDetailText { get => _linkDetailText; private set => this.RaiseAndSetIfChanged(ref _linkDetailText, value); }
+		public string StatsText { get => _statsText; private set => this.RaiseAndSetIfChanged(ref _statsText, value); }
+		public string StoryText { get => _storyText; private set => this.RaiseAndSetIfChanged(ref _storyText, value); }
+		public string RomText { get => _romText; private set => this.RaiseAndSetIfChanged(ref _romText, value); }
+		public string PauseButtonText { get => _pauseButtonText; private set => this.RaiseAndSetIfChanged(ref _pauseButtonText, value); }
 
-		public string LocationSummary {
-			get => _locationSummary;
-			private set => this.RaiseAndSetIfChanged(ref _locationSummary, value);
-		}
+		// Tools pane: warp
+		public ObservableCollection<OracleWarpTargetViewModel> WarpTargets { get; }
+		public OracleWarpTargetViewModel? SelectedWarpTarget { get => _selectedWarpTarget; set => this.RaiseAndSetIfChanged(ref _selectedWarpTarget, value); }
+		public string WarpEntranceHex { get => _warpEntranceHex; set => this.RaiseAndSetIfChanged(ref _warpEntranceHex, value); }
+		public string FallRoomHex { get => _fallRoomHex; set => this.RaiseAndSetIfChanged(ref _fallRoomHex, value); }
+		public bool CanFallToRoom { get => _canFallToRoom; private set => this.RaiseAndSetIfChanged(ref _canFallToRoom, value); }
 
-		public string ModeSummary {
-			get => _modeSummary;
-			private set => this.RaiseAndSetIfChanged(ref _modeSummary, value);
-		}
+		// Tools pane: cheats & warps (warp search, checkpoints, items, flags)
+		public OracleCheatsViewModel Cheats { get; }
 
-		public string PlayerSummary {
-			get => _playerSummary;
-			private set => this.RaiseAndSetIfChanged(ref _playerSummary, value);
-		}
+		// Tools pane: capture
+		public string CaptureLabel { get => _captureLabel; set => this.RaiseAndSetIfChanged(ref _captureLabel, value); }
+		public string CaptureTags { get => _captureTags; set => this.RaiseAndSetIfChanged(ref _captureTags, value); }
+		public string CaptureNotes { get => _captureNotes; set => this.RaiseAndSetIfChanged(ref _captureNotes, value); }
+		public string LastCaptureText { get => _lastCaptureText; private set => this.RaiseAndSetIfChanged(ref _lastCaptureText, value); }
 
-		public string ProgressSummary {
-			get => _progressSummary;
-			private set => this.RaiseAndSetIfChanged(ref _progressSummary, value);
-		}
+		// Tools pane: progress
+		public ObservableCollection<OraclePresetOptionViewModel> Presets { get; }
+		public OraclePresetOptionViewModel? SelectedPreset { get => _selectedPreset; set => this.RaiseAndSetIfChanged(ref _selectedPreset, value); }
+		public ObservableCollection<OracleFlagOptionViewModel> FlagOptions { get; }
+		public OracleFlagOptionViewModel? SelectedFlag { get => _selectedFlag; set => this.RaiseAndSetIfChanged(ref _selectedFlag, value); }
 
-		public string EmulationSummary {
-			get => _emulationSummary;
-			private set => this.RaiseAndSetIfChanged(ref _emulationSummary, value);
-		}
+		// Tools pane: frames
+		public string FrameAdvanceCount { get => _frameAdvanceCount; set => this.RaiseAndSetIfChanged(ref _frameAdvanceCount, value); }
 
-		public string TimingSummary {
-			get => _timingSummary;
-			private set => this.RaiseAndSetIfChanged(ref _timingSummary, value);
-		}
-
-		public string GatewaySummary {
-			get => _gatewaySummary;
-			private set => this.RaiseAndSetIfChanged(ref _gatewaySummary, value);
-		}
-
-		public string SocketSummary {
-			get => _socketSummary;
-			private set => this.RaiseAndSetIfChanged(ref _socketSummary, value);
-		}
-
-		public string YazeSummary {
-			get => _yazeSummary;
-			private set => this.RaiseAndSetIfChanged(ref _yazeSummary, value);
-		}
-
-		public string LastRefreshSummary {
-			get => _lastRefreshSummary;
-			private set => this.RaiseAndSetIfChanged(ref _lastRefreshSummary, value);
-		}
-
-		public string StatusLine {
-			get => _statusLine;
-			private set => this.RaiseAndSetIfChanged(ref _statusLine, value);
-		}
-
-		public string SessionLog {
-			get => _sessionLog;
-			private set => this.RaiseAndSetIfChanged(ref _sessionLog, value);
-		}
-
-		public string CaptureLabel {
-			get => _captureLabel;
-			set => this.RaiseAndSetIfChanged(ref _captureLabel, value);
-		}
-
-		public string CaptureTags {
-			get => _captureTags;
-			set => this.RaiseAndSetIfChanged(ref _captureTags, value);
-		}
-
-		public bool CaptureVerifyNow {
-			get => _captureVerifyNow;
-			set => this.RaiseAndSetIfChanged(ref _captureVerifyNow, value);
-		}
-
-		public string CaptureVerifier {
-			get => _captureVerifier;
-			set => this.RaiseAndSetIfChanged(ref _captureVerifier, value);
-		}
-
-		public string CaptureTrustedSeedTask {
-			get => _captureTrustedSeedTask;
-			set => this.RaiseAndSetIfChanged(ref _captureTrustedSeedTask, value);
-		}
-
-		public string SaveDataProfile {
-			get => _saveDataProfile;
-			set => this.RaiseAndSetIfChanged(ref _saveDataProfile, value);
-		}
-
-		public string SetFlagName {
-			get => _setFlagName;
-			set => this.RaiseAndSetIfChanged(ref _setFlagName, value);
-		}
-
-		public string SetFlagValue {
-			get => _setFlagValue;
-			set => this.RaiseAndSetIfChanged(ref _setFlagValue, value);
-		}
-
-		public string FlyDestination {
-			get => _flyDestination;
-			set => this.RaiseAndSetIfChanged(ref _flyDestination, value);
-		}
-
-		public string FrameAdvanceCount {
-			get => _frameAdvanceCount;
-			set => this.RaiseAndSetIfChanged(ref _frameAdvanceCount, value);
-		}
+		// Tools pane: macros + log
+		public ObservableCollection<OracleMacroButtonViewModel> MacroButtons { get; }
+		public bool HasMacros => MacroButtons.Count > 0;
+		public string MacroStatus { get => _macroStatus; private set => this.RaiseAndSetIfChanged(ref _macroStatus, value); }
+		public bool HasMacroError { get => _hasMacroError; private set => this.RaiseAndSetIfChanged(ref _hasMacroError, value); }
+		public string SessionLog { get => _sessionLog; private set => this.RaiseAndSetIfChanged(ref _sessionLog, value); }
 
 		public string MacroProfilePath {
 			get => _macroProfilePath;
@@ -237,126 +251,121 @@ namespace Mesen.ViewModels
 			}
 		}
 
-		public string MacroStatus {
-			get => _macroStatus;
-			private set => this.RaiseAndSetIfChanged(ref _macroStatus, value);
-		}
-
-		public bool HasMacroError {
-			get => _hasMacroError;
-			private set => this.RaiseAndSetIfChanged(ref _hasMacroError, value);
-		}
-
-		public ObservableCollection<OracleMacroButtonViewModel> MacroButtons { get; }
-
 		public void ToggleHiddenCollapsed()
 		{
-			if(VisibilityMode == OracleDebugPanelVisibility.Hidden) {
-				VisibilityMode = OracleDebugPanelVisibility.Collapsed;
+			VisibilityMode = IsHidden ? OracleDebugPanelVisibility.Collapsed : OracleDebugPanelVisibility.Hidden;
+			if(!IsHidden) {
 				RequestRefresh(true);
-			} else {
-				VisibilityMode = OracleDebugPanelVisibility.Hidden;
 			}
 		}
 
 		public void ToggleCollapsedExpanded()
 		{
-			if(VisibilityMode == OracleDebugPanelVisibility.Hidden) {
-				VisibilityMode = OracleDebugPanelVisibility.Expanded;
-				RequestRefresh(true);
-				return;
-			}
-
-			VisibilityMode = VisibilityMode == OracleDebugPanelVisibility.Collapsed
-				? OracleDebugPanelVisibility.Expanded
-				: OracleDebugPanelVisibility.Collapsed;
-			if(VisibilityMode == OracleDebugPanelVisibility.Expanded) {
-				RequestRefresh(true);
-			}
+			VisibilityMode = IsExpanded ? OracleDebugPanelVisibility.Collapsed : OracleDebugPanelVisibility.Expanded;
+			RequestRefresh(true);
 		}
 
 		public void RequestRefresh(bool force = false)
 		{
-			if(_refreshInFlight && !force) {
+			//Reading RAM attaches Mesen's debugger, so a hidden strip does no work at all.
+			if(IsHidden || (_refreshInFlight && !force)) {
 				return;
 			}
-
-			_ = RefreshAsync();
+			Refresh();
 		}
 
-		public async Task ExecuteApplyProfileAsync()
+		public Task ExecuteWarpAsync()
 		{
-			if(string.IsNullOrWhiteSpace(SaveDataProfile)) {
-				StatusLine = "Profile is required.";
-				return;
+			if(SelectedWarpTarget == null) {
+				StatusLine = "Pick a warp target.";
+				return Task.CompletedTask;
 			}
-			await ExecuteGatewayActionAsync("apply_profile", new Dictionary<string, string> {
-				["profile"] = SaveDataProfile.Trim()
-			}, "Apply save-data profile");
+			OracleWarpTarget target = SelectedWarpTarget.Target;
+			return RunActionAsync("warp", () => OracleDebugActions.Warp(target));
 		}
 
-		public async Task ExecuteSetFlagAsync()
+		public Task ExecuteWarpEntranceAsync()
 		{
-			if(string.IsNullOrWhiteSpace(SetFlagName) || string.IsNullOrWhiteSpace(SetFlagValue)) {
-				StatusLine = "Flag and value are required.";
-				return;
+			if(!TryParseHex(WarpEntranceHex, out int entrance)) {
+				StatusLine = "Enter an entrance ID in hex, e.g. 76.";
+				return Task.CompletedTask;
 			}
-			await ExecuteGatewayActionAsync("setflag", new Dictionary<string, string> {
-				["flag"] = SetFlagName.Trim(),
-				["value"] = SetFlagValue.Trim()
-			}, "Set flag");
+			return RunActionAsync("warp", () => OracleDebugActions.WarpToEntrance(entrance));
 		}
 
-		public async Task ExecuteFlyAsync()
+		public Task ExecuteFallToRoomAsync()
 		{
-			if(string.IsNullOrWhiteSpace(FlyDestination)) {
-				StatusLine = "Destination is required.";
-				return;
+			if(!TryParseHex(FallRoomHex, out int room)) {
+				StatusLine = "Enter a room ID in hex, e.g. 77.";
+				return Task.CompletedTask;
 			}
-			await ExecuteGatewayActionAsync("fly", new Dictionary<string, string> {
-				["destination"] = FlyDestination.Trim()
-			}, "Fly");
-		}
-
-		public async Task ExecuteSyncSramAsync()
-		{
-			await ExecuteGatewayActionAsync("sync_sram", null, "Sync WRAMSAVE -> SRAM");
-		}
-
-		public async Task ExecuteFrameAdvanceAsync()
-		{
-			string frames = string.IsNullOrWhiteSpace(FrameAdvanceCount) ? "1" : FrameAdvanceCount.Trim();
-			await ExecuteGatewayActionAsync("frame", new Dictionary<string, string> {
-				["frames"] = frames
-			}, "Advance frame");
+			return RunActionAsync("fall", () => OracleDebugActions.FallToRoom(room));
 		}
 
 		public async Task ExecuteCaptureStateAsync()
 		{
-			Dictionary<string, string> args = new();
-			if(!string.IsNullOrWhiteSpace(CaptureLabel)) {
-				args["label"] = CaptureLabel.Trim();
+			string label = CaptureLabel.Trim();
+			List<string> tags = CaptureTags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+			string notes = CaptureNotes;
+			bool ok = await RunActionAsync("capture", () => OracleDebugActions.CaptureState(label, tags, notes));
+			LastCaptureText = StatusLine;
+			if(ok) {
+				CaptureLabel = "";
+				CaptureNotes = "";
 			}
-			if(!string.IsNullOrWhiteSpace(CaptureTags)) {
-				args["tags"] = CaptureTags.Trim();
+		}
+
+		public Task ExecuteApplyPresetAsync()
+		{
+			if(SelectedPreset == null) {
+				StatusLine = "Pick a profile.";
+				return Task.CompletedTask;
 			}
-			if(CaptureVerifyNow) {
-				args["verify_now"] = "true";
+			string id = SelectedPreset.Id;
+			return RunActionAsync("profile", () => OracleDebugActions.ApplySaveProfile(id));
+		}
+
+		public Task ExecuteSetFlagAsync(bool on)
+		{
+			if(SelectedFlag == null) {
+				StatusLine = "Pick a flag.";
+				return Task.CompletedTask;
 			}
-			if(!string.IsNullOrWhiteSpace(CaptureVerifier)) {
-				args["verifier"] = CaptureVerifier.Trim();
+			string key = SelectedFlag.Key;
+			return RunActionAsync("flag", () => OracleDebugActions.SetFlag(key, on ? 1 : 0));
+		}
+
+		public Task ExecuteSyncSramAsync()
+		{
+			return RunActionAsync("sram", OracleDebugActions.SyncSram);
+		}
+
+		public Task ExecuteFrameAdvanceAsync()
+		{
+			if(!int.TryParse(FrameAdvanceCount.Trim(), out int frames)) {
+				StatusLine = "Frame count must be a number.";
+				return Task.CompletedTask;
 			}
-			if(!string.IsNullOrWhiteSpace(CaptureTrustedSeedTask)) {
-				args["trusted_seed_task"] = CaptureTrustedSeedTask.Trim();
+			return RunActionAsync("frames", () => OracleDebugActions.StepFrames(frames));
+		}
+
+		public void TogglePause()
+		{
+			if(!EmuApi.IsRunning()) {
+				return;
 			}
-			await ExecuteGatewayActionAsync("capture_state", args.Count == 0 ? null : args, "Capture state");
+			if(EmuApi.IsPaused()) {
+				EmuApi.Resume();
+			} else {
+				EmuApi.Pause();
+			}
+			RequestRefresh(true);
 		}
 
 		public void ClearSessionLog()
 		{
 			_sessionEntries.Clear();
 			SessionLog = string.Empty;
-			StatusLine = "Session log cleared.";
 		}
 
 		public string GetSessionLogText()
@@ -374,19 +383,15 @@ namespace Mesen.ViewModels
 				string path = ExpandHome(MacroProfilePath);
 				if(string.IsNullOrWhiteSpace(path)) {
 					MacroStatus = "No macro profile configured.";
-					return Task.CompletedTask;
-				}
-				if(!File.Exists(path)) {
+				} else if(!File.Exists(path)) {
 					HasMacroError = true;
 					MacroStatus = "Macro profile not found: " + path;
 					AppendLog("macro", false, MacroStatus);
-					return Task.CompletedTask;
+				} else {
+					ParseAndValidateMacroProfile(File.ReadAllText(path));
+					MacroStatus = $"Loaded {MacroButtons.Count} macro{(MacroButtons.Count == 1 ? "" : "s")}.";
+					AppendLog("macro", true, MacroStatus);
 				}
-
-				string json = File.ReadAllText(path);
-				ParseAndValidateMacroProfile(json);
-				MacroStatus = $"Loaded {MacroButtons.Count} macro button{(MacroButtons.Count == 1 ? "" : "s")}.";
-				AppendLog("macro", true, MacroStatus);
 			} catch(Exception ex) {
 				MacroButtons.Clear();
 				_macroStepsById.Clear();
@@ -394,6 +399,7 @@ namespace Mesen.ViewModels
 				MacroStatus = "Macro profile invalid: " + ex.Message;
 				AppendLog("macro", false, MacroStatus);
 			}
+			this.RaisePropertyChanged(nameof(HasMacros));
 			return Task.CompletedTask;
 		}
 
@@ -404,185 +410,134 @@ namespace Mesen.ViewModels
 				return;
 			}
 
-			if(steps.Count == 0) {
-				StatusLine = "Macro has no steps.";
-				return;
-			}
-
-			StatusLine = $"Running macro '{macroId}'...";
 			AppendLog("macro", true, $"start {macroId}");
 			for(int i = 0; i < steps.Count; i++) {
 				MacroStep step = steps[i];
-				string description = $"{macroId} step {i + 1}/{steps.Count}: {step.Action}";
-				bool ok = await ExecuteGatewayActionAsync(step.Action, step.Args, description, true);
+				bool ok = await RunActionAsync($"{macroId} {i + 1}/{steps.Count} {step.Action}", () => ExecuteMacroStep(step));
 				if(!ok) {
-					StatusLine = $"Macro '{macroId}' failed at step {i + 1}.";
-					AppendLog("macro", false, $"failed {macroId} at step {i + 1}");
+					StatusLine = $"Macro '{macroId}' stopped at step {i + 1}: {StatusLine}";
 					return;
 				}
 			}
-			StatusLine = $"Macro '{macroId}' completed.";
-			AppendLog("macro", true, $"completed {macroId}");
+			StatusLine = $"Macro '{macroId}' done ({steps.Count} step{(steps.Count == 1 ? "" : "s")}).";
 		}
 
-		private async Task RefreshAsync()
+		private void ReloadPresets()
 		{
-			if(_refreshInFlight) {
-				return;
+			Presets.Clear();
+			foreach(OracleSaveProfile profile in OracleDebugActions.GetSaveProfiles()) {
+				Presets.Add(new OraclePresetOptionViewModel() { Id = profile.Id, Label = profile.Label, Description = profile.Description });
 			}
-			_refreshInFlight = true;
+			SelectedPreset = Presets.FirstOrDefault();
+		}
 
+		private void Refresh()
+		{
+			_refreshInFlight = true;
 			try {
 				bool isRunning = EmuApi.IsRunning();
-				bool isPaused = isRunning && EmuApi.IsPaused();
 				RomInfo rom = EmuApi.GetRomInfo();
-				CpuType cpu = rom.ConsoleType.GetMainCpuType();
-				TimingInfo timing = isRunning ? EmuApi.GetTimingInfo(cpu) : default;
+				string romName = rom.GetRomName();
+				RomText = string.IsNullOrWhiteSpace(romName) ? "-" : romName;
 
-				Task<OracleStatusSnapshot> statusTask = OracleAgentStatus.FetchAsync();
-				Task<OraclePanelRuntimeSummary?> runtimeTask = isRunning
-					? OraclePanelBridge.FetchRuntimeSummaryAsync()
-					: Task.FromResult<OraclePanelRuntimeSummary?>(null);
-
-				OracleStatusSnapshot status;
-				try {
-					status = await statusTask;
-				} catch(Exception ex) {
-					status = OracleStatusSnapshot.Empty() with {
-						GatewayError = ex.Message,
-						Timestamp = DateTimeOffset.Now
-					};
+				if(!isRunning) {
+					LocationText = "No game";
+					LinkText = HealthText = FormText = FrameText = "";
+					ModeText = WhereText = LinkDetailText = StatsText = StoryText = "-";
+					CanFallToRoom = false;
+					PauseButtonText = "Pause";
+					return;
 				}
 
-				OraclePanelRuntimeSummary? runtime = null;
-				try {
-					runtime = await runtimeTask;
-				} catch {
-					runtime = null;
+				bool isPaused = EmuApi.IsPaused();
+				TimingInfo timing = EmuApi.GetTimingInfo(rom.ConsoleType.GetMainCpuType());
+				FrameText = $"F {timing.FrameCount:N0}{(isPaused ? " ‖" : "")}";
+				PauseButtonText = isPaused ? "Resume" : "Pause";
+
+				OraclePanelRuntimeSummary? s = OraclePanelBridge.FetchRuntimeSummaryAsync().Result;
+				if(s == null) {
+					LocationText = "State unavailable";
+					return;
 				}
 
-				UpdateFields(rom, isRunning, isPaused, timing, status, runtime);
+				string arrow = s.LinkDirection switch { "Up" => "↑", "Down" => "↓", "Left" => "←", "Right" => "→", _ => "?" };
+				LocationText = s.Indoors ? $"Room ${s.DungeonRoom:X3}" : $"OW ${s.AreaId:X2} {s.AreaName}";
+				LinkText = $"{s.LinkX},{s.LinkY} {arrow}";
+				HealthText = $"♥ {s.Health / 8.0:0.#}/{s.MaxHealth / 8.0:0.#}";
+				FormText = s.LinkFormName;
+
+				ModeText = $"{s.ModeName} · sub ${s.Submode:X2}";
+				WhereText = s.Indoors
+					? $"Room ${s.DungeonRoom:X3} (layout ${s.RoomLayout:X2})"
+					: $"{s.AreaName} (area ${s.AreaId:X2})";
+				LinkDetailText = $"{s.LinkX},{s.LinkY} {arrow} · state ${s.LinkState:X2} · {s.LinkFormName}";
+				StatsText = $"HP {s.Health}/{s.MaxHealth} · MP {s.Magic} · Rupees {s.Rupees}";
+				StoryText = $"GS {s.GameState} · Crys ${s.Crystals:X2} · Pend ${s.Pendants:X2}";
+				CanFallToRoom = s.Indoors;
+				if(IsExpanded) {
+					Cheats.RefreshValues();
+				}
 			} catch(Exception ex) {
-				LastRefreshSummary = "Last update failed: " + ex.Message;
+				LocationText = "Refresh failed";
+				StatusLine = ex.Message;
 			} finally {
 				_refreshInFlight = false;
 			}
 		}
 
-		private void UpdateFields(RomInfo rom, bool isRunning, bool isPaused, TimingInfo timing, OracleStatusSnapshot status, OraclePanelRuntimeSummary? runtime)
-		{
-			string romName = rom.GetRomName();
-			RomSummary = string.IsNullOrWhiteSpace(romName)
-				? "ROM: not loaded"
-				: $"ROM: {romName} ({rom.ConsoleType})";
-
-			if(!isRunning) {
-				EmulationSummary = "Emulation: stopped";
-				TimingSummary = "Frame: n/a";
-				LocationSummary = "Location: no ROM loaded";
-				ModeSummary = "Mode: unavailable";
-				PlayerSummary = "Link: unavailable";
-				ProgressSummary = "Progress: unavailable";
-			} else if(isPaused) {
-				EmulationSummary = "Emulation: paused";
-				TimingSummary = $"Frame: {timing.FrameCount:N0} | FPS: {timing.Fps:0.00}";
-			} else {
-				EmulationSummary = "Emulation: running";
-				TimingSummary = $"Frame: {timing.FrameCount:N0} | FPS: {timing.Fps:0.00}";
-			}
-
-			if(isRunning && runtime != null) {
-				LocationSummary = $"Area: {runtime.AreaName} (0x{runtime.AreaId:X2}) | Map: {runtime.MapName} | Room: {runtime.RoomName} ({runtime.RoomLabel})";
-				ModeSummary = $"Mode: {runtime.ModeName} | Submode: 0x{runtime.Submode:X2} | Form: {runtime.LinkFormName} | State: 0x{runtime.LinkState:X2}";
-				PlayerSummary = $"Link: {runtime.LinkX}, {runtime.LinkY} facing {runtime.LinkDirection} | HP {runtime.Health}/{runtime.MaxHealth} | Magic {runtime.Magic} | Rupees {runtime.Rupees}";
-				ProgressSummary = $"Progress: GameState {runtime.GameState} | Crystals 0x{runtime.Crystals:X2} | Pendants 0x{runtime.Pendants:X2}";
-			} else if(isRunning) {
-				LocationSummary = "Location: unavailable";
-				ModeSummary = "Mode: unavailable";
-				PlayerSummary = "Link: unavailable";
-				ProgressSummary = "Progress: unavailable";
-			}
-
-			GatewaySummary = status.GatewayOnline
-				? (status.Mesen2Connected == true ? "Gateway: online + attached" : "Gateway: online")
-				: "Gateway: offline";
-			SocketSummary = status.SocketFound
-				? "Socket: " + (string.IsNullOrWhiteSpace(status.SocketPath) ? "found" : status.SocketPath)
-				: "Socket: missing";
-
-			if(status.YazeRunning.HasValue) {
-				YazeSummary = status.YazeRunning.Value ? "Yaze: running" : "Yaze: stopped";
-			} else {
-				YazeSummary = "Yaze: unknown";
-			}
-
-			string updatedAt = status.Timestamp == DateTimeOffset.MinValue
-				? DateTimeOffset.Now.ToString("HH:mm:ss")
-				: status.Timestamp.ToLocalTime().ToString("HH:mm:ss");
-			LastRefreshSummary = string.IsNullOrWhiteSpace(status.GatewayError)
-				? "Last update: " + updatedAt
-				: $"Last update: {updatedAt} (gateway: {status.GatewayError})";
-
-			string frameSummary = isRunning
-				? $"Frame {timing.FrameCount:N0} @ {timing.Fps:0.00} FPS"
-				: "Frame n/a";
-			string romSummary = string.IsNullOrWhiteSpace(romName) ? "No ROM loaded" : romName;
-			string locationSummary = LocationSummary
-				.Replace("Area: ", string.Empty)
-				.Replace("Location: ", string.Empty);
-			string socketSummary = status.SocketFound
-				? (string.IsNullOrWhiteSpace(status.SocketPath) ? "socket ready" : Path.GetFileName(status.SocketPath))
-				: "no socket";
-			string yazeSummary = status.YazeRunning == true ? "Yaze on" : status.YazeRunning == false ? "Yaze off" : "Yaze ?";
-
-			CollapsedSummary = $"{romSummary} | {locationSummary} | {EmulationSummary.Replace("Emulation: ", string.Empty)} | {frameSummary}";
-		}
-
-		private async Task<bool> ExecuteGatewayActionAsync(string action, IReadOnlyDictionary<string, string>? args, string description, bool suppressStatusOverride = false)
+		private async Task<bool> RunActionAsync(string source, Func<OracleActionResult> action)
 		{
 			if(IsCommandInFlight) {
-				if(!suppressStatusOverride) {
-					StatusLine = "Another command is still running.";
-				}
-				return false;
-			}
-
-			if(!EmuApi.IsRunning() && action != "health") {
-				if(!suppressStatusOverride) {
-					StatusLine = "No ROM running.";
-				}
-				AppendLog(description, false, "No ROM running.");
+				StatusLine = "Another action is still running.";
 				return false;
 			}
 
 			IsCommandInFlight = true;
 			try {
-				string? output = await AgentLauncher.RunGatewayActionWithOutputAsync(action, args);
-				if(output == null) {
-					if(!suppressStatusOverride) {
-						StatusLine = description + " failed.";
-					}
-					AppendLog(description, false, "No output returned.");
-					return false;
-				}
-
-				bool success = !output.Contains("STDERR:", StringComparison.OrdinalIgnoreCase);
-				if(!suppressStatusOverride) {
-					StatusLine = success ? (description + " succeeded.") : (description + " failed.");
-				}
-				AppendLog(description, success, output);
-				if(action == "sync_sram" || action == "setflag" || action == "fly" || action == "apply_profile" || action == "capture_state" || action == "frame") {
-					RequestRefresh(true);
-				}
-				return success;
+				OracleActionResult result = await Task.Run(action);
+				StatusLine = result.Message;
+				AppendLog(source, result.Success, result.Message);
+				return result.Success;
 			} catch(Exception ex) {
-				if(!suppressStatusOverride) {
-					StatusLine = description + " failed: " + ex.Message;
-				}
-				AppendLog(description, false, ex.Message);
+				StatusLine = $"{source} failed: {ex.Message}";
+				AppendLog(source, false, ex.Message);
 				return false;
 			} finally {
 				IsCommandInFlight = false;
+				RequestRefresh(true);
+			}
+		}
+
+		private static OracleActionResult ExecuteMacroStep(MacroStep step)
+		{
+			string Arg(string name, string fallback = "")
+			{
+				return step.Args != null && step.Args.TryGetValue(name, out string? value) ? value : fallback;
+			}
+
+			switch(step.Action) {
+				case "apply_profile":
+					return OracleDebugActions.ApplySaveProfile(Arg("profile"));
+				case "setflag":
+					return TryParseFlagValue(Arg("value"), out int flagValue)
+						? OracleDebugActions.SetFlag(Arg("flag"), flagValue)
+						: OracleActionResult.Fail($"Invalid flag value '{Arg("value")}'.");
+				case "sync_sram":
+					return OracleDebugActions.SyncSram();
+				case "frame":
+					return int.TryParse(Arg("frames", "1"), out int frames)
+						? OracleDebugActions.StepFrames(frames)
+						: OracleActionResult.Fail($"Invalid frame count '{Arg("frames")}'.");
+				case "warp":
+					return TryParseHex(Arg("entrance"), out int entrance)
+						? OracleDebugActions.WarpToEntrance(entrance)
+						: OracleActionResult.Fail($"Invalid entrance '{Arg("entrance")}'.");
+				case "fall":
+					return TryParseHex(Arg("room"), out int room)
+						? OracleDebugActions.FallToRoom(room)
+						: OracleActionResult.Fail($"Invalid room '{Arg("room")}'.");
+				default:
+					return OracleActionResult.Fail($"Unsupported action '{step.Action}'.");
 			}
 		}
 
@@ -592,12 +547,32 @@ namespace Mesen.ViewModels
 			if(sanitized.Length > 220) {
 				sanitized = sanitized.Substring(0, 220) + "...";
 			}
-			string line = $"[{DateTime.Now:HH:mm:ss}] {(success ? "OK" : "ERR")} {source}: {sanitized}";
-			_sessionEntries.Add(line);
+			_sessionEntries.Add($"[{DateTime.Now:HH:mm:ss}] {(success ? "OK " : "ERR")} {source}: {sanitized}");
 			if(_sessionEntries.Count > MaxSessionEntries) {
 				_sessionEntries.RemoveRange(0, _sessionEntries.Count - MaxSessionEntries);
 			}
 			SessionLog = string.Join(Environment.NewLine, _sessionEntries);
+		}
+
+		private static bool TryParseHex(string? text, out int value)
+		{
+			string trimmed = (text ?? "").Trim().TrimStart('$');
+			if(trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+				trimmed = trimmed.Substring(2);
+			}
+			return int.TryParse(trimmed, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
+		}
+
+		private static bool TryParseFlagValue(string text, out int value)
+		{
+			switch(text.Trim().ToLowerInvariant()) {
+				case "true": case "yes": case "on": value = 1; return true;
+				case "false": case "no": case "off": value = 0; return true;
+			}
+			if(text.Trim().StartsWith("0x", StringComparison.OrdinalIgnoreCase) || text.Trim().StartsWith("$")) {
+				return TryParseHex(text, out value);
+			}
+			return int.TryParse(text.Trim(), out value);
 		}
 
 		private void ParseAndValidateMacroProfile(string json)
@@ -677,6 +652,9 @@ namespace Mesen.ViewModels
 			}
 
 			string action = GetRequiredString(stepElement, "action");
+			if(action == "fly") {
+				throw new InvalidDataException($"Macro '{macroId}' uses 'fly', which was removed. Use 'warp' with an 'entrance' arg.");
+			}
 			if(!AllowedMacroActions.Contains(action)) {
 				throw new InvalidDataException($"Macro '{macroId}' uses unsupported action '{action}'.");
 			}
@@ -745,17 +723,13 @@ namespace Mesen.ViewModels
 			return trimmed;
 		}
 
-		private static void PersistVisibilityState(OracleDebugPanelVisibility visibility)
-		{
-			ConfigManager.Config.Oracle.DebugPanelVisibility = visibility;
-		}
-
 		private static readonly HashSet<string> AllowedMacroActions = new(StringComparer.Ordinal) {
 			"apply_profile",
 			"setflag",
 			"sync_sram",
-			"fly",
-			"frame"
+			"frame",
+			"warp",
+			"fall"
 		};
 
 		private sealed record class MacroStep(string Action, IReadOnlyDictionary<string, string>? Args);

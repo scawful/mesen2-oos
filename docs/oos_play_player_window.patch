@@ -1,0 +1,38 @@
+--- a/Scripts/Mesen2/oos_play.py	2026-09-26 10:05:28
++++ b/Scripts/Mesen2/oos_play.py	2026-09-26 10:05:28
+@@ -101,6 +101,10 @@
+         oracle["PersistentSaveName"] = SAVE_NAME
+         changed = True
+         print(f"play profile: shared Oracle save set to {SAVE_NAME}.srm")
++    if not oracle.get("PlayerWindow"):
++        oracle["PlayerWindow"] = True  # title "Oracle <build> [play]" (mesen2-oos claude/offer-rom)
++        changed = True
++        print("play profile: marked as the player window")
+     main_window = data.setdefault("MainWindow", {})
+     if main_window.get("WindowIsMaximized"):
+         main_window["WindowIsMaximized"] = False  # oos-play sizes the window itself
+@@ -110,6 +114,14 @@
+         settings.write_text(json.dumps(data, indent=2), encoding="utf-8-sig")
+ 
+ 
++def play_pid() -> int | None:
++    """The play window's pid from Mesen's status file (its title no longer names the instance)."""
++    try:
++        return int(json.loads(SOCK.with_suffix(".status").read_text())["pid"])
++    except (OSError, ValueError, KeyError, TypeError):
++        return None
++
++
+ def bring_to_current_space(wait_s: float = 0.0, place: bool = False) -> None:
+     """Move the play window to the yabai space scawful is on and focus it.
+ 
+@@ -128,7 +140,8 @@
+     deadline = time.monotonic() + wait_s
+     while True:
+         wins = query("--windows") or []
+-        match = [w for w in wins if "Mesen" in w.get("app", "") and f"[{INSTANCE}]" in w.get("title", "")]
++        match = [w for w in wins if w.get("pid") == play_pid()
++                 or ("Mesen" in w.get("app", "") and f"[{INSTANCE}]" in w.get("title", ""))]
+         if match or time.monotonic() >= deadline:
+             break
+         time.sleep(0.5)

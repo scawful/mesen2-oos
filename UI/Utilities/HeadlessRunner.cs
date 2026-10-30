@@ -5,6 +5,7 @@ using Mesen.Interop;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Mesen.Utilities
@@ -17,7 +18,6 @@ namespace Mesen.Utilities
 
 			EmuApi.InitDll();
 			ConfigManager.LoadConfig();
-			ConfigManager.Config.ApplyConfig();
 
 			EmuApi.InitializeEmu(
 				ConfigManager.HomeFolder,
@@ -32,16 +32,35 @@ namespace Mesen.Utilities
 			ConfigManager.Config.RemoveObsoleteConfig();
 			ConfigManager.Config.InitializeDefaults();
 			ConfigManager.Config.UpgradeConfig();
+			ConfigManager.Config.ApplyConfig();
 
 			DebugWorkspaceManager.Load();
 			EmuApi.Pause();
 
-			Console.CancelKeyPress += (sender, e) => {
-				e.Cancel = true;
-				EmuApi.Stop();
+			//Stop(true) (Ctrl+C, emu.stop(), power off) sends EmulationStopped.
+			//Loading another ROM (socket LOADROM) stops the old console without it.
+			bool stopRequested = false;
+			NotificationListener listener = new();
+			listener.OnNotification += (e) => {
+				if(e.NotificationType == ConsoleNotificationType.EmulationStopped) {
+					stopRequested = true;
+				}
 			};
 
+			Console.CancelKeyPress += (sender, e) => {
+				e.Cancel = true;
+				InstanceLog.QuitRequested("Ctrl+C: stopping");
+				EmuApi.Stop();
+			};
+			using PosixSignalRegistration sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => {
+				//Stop like Ctrl+C so the battery file is saved before the process exits
+				ctx.Cancel = true;
+				InstanceLog.QuitRequested("received SIGTERM: stopping");
+				EmuApi.Stop();
+			});
+
 			if(!LoadFiles(cmdLine)) {
+				listener.Dispose();
 				EmuApi.Release();
 				return -1;
 			}
@@ -52,13 +71,24 @@ namespace Mesen.Utilities
 
 			EmuApi.Resume();
 
-			while(EmuApi.IsRunning()) {
-				Thread.Sleep(250);
-			}
+			WaitForStop(() => stopRequested);
 
 			int stopCode = EmuApi.GetStopCode();
+			InstanceLog.QuitRequested($"emulation stopped (stop code {stopCode})");
+			listener.Dispose();
 			EmuApi.Release();
 			return stopCode;
+		}
+
+		private static void WaitForStop(Func<bool> stopRequested)
+		{
+			//IsRunning() is briefly false while a ROM swap replaces the console,
+			//so only treat it as a stop once it stays false for a full second.
+			int stoppedPolls = 0;
+			while(!stopRequested() && stoppedPolls < 4) {
+				Thread.Sleep(250);
+				stoppedPolls = EmuApi.IsRunning() ? 0 : stoppedPolls + 1;
+			}
 		}
 
 		private static bool LoadFiles(CommandLineHelper cmdLine)

@@ -1,0 +1,102 @@
+diff --color -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
+--- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 08:15:11
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 08:12:02
+@@ -673,6 +673,22 @@
+     rom_load_parser.add_argument("--powercycle", choices=("true", "false"), help="Power-cycle load (default false)")
+     rom_load_parser.add_argument("--json", "-j", action="store_true")
+ 
++    # ROM offer: hand a new build to a running session
++    offer_rom_parser = subparsers.add_parser("offer-rom", help="Offer a new ROM to the player (GUI banner: Load now / Later)")
++    offer_rom_parser.add_argument("path", help="Path to the new ROM")
++    offer_rom_parser.add_argument("--label", help="Short name shown in the banner (default: file name)")
++    offer_rom_parser.add_argument("--notes", help="One line on what changed")
++    offer_rom_parser.add_argument("--json", "-j", action="store_true")
++    offer_status_parser = subparsers.add_parser("offer-status", help="Show the pending ROM offer and the last live load")
++    offer_status_parser.add_argument("--json", "-j", action="store_true")
++    offer_clear_parser = subparsers.add_parser("offer-clear", help="Withdraw the pending ROM offer")
++    offer_clear_parser.add_argument("--json", "-j", action="store_true")
++    load_rom_live_parser = subparsers.add_parser("load-rom-live", help="Load a ROM keeping the running game's save (no path: accept the pending offer)")
++    load_rom_live_parser.add_argument("path", nargs="?", help="Path to the ROM (default: the pending offer)")
++    load_rom_live_parser.add_argument("--label", help="Label recorded for this load")
++    load_rom_live_parser.add_argument("--no-state", action="store_true", help="Skip the backup save state before the swap")
++    load_rom_live_parser.add_argument("--json", "-j", action="store_true")
++
+     # Socket cleanup command
+     socket_cleanup_parser = subparsers.add_parser("socket-cleanup", help="Remove stale Mesen2 sockets")
+     socket_cleanup_parser.add_argument("--json", "-j", action="store_true")
+@@ -2159,6 +2175,24 @@
+                 print(f"Failed to load ROM: {client.last_error}")
+         if not ok:
+             sys.exit(1)
++        return
++
++    if args.command in ("offer-rom", "offer-status", "offer-clear", "load-rom-live"):
++        if args.command == "offer-rom":
++            result = client.offer_rom(args.path, label=args.label, notes=args.notes)
++        elif args.command == "offer-status":
++            result = client.rom_offer_status()
++        elif args.command == "offer-clear":
++            result = client.clear_rom_offer()
++        else:
++            result = client.load_rom_live(args.path, label=args.label, state=not args.no_state)
++        if result is None:
++            if args.json:
++                print(json.dumps({"ok": False, "error": client.last_error}, indent=2))
++            else:
++                print(f"{args.command} failed: {client.last_error}", file=sys.stderr)
++            sys.exit(1)
++        print(json.dumps(result if not args.json else {"ok": True, **result}, indent=2))
+         return
+ 
+     if args.command == "socket-cleanup":
+diff --color -ruN a/tools/oos_client/mesen2_client_lib/client.py b/tools/oos_client/mesen2_client_lib/client.py
+--- a/tools/oos_client/mesen2_client_lib/client.py	2026-09-26 08:15:11
++++ b/tools/oos_client/mesen2_client_lib/client.py	2026-09-26 08:12:02
+@@ -1438,6 +1438,47 @@
+         self.last_error = res.get("error", "") or "LOADROM failed"
+         return False
+ 
++    def offer_rom(self, path: str, label: str | None = None, notes: str | None = None) -> dict | None:
++        """Offer a new ROM to the player: the GUI shows a Load now / Later banner."""
++        rom_path = Path(path).expanduser().resolve()
++        if not rom_path.is_file():
++            self.last_error = f"ROM not found: {rom_path}"
++            return None
++        params: dict = {"path": str(rom_path)}
++        if label:
++            params["label"] = label
++        if notes:
++            params["notes"] = notes
++        return self._rom_offer_command("OFFER_ROM", params)
++
++    def rom_offer_status(self) -> dict | None:
++        return self._rom_offer_command("OFFER_ROM_STATUS", {})
++
++    def clear_rom_offer(self) -> dict | None:
++        return self._rom_offer_command("OFFER_ROM_CLEAR", {})
++
++    def load_rom_live(self, path: str | None = None, label: str | None = None, state: bool = True) -> dict | None:
++        """Load a ROM keeping the running game's .srm; no path accepts the pending offer."""
++        params: dict = {"state": str(state).lower()}
++        if path:
++            rom_path = Path(path).expanduser().resolve()
++            if not rom_path.is_file():
++                self.last_error = f"ROM not found: {rom_path}"
++                return None
++            params["path"] = str(rom_path)
++        if label:
++            params["label"] = label
++        return self._rom_offer_command("LOAD_ROM_LIVE", params, timeout=30.0)
++
++    def _rom_offer_command(self, command: str, params: dict, timeout: float = 5.0) -> dict | None:
++        res = self.bridge.send_command(command, params, timeout=timeout)
++        if res.get("success"):
++            self.last_error = ""
++            data = res.get("data")
++            return data if isinstance(data, dict) else {}
++        self.last_error = res.get("error", "") or f"{command} failed"
++        return None
++
+     def add_breakpoint(self, **kw):
+         # Socket expects "bptype" for breakpoint kind; CLI uses "mode".
+         if "mode" in kw and "bptype" not in kw:
