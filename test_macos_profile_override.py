@@ -145,6 +145,7 @@ def test_headless_sigterm_stops_before_native_teardown(
          "--noaudio", "--noinput", str(rom), f"--instanceGuid={uuid.uuid4()}"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
+    stdout = stderr = ""
     try:
         deadline = time.monotonic() + 15
         while not private_socket_path.exists() and process.poll() is None:
