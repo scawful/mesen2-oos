@@ -3187,13 +3187,19 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 		frameCount = std::stoi(countIt->second);
 		if (frameCount > 600) frameCount = 600; // Max 10 seconds at 60fps
 	}
+	if (frameCount <= 0) {
+		resp.success = false;
+		resp.error = "Frame count must be positive";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
 
 	auto dbg = emu->GetDebugger(true);
 	Debugger* debugger = dbg.GetDebugger();
 	if (debugger) {
 		CpuType cpuType = emu->GetCpuTypes()[0];
 		// Step by frames
-		debugger->Step(cpuType, frameCount, StepType::PpuStep);
+		debugger->Step(cpuType, frameCount, StepType::PpuFrame);
 	} else {
 		if(frameCount != 1) {
 			resp.success = false;
