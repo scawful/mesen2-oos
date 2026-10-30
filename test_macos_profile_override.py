@@ -179,7 +179,11 @@ def test_headless_sigterm_stops_before_native_teardown(
                 if mode in ("paused", "recording"):
                     request("CPU")  # Instantiate the debugger before confirming Pause.
                     request("PAUSE")
-                    assert request("STATE")["paused"] is True
+                    state = request("STATE")
+                    while not state["paused"]:
+                        assert time.monotonic() < deadline, "Pause did not settle"
+                        time.sleep(0.02)
+                        state = request("STATE")
                 if mode == "recording":
                     capabilities = request("CAPABILITIES")
                     assert "native_video_record_v1" in capabilities["features"]
