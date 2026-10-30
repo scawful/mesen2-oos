@@ -789,8 +789,11 @@ void Emulator::BackupSharedSave(VirtualFile& romFile)
 	std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", std::localtime(&now));
 	string backupFolder = FolderUtilities::CombinePath(FolderUtilities::GetSaveFolder(), "SrmBackups");
 	FolderUtilities::CreateFolder(backupFolder);
-	string backupPath = FolderUtilities::CombinePath(backupFolder, saveName + "_" + timestamp + ".srm");
-	std::filesystem::copy_file(std::filesystem::u8path(srmPath), std::filesystem::u8path(backupPath), std::filesystem::copy_options::overwrite_existing, ec);
+	// Several live loads can finish in one second. Keep every prior battery;
+	// an unexpected collision must fail rather than replace a rollback copy.
+	string sequence = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+	string backupPath = FolderUtilities::CombinePath(backupFolder, saveName + "_" + timestamp + "_" + sequence + ".srm");
+	std::filesystem::copy_file(std::filesystem::u8path(srmPath), std::filesystem::u8path(backupPath), std::filesystem::copy_options::none, ec);
 	if(ec) {
 		MessageManager::Log("[Save] Could not back up " + srmPath + ": " + ec.message());
 		return;
