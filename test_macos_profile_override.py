@@ -155,10 +155,10 @@ def test_headless_sigterm_stops_before_native_teardown(
             connection.settimeout(5)
             connection.connect(str(private_socket_path))
             with connection.makefile("rb") as reader:
-                def request(kind, **params):
-                    connection.sendall((json.dumps({"type": kind, **params}) + "\n").encode())
+                def request(command, expect_success=True, **params):
+                    connection.sendall((json.dumps({"type": command, **params}) + "\n").encode())
                     response = json.loads(reader.readline())
-                    assert response["success"], response
+                    assert response["success"] is expect_success, response
                     return response.get("data", {})
                 state = request("STATE")
                 while state.get("frame", 0) < 5:
@@ -174,7 +174,18 @@ def test_headless_sigterm_stops_before_native_teardown(
                     assert "native_video_record_v1" in capabilities["features"]
                     request("VIDEO_RECORD", action="start", token="shutdown-test",
                             path=str(tmp_path / "shutdown.avi"))
+                    request("VIDEO_RECORD", expect_success=False,
+                            action="stop", token="wrong-owner")
+                    request("RECORD", expect_success=False, action="stop", kind="video")
+                    assert request("VIDEO_RECORD", action="status", token="shutdown-test")["active"]
+                    before = request("STATE")["frame"]
                     request("FRAME", count="120")
+                    state = request("STATE")
+                    while not state["paused"] or state["frame"] < before + 120:
+                        assert time.monotonic() < deadline, "recording frames did not settle"
+                        time.sleep(0.02)
+                        state = request("STATE")
+                    assert 120 <= state["frame"] - before <= 121
                     # Leave recording active: graceful shutdown must flush it.
         process.send_signal(signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=15)
