@@ -6,6 +6,7 @@ high-level API for the Mesen2 fork socket server.
 
 from __future__ import annotations
 
+from contextlib import closing
 import glob
 import json
 import os
@@ -162,12 +163,16 @@ def _connect_socket(path: str, timeout: float) -> socket.socket:
     if is_tcp_endpoint(path):
         host, port = parse_tcp_endpoint(path)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        target = (host, port)
+    else:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        target = path
+    try:
         sock.settimeout(timeout)
-        sock.connect((host, port))
-        return sock
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    sock.connect(path)
+        sock.connect(target)
+    except BaseException:
+        sock.close()
+        raise
     return sock
 
 
@@ -348,20 +353,18 @@ class MesenBridge:
     def _probe_socket(path: str) -> bool:
         """Check whether a socket responds to PING."""
         try:
-            sock = _connect_socket(path, 0.5)
-            cmd = json.dumps({"type": "PING"}) + "\n"
-            sock.sendall(cmd.encode())
+            with closing(_connect_socket(path, 0.5)) as sock:
+                cmd = json.dumps({"type": "PING"}) + "\n"
+                sock.sendall(cmd.encode())
 
-            response = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-                if b"\n" in response:
-                    break
-
-            sock.close()
+                response = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+                    if b"\n" in response:
+                        break
             if not response:
                 return False
             payload = json.loads(response.decode().strip())
@@ -473,21 +476,18 @@ class MesenBridge:
         attempts = self._max_retries if self._auto_reconnect else 0
         for attempt in range(attempts + 1):
             try:
-                sock = _connect_socket(path, timeout)
+                with closing(_connect_socket(path, timeout)) as sock:
+                    cmd_json = json.dumps(cmd) + "\n"
+                    sock.sendall(cmd_json.encode())
 
-                cmd_json = json.dumps(cmd) + "\n"
-                sock.sendall(cmd_json.encode())
-
-                response = b""
-                while True:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        break
-                    response += chunk
-                    if b"\n" in response:
-                        break
-
-                sock.close()
+                    response = b""
+                    while True:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                        if b"\n" in response:
+                            break
 
                 if not response:
                     raise TimeoutError(f"No response from Mesen2 within {timeout}s")
