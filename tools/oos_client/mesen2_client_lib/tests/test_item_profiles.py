@@ -259,3 +259,21 @@ def test_capture_leaves_out_unavailable_items(tmp_path, monkeypatch):
     items = json.loads(output.read_text())["items"]
     assert items["rings"] == 3
     assert "goldstar" not in items and "goldstar_inventory_version" not in items
+
+
+def test_unmigrated_capture_does_not_clear_goldstar_on_replay(tmp_path, monkeypatch):
+    import json
+
+    source = client("default", {0x7EF342: 1, 0x7EF3AA: 0})
+    output = tmp_path / "profile.json"
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: source)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "default", "save-data", "profile-capture", "t", "--out", str(output)])
+    cli.main()
+    data = json.loads(output.read_text())
+    assert "goldstar" not in data["items"] and "goldstar_inventory_version" not in data["items"]
+
+    target = client("default", {0x7EF342: 1, 0x7EF3A9: 1, 0x7EF3AA: 0xA5})
+    apply_profile_transaction(target, SaveDataProfile(output, data), persist=False, verify=False)
+    assert target.bridge.memory[0x7EF3AA] == 0xA5
+    assert target.bridge.memory[0x7EF3A9] == 1
