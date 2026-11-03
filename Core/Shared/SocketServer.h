@@ -395,6 +395,7 @@ private:
 	// Capture handlers (SocketServerCapture.cpp)
 	static SocketResponse HandleCamera(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRecord(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleMovie(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLive(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleProject(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleCaptureScreenshot(Emulator* emu, const SocketCommand& cmd);
