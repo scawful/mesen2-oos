@@ -2,8 +2,11 @@
 
 from .constants import ITEMS
 
-SENSITIVE_ITEMS = frozenset({"rings", "portalrod", "customrods"})
+SENSITIVE_ITEMS = frozenset({"rings", "portalrod", "customrods", "goldstar", "goldstar_inventory_version"})
 ITEM_PROFILES = ("default", "legacy")
+# ENABLE_GOLDSTAR_CELL = 1 marks migrated saves with $A5; until then the menu's
+# GoldstarInventory_Migrate rewrites GoldstarOwned from Hookshot level 2.
+GOLDSTAR_MIGRATED = 0xA5
 
 
 def item_address(name: str, profile: str | None) -> int:
@@ -14,6 +17,8 @@ def item_address(name: str, profile: str | None) -> int:
             return 0x7EF3D8
         if name == "portalrod":
             return 0x7EF351
+        if name in ("goldstar", "goldstar_inventory_version"):
+            raise ValueError(f"{name} has no cell in the legacy profile; Hookshot level 2 ($7EF342) holds both")
     return ITEMS[name][0]
 
 

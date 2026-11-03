@@ -25,7 +25,7 @@ from typing import Any
 
 from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START
 from .paths import SAVE_DATA_PROFILE_DIR
-from .item_profiles import item_address, decode_legacy_portalrod
+from .item_profiles import GOLDSTAR_MIGRATED, item_address, decode_legacy_portalrod
 
 
 SAVEFILE_WRAM_END = SAVEFILE_WRAM_START + SAVEFILE_WRAM_SIZE
@@ -149,6 +149,12 @@ def iter_profile_expectations(profile: SaveDataProfile, item_profile: str | None
             )
         )
 
+    if "goldstar" in items and "goldstar_inventory_version" in items:
+        if _parse_int(items["goldstar_inventory_version"]) != GOLDSTAR_MIGRATED:
+            raise ValueError("goldstar needs goldstar_inventory_version 0xA5 in the same profile")
+        # Write the version first so set_item("goldstar") sees a migrated save.
+        expectations.sort(key=lambda op: op.name != "goldstar_inventory_version")
+
     if item_profile == "legacy" and "portalrod" in items and "customrods" in items:
         if decode_legacy_portalrod(_parse_int(items["customrods"])) != _parse_int(items["portalrod"]):
             raise ValueError("Legacy customrods and portalrod values conflict")
@@ -248,6 +254,9 @@ def apply_profile(
             expected_addr = item_address(op.name, getattr(client, "item_profile", None))
             if op.addr != expected_addr:
                 raise ValueError(f"Item profile does not match expectation for {op.name}")
+    names = {op.name for op in ops if op.kind == "item"}
+    if "goldstar" in names and "goldstar_inventory_version" not in names:
+        client.require_goldstar_migrated()
 
     for op in ops:
         if op.kind == "item":

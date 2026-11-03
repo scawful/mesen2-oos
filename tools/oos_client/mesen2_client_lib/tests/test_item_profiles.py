@@ -185,3 +185,44 @@ def test_cli_apply_without_profile_does_not_pause(tmp_path, monkeypatch, capsys)
     assert exc.value.code == 1
     assert "requires --item-profile" in capsys.readouterr().out
     assert c.bridge.calls == []
+
+
+@pytest.mark.parametrize("name", ["goldstar", "goldstar_inventory_version"])
+def test_legacy_goldstar_has_no_cell(name):
+    c = client("legacy")
+    with pytest.raises(ValueError, match="no cell in the legacy profile"):
+        c.get_item(name)
+    assert c.bridge.calls == []
+
+
+@pytest.mark.parametrize("version,ok", [(0xA5, True), (0x00, False)])
+def test_default_goldstar_write_needs_migrated_save(version, ok):
+    c = client("default", {0x7EF3AA: version})
+    if ok:
+        assert c.set_item("goldstar", 1)
+        assert c.bridge.memory[0x7EF3A9] == 1
+    else:
+        with pytest.raises(ValueError, match="0xA5 first"):
+            c.set_item("goldstar", 1)
+        assert all(call[0] != "write" for call in c.bridge.calls)
+
+
+def test_goldstar_profile_writes_version_first(tmp_path):
+    c = client("default", {0x7EF3AA: 0})
+    p = SaveDataProfile(tmp_path / "p.json", {"items": {"flute": 1, "goldstar": 1, "goldstar_inventory_version": 0xA5}})
+    result = apply_profile_transaction(c, p, persist=False, verify=True)
+    assert result["ok"] and result["wram_issues"] == []
+    writes = [call[1] for call in c.bridge.calls if call[0] == "write"]
+    assert writes.index(0x7EF3AA) < writes.index(0x7EF3A9)
+
+
+@pytest.mark.parametrize("items", [
+    {"flute": 1, "goldstar": 1},
+    {"flute": 1, "goldstar": 1, "goldstar_inventory_version": 0},
+])
+def test_unmigrated_goldstar_profile_never_writes(tmp_path, items):
+    c = client("default", {0x7EF3AA: 0})
+    p = SaveDataProfile(tmp_path / "p.json", {"items": items})
+    with pytest.raises(ValueError, match="0xA5"):
+        apply_profile_transaction(c, p, persist=False, verify=False)
+    assert all(call[0] != "write" for call in c.bridge.calls)

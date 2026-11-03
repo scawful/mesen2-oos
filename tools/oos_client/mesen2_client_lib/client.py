@@ -30,7 +30,7 @@ from .constants import (
     WATCH_PROFILES,
 )
 from .issues import KNOWN_ISSUES
-from .item_profiles import ITEM_PROFILES, SENSITIVE_ITEMS, item_address, decode_legacy_portalrod
+from .item_profiles import GOLDSTAR_MIGRATED, ITEM_PROFILES, SENSITIVE_ITEMS, item_address, decode_legacy_portalrod
 from .state_library import StateLibrary
 from .save_data_library import SaveDataLibrary
 from .save_data_io import read_savefile_bytes, write_savefile_bytes
@@ -921,11 +921,21 @@ class OracleDebugClient:
                 raise ValueError("Legacy rod read failed")
             decode_legacy_portalrod(data[0])
             return self.bridge.write_memory(addr, 2 if value else min(data[0], 1))
+        if item_name == "goldstar":
+            self.require_goldstar_migrated()
         if item_name == "rupees":
             return self.bridge.write_memory16(addr, value)
         if item_name == "boots":
             return self._set_boots(addr, value)
         return self.bridge.write_memory(addr, value)
+
+    def require_goldstar_migrated(self) -> None:
+        """Refuse Goldstar writes the next menu open would overwrite."""
+        data = self.bridge.read_block(ITEMS["goldstar_inventory_version"][0], 1)
+        if len(data) != 1:
+            raise ValueError("goldstar_inventory_version read failed")
+        if data[0] != GOLDSTAR_MIGRATED:
+            raise ValueError("goldstar requires goldstar_inventory_version 0xA5 first; the menu migration rewrites it")
 
     def _set_boots(self, addr: int, value: int) -> bool:
         # Dash is gated on the run bit in the ability byte, not the boots byte.
@@ -960,8 +970,8 @@ class OracleDebugClient:
     def get_all_items(self, include_profile_items: bool = True) -> dict:
         """Get all items and their values.
 
-        include_profile_items=False skips rings/portalrod/customrods, so callers
-        that never show them need no item profile.
+        include_profile_items=False skips the SENSITIVE_ITEMS (rings, rods,
+        Goldstar), so callers that never show them need no item profile.
         """
         if include_profile_items:
             item_address("rings", getattr(self, "item_profile", None))

@@ -27,9 +27,14 @@ Override the mesen2-oos location with `MESEN2_OOS_ROOT`.
 
 Pass `--item-profile default` when both `ENABLE_RING_SRAM_RELOCATE` and
 `ENABLE_PORTAL_ROD_CELL` are enabled, or `--item-profile legacy` when both
-are disabled. The client refuses `rings`, `portalrod`, and `customrods` access without a
-profile; listing all items, deep diagnostics, and profile capture include them.
-Mixed flag combinations are not supported. This selection does not identify or
+are disabled; `default` also assumes `ENABLE_GOLDSTAR_CELL = 1` and `legacy`
+assumes it is 0. The client refuses `rings`, `portalrod`, `customrods`, `goldstar`,
+and `goldstar_inventory_version` access without a profile; listing all items, deep
+diagnostics, and profile capture include them. Mixed flag combinations are not
+supported. The legacy profile has no Goldstar cell (Hookshot level 2 holds both),
+so it refuses both Goldstar items. In the default profile, `goldstar` writes need
+`goldstar_inventory_version` 0xA5 (already in memory or set in the same profile);
+otherwise the menu migration would overwrite them. This selection does not identify or
 authenticate the loaded ROM; select the flags used to build it. Legacy Portal
 Rod access preserves the Fishing Rod when clearing Portal Rod ownership. In
 the default profile, opening the menu can migrate `customrods` level 2 back
