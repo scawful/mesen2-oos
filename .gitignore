@@ -197,4 +197,8 @@ UI/Dependencies.zip
 __pycache__/
 build-cmake/*
 build-codex/
+build-pause/
 *.code-workspace
+
+.gradle/
+local.properties
