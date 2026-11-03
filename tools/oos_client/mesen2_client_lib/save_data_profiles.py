@@ -25,6 +25,7 @@ from typing import Any
 
 from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START
 from .paths import SAVE_DATA_PROFILE_DIR
+from .item_profiles import item_address, decode_legacy_portalrod
 
 
 SAVEFILE_WRAM_END = SAVEFILE_WRAM_START + SAVEFILE_WRAM_SIZE
@@ -58,6 +59,7 @@ class ProfileExpectation:
     memtype: str | None = None
     mask: int | None = None
     persistent: bool = False
+    encoding: str | None = None
 
 
 def profile_dir() -> Path:
@@ -117,7 +119,7 @@ def is_persistent_save_address(addr: int, *, size: int = 1, memtype: str | None 
     return SAVEFILE_WRAM_START <= addr and end_addr < SAVEFILE_WRAM_END
 
 
-def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectation]:
+def iter_profile_expectations(profile: SaveDataProfile, item_profile: str | None = None) -> list[ProfileExpectation]:
     """Parse profile data into normalized operations for apply/verify paths."""
     data = profile.data or {}
     expectations: list[ProfileExpectation] = []
@@ -128,9 +130,13 @@ def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectati
     for key, raw_value in items.items():
         if key not in ITEMS:
             raise ValueError(f"Unknown item in profile: {key}")
-        addr, _, _ = ITEMS[key]
+        addr = item_address(key, item_profile)
         size = 2 if key == "rupees" else 1
         value = _parse_int(raw_value)
+        if key == "portalrod" and value not in (0, 1):
+            raise ValueError("portalrod value must be 0 or 1")
+        if key == "customrods" and value not in (0, 1, 2):
+            raise ValueError("customrods value must be 0, 1, or 2")
         expectations.append(
             ProfileExpectation(
                 kind="item",
@@ -139,8 +145,13 @@ def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectati
                 size=size,
                 value=value,
                 persistent=is_persistent_save_address(addr, size=size),
+                encoding="legacy_portalrod" if key == "portalrod" and item_profile == "legacy" else None,
             )
         )
+
+    if item_profile == "legacy" and "portalrod" in items and "customrods" in items:
+        if decode_legacy_portalrod(_parse_int(items["customrods"])) != _parse_int(items["portalrod"]):
+            raise ValueError("Legacy customrods and portalrod values conflict")
 
     flags = data.get("flags") or {}
     if not isinstance(flags, dict):
@@ -230,7 +241,13 @@ def apply_profile(
     Returns a list of actions taken (for logging/printing).
     """
     actions: list[str] = []
-    ops = expectations if expectations is not None else iter_profile_expectations(profile)
+    ops = expectations if expectations is not None else iter_profile_expectations(profile, getattr(client, "item_profile", None))
+    # Check the whole operation list before the first write, even for dry runs.
+    for op in ops:
+        if op.kind == "item":
+            expected_addr = item_address(op.name, getattr(client, "item_profile", None))
+            if op.addr != expected_addr:
+                raise ValueError(f"Item profile does not match expectation for {op.name}")
 
     for op in ops:
         if op.kind == "item":

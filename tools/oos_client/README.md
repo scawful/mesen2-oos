@@ -23,6 +23,23 @@ Override with `OOS_ROOT` (or `ORACLE_OF_SECRETS_ROOT`).
 `Scripts/Mesen2/mesen2_client_lib/__init__.py` are shims that forward here.
 Override the mesen2-oos location with `MESEN2_OOS_ROOT`.
 
+## Item build profile
+
+Pass `--item-profile default` when both `ENABLE_RING_SRAM_RELOCATE` and
+`ENABLE_PORTAL_ROD_CELL` are enabled, or `--item-profile legacy` when both
+are disabled. The client refuses `rings`, `portalrod`, and `customrods` access without a
+profile; listing all items, deep diagnostics, and profile capture include them.
+Mixed flag combinations are not supported. This selection does not identify or
+authenticate the loaded ROM; select the flags used to build it. Legacy Portal
+Rod access preserves the Fishing Rod when clearing Portal Rod ownership. In
+the default profile, opening the menu can migrate `customrods` level 2 back
+into Portal Rod ownership; clearing only `portalrod` is therefore not durable
+while that legacy level remains set.
+
+```sh
+python3 mesen2_client.py --socket /tmp/mesen2-owned.sock --item-profile legacy items portalrod
+```
+
 ## Grounded dungeon captures
 
 Use the existing `capture` command with an explicit owned, paused test instance:

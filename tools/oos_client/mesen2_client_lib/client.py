@@ -30,6 +30,7 @@ from .constants import (
     WATCH_PROFILES,
 )
 from .issues import KNOWN_ISSUES
+from .item_profiles import ITEM_PROFILES, SENSITIVE_ITEMS, item_address, decode_legacy_portalrod
 from .state_library import StateLibrary
 from .save_data_library import SaveDataLibrary
 from .save_data_io import read_savefile_bytes, write_savefile_bytes
@@ -100,7 +101,10 @@ def _guard_active_for_mode(state: dict, mode: int, now: float, cooldown: float) 
 class OracleDebugClient:
     """Oracle of Secrets debugging client wrapping MesenBridge."""
 
-    def __init__(self, socket_path: Optional[str] = None):
+    def __init__(self, socket_path: Optional[str] = None, item_profile: Optional[str] = None):
+        if item_profile is not None and item_profile not in ITEM_PROFILES:
+            raise ValueError(f"Unknown item profile: {item_profile}")
+        self.item_profile = item_profile
         socket_path = socket_path or os.getenv("MESEN2_SOCKET_PATH")
         self.bridge = MesenBridge(socket_path)
         self._last_area: Optional[int] = None
@@ -398,6 +402,8 @@ class OracleDebugClient:
 
     def get_diagnostics(self, deep: bool = False) -> dict:
         """Composite diagnostic snapshot for agents."""
+        if deep:
+            item_address("rings", getattr(self, "item_profile", None))
         oracle_state = self.get_oracle_state()
         run_state = self.get_run_state()
         rom_info = self.get_rom_info()
@@ -884,9 +890,16 @@ class OracleDebugClient:
         """Get an item's current value and description."""
         if item_name not in ITEMS:
             raise ValueError(f"Unknown item: {item_name}")
-        addr, name, values = ITEMS[item_name]
+        _, name, values = ITEMS[item_name]
+        profile = getattr(self, "item_profile", None)
+        addr = item_address(item_name, profile)
         if item_name == "rupees":
             val = self.bridge.read_memory16(addr)
+        elif item_name in SENSITIVE_ITEMS:
+            data = self.bridge.read_block(addr, 1)
+            if len(data) != 1:
+                raise ValueError(f"{item_name} read failed")
+            val = decode_legacy_portalrod(data[0]) if item_name == "portalrod" and profile == "legacy" else data[0]
         else:
             val = self.bridge.read_memory(addr)
         desc = values.get(val, str(val)) if values else str(val)
@@ -896,7 +909,18 @@ class OracleDebugClient:
         """Set an item's value."""
         if item_name not in ITEMS:
             raise ValueError(f"Unknown item: {item_name}")
-        addr, _, _ = ITEMS[item_name]
+        profile = getattr(self, "item_profile", None)
+        addr = item_address(item_name, profile)
+        if item_name == "portalrod" and value not in (0, 1):
+            raise ValueError("portalrod value must be 0 or 1")
+        if item_name == "customrods" and value not in (0, 1, 2):
+            raise ValueError("customrods value must be 0, 1, or 2")
+        if item_name == "portalrod" and profile == "legacy":
+            data = self.bridge.read_block(addr, 1)
+            if len(data) != 1:
+                raise ValueError("Legacy rod read failed")
+            decode_legacy_portalrod(data[0])
+            return self.bridge.write_memory(addr, 2 if value else min(data[0], 1))
         if item_name == "rupees":
             return self.bridge.write_memory16(addr, value)
         if item_name == "boots":
@@ -935,12 +959,15 @@ class OracleDebugClient:
 
     def get_all_items(self) -> dict:
         """Get all items and their values."""
+        item_address("rings", getattr(self, "item_profile", None))
         result = {}
         for name in ITEMS:
             try:
                 val, desc = self.get_item(name)
                 result[name] = {"value": val, "description": desc}
             except Exception:
+                if name in SENSITIVE_ITEMS:
+                    raise
                 pass
         return result
 

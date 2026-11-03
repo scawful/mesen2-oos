@@ -28,6 +28,7 @@ from .bridge import (
 from .save_data_profiles import (
     list_profiles as list_save_profiles,
     load_profile as load_save_profile,
+    iter_profile_expectations,
 )
 from .save_data_transaction import apply_profile_transaction
 
@@ -439,6 +440,7 @@ class SessionLogger:
 def main():
     parser = argparse.ArgumentParser(description="Oracle of Secrets Debug Client")
     parser.add_argument("--socket", help="Target Mesen2 socket path (recommended; avoids auto-attaching)")
+    parser.add_argument("--item-profile", choices=("default", "legacy"), help="Oracle build flags for rings and portalrod")
     parser.add_argument("--instance", help="Registry instance name to target (preferred for multi-agent)")
     parser.add_argument("--log", help="Log session activity to JSONL file")
     parser.add_argument("--vanilla", action="store_true", help="Include USDASM vanilla labels")
@@ -1202,7 +1204,7 @@ def main():
             agent_parser.print_help()
             sys.exit(1)
 
-        client = OracleDebugClient()
+        client = OracleDebugClient(item_profile=args.item_profile) if args.item_profile else OracleDebugClient()
         if args.agent_cmd == "health":
             info = client.health_check()
             emit(info, ok=bool(info.get("ok")))
@@ -1231,7 +1233,10 @@ def main():
             emit({"time": client.get_time_state()})
             return
         if args.agent_cmd == "diagnostics":
-            emit({"diagnostics": client.get_diagnostics(deep=getattr(args, "deep", False))})
+            try:
+                emit({"diagnostics": client.get_diagnostics(deep=getattr(args, "deep", False))})
+            except ValueError as exc:
+                emit({"error": str(exc)}, ok=False)
             return
         if args.agent_cmd == "press":
             ok = client.press_button(args.buttons, frames=args.frames, ensure_running=not args.allow_paused)
@@ -1444,7 +1449,7 @@ def main():
         return
 
     _preflight_socket(args)
-    client = OracleDebugClient()
+    client = OracleDebugClient(item_profile=args.item_profile) if args.item_profile else OracleDebugClient()
     if args.vanilla:
         client.load_usdasm_labels()
 
@@ -2334,7 +2339,11 @@ def main():
             print(f"Palette: R={palette.get('red')} G={palette.get('green')} B={palette.get('blue')}")
 
     elif args.command == "diagnostics":
-        diagnostics = client.get_diagnostics(deep=args.deep)
+        try:
+            diagnostics = client.get_diagnostics(deep=args.deep)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         if args.json:
             print(json.dumps(diagnostics, indent=2))
         else:
@@ -2710,7 +2719,11 @@ def main():
                 sys.exit(1)
         else:
             # Show all items with values
-            items = client.get_all_items()
+            try:
+                items = client.get_all_items()
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
             if args.json:
                 print(json.dumps(items, indent=2))
             else:
@@ -2725,6 +2738,7 @@ def main():
                 print(f"Set {args.item} = {args.value}")
             else:
                 print(f"Failed to set {args.item}")
+                sys.exit(1)
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
@@ -3623,6 +3637,7 @@ def main():
         elif args.save_data_cmd == "profile-apply":
             try:
                 profile = load_save_profile(args.profile)
+                iter_profile_expectations(profile, getattr(client, "item_profile", None))
             except Exception as e:
                 print(f"Error: {e}")
                 sys.exit(1)
@@ -3706,9 +3721,12 @@ def main():
                 sys.exit(1)
 
             out_path = Path(args.out).expanduser() if args.out else (Path(SAVE_DATA_PROFILE_DIR) / f"{profile_id}.json")
+            try:
+                items = client.get_all_items()
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-
-            items = client.get_all_items()
             item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items()}
             if args.only_nonzero:
                 item_values = {k: v for k, v in item_values.items() if v != 0}
