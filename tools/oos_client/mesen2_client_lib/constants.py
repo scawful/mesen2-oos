@@ -324,6 +324,13 @@ ITEMS = {
     "goldstar": (0x7EF3A9, "Goldstar", {0: "None", 1: "Have"}),
     "goldstar_inventory_version": (0x7EF3AA, "Goldstar Inventory Version", None),
     "saved_ocarina_song": (0x7EF3AB, "Saved Ocarina Song", {0: "Unset", 1: "Healing", 2: "Storms", 3: "Soaring", 4: "Time", 5: "Secrets", 6: "Stone"}),
+    # Independent ownership bytes: the game treats only exactly 1 as owned.
+    "byrna": (0x7EF3AC, "Cane of Byrna", {0: "None", 1: "Have"}),
+    "bombchu": (0x7EF3AD, "Bombchu", {0: "None", 1: "Have"}),
+    "switchhook": (0x7EF3AE, "Switch Hook", {0: "None", 1: "Have"}),
+    "garomask": (0x7EF3AF, "Garo Mask", {0: "None", 1: "Have"}),
+    # 0..20; values above 20 are cleared to 0 by the game.
+    "bombchuammo": (0x7EF3B0, "Bombchu Ammo", None),
     "rings": (0x7EF3A2, "Appraised Rings", None),
     "bananas": (0x7EF38B, "Bananas", None),
     "pineapples": (0x7EF38D, "Pineapples", None),

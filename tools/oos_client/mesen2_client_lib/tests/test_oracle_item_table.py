@@ -30,6 +30,11 @@ ORACLE_SRAM = {
     "dekusticks": 0x7EF395,
     "tinglemaps": 0x7EF396,
     "dungeonscrolls": 0x7EF398,
+    "byrna": 0x7EF3AC,
+    "bombchu": 0x7EF3AD,
+    "switchhook": 0x7EF3AE,
+    "garomask": 0x7EF3AF,
+    "bombchuammo": 0x7EF3B0,
 }
 
 SONGS = {1: "Healing", 2: "Storms", 3: "Soaring", 4: "Time", 5: "Secrets", 6: "Stone"}
@@ -77,3 +82,8 @@ def test_bottle_contents_include_oracle_values():
         assert labels[2] == "Empty"
         assert labels[9] == "Magic Bean"
         assert labels[10] == "Milk"
+
+
+@pytest.mark.parametrize("key", ["byrna", "bombchu", "switchhook", "garomask"])
+def test_ownership_bytes_use_exact_one(key):
+    assert ITEMS[key][2] == {0: "None", 1: "Have"}

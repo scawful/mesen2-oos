@@ -268,7 +268,10 @@ namespace Mesen.Utilities
 			["goldstar_inventory_version"] = 0x7EF3AA, ["saved_ocarina_song"] = 0x7EF3AB, ["rings"] = 0x7EF3A2,
 			["bananas"] = 0x7EF38B, ["pineapples"] = 0x7EF38D, ["rockmeat"] = 0x7EF38F,
 			["seashells"] = 0x7EF391, ["honeycombs"] = 0x7EF393, ["dekusticks"] = 0x7EF395,
-			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398
+			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398,
+			// Ownership is exactly 1; Bombchu ammo is 0..20.
+			["byrna"] = 0x7EF3AC, ["bombchu"] = 0x7EF3AD, ["switchhook"] = 0x7EF3AE,
+			["garomask"] = 0x7EF3AF, ["bombchuammo"] = 0x7EF3B0
 		};
 
 		private static readonly Dictionary<string, FlagBitDef> FlagBitIndex = FlagToggleDefs.ToDictionary(def => def.Key, def => def, StringComparer.OrdinalIgnoreCase);
