@@ -44,6 +44,22 @@ WATCH_PRESETS = {
 SAVE_STATE_LIBRARY_MARKER = f"{os.sep}Roms{os.sep}SaveStates{os.sep}library{os.sep}"
 
 
+def _profile_paused_state(bridge) -> bool:
+    """Read an unambiguous pause state before profile writes."""
+    state = bridge.get_state()
+    if not isinstance(state, dict) or state.get("success") is not True:
+        raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
+    data = state.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made") from exc
+    if not isinstance(data, dict) or type(data.get("paused")) is not bool:
+        raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
+    return data["paused"]
+
+
 def _sha1_file(path: Path) -> str:
     h = hashlib.sha1()
     with path.open("rb") as f:
@@ -3647,29 +3663,21 @@ def main():
             verify = (not bool(args.no_verify)) and (not bool(args.dry_run))
             slot = int(args.slot or 0) or None
 
-            was_paused = False
-            paused_here = False
+            paused_by_us = False
             keep_paused = False
             try:
-                try:
-                    st = client.bridge.get_state()
-                    data = st.get("data", {})
-                    if isinstance(data, str):
-                        try:
-                            data = json.loads(data)
-                        except Exception:
-                            data = {}
-                    if isinstance(data, dict):
-                        was_paused = bool(data.get("paused", False))
-                except Exception:
-                    was_paused = False
-
-                if not was_paused and not args.dry_run:
-                    if not client.bridge.pause():
-                        # Writing into a running game can race the menu-open migration.
-                        print("Error: could not pause the emulator; nothing was written.")
-                        sys.exit(1)
-                    paused_here = True
+                if not args.dry_run and not _profile_paused_state(client.bridge):
+                    if client.bridge.pause() is not True:
+                        raise RuntimeError("Pause request failed; no profile writes were made")
+                    # Debugger pause can complete after the request is accepted.
+                    for attempt in range(3):
+                        if _profile_paused_state(client.bridge):
+                            paused_by_us = True
+                            break
+                        if attempt < 2:
+                            time.sleep(0.05)
+                    if not paused_by_us:
+                        raise RuntimeError("Pause was not confirmed; no profile writes were made")
                 result = apply_profile_transaction(
                     client,
                     profile,
@@ -3683,12 +3691,11 @@ def main():
                 if isinstance(e, ProfileRollbackError):
                     # Running the game on half-restored memory can lock in a bad migration.
                     keep_paused = True
-                    if was_paused or paused_here:
-                        print("Emulator left paused: memory is only partly restored.")
+                    print("Emulator left paused: memory is only partly restored.")
                 sys.exit(1)
             finally:
                 try:
-                    if paused_here and not keep_paused:
+                    if paused_by_us and not keep_paused:
                         client.bridge.resume()
                 except Exception:
                     pass

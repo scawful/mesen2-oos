@@ -356,8 +356,13 @@ def test_cli_stays_paused_when_rollback_is_incomplete(tmp_path, monkeypatch):
 
     target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
     _raise_on(target.bridge, 0x7EF3A9)
-    target.bridge.get_state = lambda: {"data": {"paused": False}}
-    target.bridge.pause = lambda: target.bridge.calls.append(("pause",)) or True
+    paused = {"value": False}
+    target.bridge.get_state = lambda: {"success": True, "data": {"paused": paused["value"]}}
+    def pause():
+        target.bridge.calls.append(("pause",))
+        paused["value"] = True
+        return True
+    target.bridge.pause = pause
     target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
     path = tmp_path / "p.json"
     path.write_text(json.dumps({"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}}))
@@ -371,12 +376,84 @@ def test_cli_stays_paused_when_rollback_is_incomplete(tmp_path, monkeypatch):
     assert ("resume",) not in target.bridge.calls
 
 
+def _profile_cli(tmp_path, monkeypatch, target, *extra):
+    import json
+
+    path = tmp_path / "pause-profile.json"
+    path.write_text(json.dumps({"items": {"flute": 1}}))
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: target)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "default",
+                                     "save-data", "profile-apply", str(path),
+                                     "--no-persist", "--no-verify", *extra])
+
+
+@pytest.mark.parametrize("state", [
+    {"success": False},
+    {"success": True, "data": {}},
+    {"success": True, "data": {"paused": "false"}},
+    {"success": True, "data": "not-json"},
+])
+def test_cli_refuses_unknown_pause_state_before_writes(tmp_path, monkeypatch, state):
+    target = client("default")
+    target.bridge.get_state = lambda: state
+    target.bridge.pause = lambda: target.bridge.calls.append(("pause",))
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    _profile_cli(tmp_path, monkeypatch, target)
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert not any(call[0] in ("pause", "resume", "write") for call in target.bridge.calls)
+
+
+@pytest.mark.parametrize("pause_result", [False, True])
+def test_cli_refuses_unconfirmed_pause_before_writes(tmp_path, monkeypatch, pause_result):
+    target = client("default")
+    target.bridge.get_state = lambda: {"success": True, "data": {"paused": False}}
+    target.bridge.pause = lambda: (target.bridge.calls.append(("pause",)), pause_result)[1]
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    _profile_cli(tmp_path, monkeypatch, target)
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert ("pause",) in target.bridge.calls
+    assert not any(call[0] in ("resume", "write") for call in target.bridge.calls)
+
+
+@pytest.mark.parametrize("initially_paused", [False, True])
+def test_cli_resumes_only_its_own_confirmed_pause(tmp_path, monkeypatch, initially_paused):
+    target = client("default")
+    paused = {"value": initially_paused}
+    target.bridge.get_state = lambda: {"success": True, "data": {"paused": paused["value"]}}
+    def pause():
+        target.bridge.calls.append(("pause",))
+        paused["value"] = True
+        return True
+    target.bridge.pause = pause
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    _profile_cli(tmp_path, monkeypatch, target)
+    cli.main()
+    assert any(call[0] == "write" for call in target.bridge.calls)
+    assert (("pause",) in target.bridge.calls) is not initially_paused
+    assert (("resume",) in target.bridge.calls) is not initially_paused
+
+
+def test_cli_dry_run_does_not_require_or_change_pause(tmp_path, monkeypatch):
+    target = client("default")
+    target.bridge.get_state = lambda: (_ for _ in ()).throw(AssertionError("unexpected state query"))
+    target.bridge.pause = lambda: target.bridge.calls.append(("pause",))
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    _profile_cli(tmp_path, monkeypatch, target, "--dry-run")
+    cli.main()
+    assert not any(call[0] in ("pause", "resume", "write") for call in target.bridge.calls)
+
+
 def test_cli_refuses_to_write_when_pause_fails(tmp_path, monkeypatch, capsys):
     import json
 
     target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
     _raise_on(target.bridge, 0x7EF3A9)
-    target.bridge.get_state = lambda: {"data": {"paused": False}}
+    target.bridge.get_state = lambda: {"success": True, "data": {"paused": False}}
     target.bridge.pause = lambda: target.bridge.calls.append(("pause",)) or False
     target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
     path = tmp_path / "p.json"
