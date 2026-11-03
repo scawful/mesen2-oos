@@ -106,6 +106,15 @@ def test_all_items_requires_profile_before_any_read():
     assert c.bridge.calls == []
 
 
+def test_all_items_without_profile_items_skips_them():
+    c = client()
+    items = c.get_all_items(include_profile_items=False)
+    assert "lamp" in items
+    assert not {"rings", "portalrod", "customrods"} & items.keys()
+    touched = {call[1] for call in c.bridge.calls}
+    assert not {0x7EF3A2, 0x7EF3D8, 0x7EF3A6, 0x7EF351} & touched
+
+
 @pytest.mark.parametrize("raw,value", [(0, 1), (1, 1), (2, 0)])
 def test_legacy_conflicting_rod_profile_never_writes(tmp_path, raw, value):
     c = client("legacy")

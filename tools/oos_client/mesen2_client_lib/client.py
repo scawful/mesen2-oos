@@ -957,11 +957,18 @@ class OracleDebugClient:
             return False
         return True
 
-    def get_all_items(self) -> dict:
-        """Get all items and their values."""
-        item_address("rings", getattr(self, "item_profile", None))
+    def get_all_items(self, include_profile_items: bool = True) -> dict:
+        """Get all items and their values.
+
+        include_profile_items=False skips rings/portalrod/customrods, so callers
+        that never show them need no item profile.
+        """
+        if include_profile_items:
+            item_address("rings", getattr(self, "item_profile", None))
         result = {}
         for name in ITEMS:
+            if not include_profile_items and name in SENSITIVE_ITEMS:
+                continue
             try:
                 val, desc = self.get_item(name)
                 result[name] = {"value": val, "description": desc}
