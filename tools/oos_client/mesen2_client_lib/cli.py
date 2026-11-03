@@ -44,8 +44,8 @@ WATCH_PRESETS = {
 SAVE_STATE_LIBRARY_MARKER = f"{os.sep}Roms{os.sep}SaveStates{os.sep}library{os.sep}"
 
 
-def _profile_paused_state(bridge) -> bool:
-    """Read an unambiguous pause state before profile writes."""
+def _require_profile_debugger_paused(bridge) -> None:
+    """Require an attached, paused debugger before profile memory access."""
     state = bridge.get_state()
     if not isinstance(state, dict) or state.get("success") is not True:
         raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
@@ -57,7 +57,10 @@ def _profile_paused_state(bridge) -> bool:
             raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made") from exc
     if not isinstance(data, dict) or type(data.get("paused")) is not bool:
         raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
-    return data["paused"]
+    if data.get("debugging") is not True:
+        raise RuntimeError("Attach and pause the debugger before applying a profile; no profile writes were made")
+    if data["paused"] is not True:
+        raise RuntimeError("Pause the attached debugger before applying a profile; no profile writes were made")
 
 
 def _sha1_file(path: Path) -> str:
@@ -3663,21 +3666,12 @@ def main():
             verify = (not bool(args.no_verify)) and (not bool(args.dry_run))
             slot = int(args.slot or 0) or None
 
-            paused_by_us = False
-            keep_paused = False
             try:
-                if not args.dry_run and not _profile_paused_state(client.bridge):
-                    if client.bridge.pause() is not True:
-                        raise RuntimeError("Pause request failed; no profile writes were made")
-                    # Debugger pause can complete after the request is accepted.
-                    for attempt in range(3):
-                        if _profile_paused_state(client.bridge):
-                            paused_by_us = True
-                            break
-                        if attempt < 2:
-                            time.sleep(0.05)
-                    if not paused_by_us:
-                        raise RuntimeError("Pause was not confirmed; no profile writes were made")
+                items = profile.data.get("items") or {}
+                goldstar_preflight_reads = ("goldstar" in items and
+                                            "goldstar_inventory_version" not in items)
+                if not args.dry_run or goldstar_preflight_reads:
+                    _require_profile_debugger_paused(client.bridge)
                 result = apply_profile_transaction(
                     client,
                     profile,
@@ -3689,16 +3683,8 @@ def main():
             except Exception as e:
                 print(f"Error: {e}")
                 if isinstance(e, ProfileRollbackError):
-                    # Running the game on half-restored memory can lock in a bad migration.
-                    keep_paused = True
-                    print("Emulator left paused: memory is only partly restored.")
+                    print("Rollback incomplete; check memory before resuming the debugger.")
                 sys.exit(1)
-            finally:
-                try:
-                    if paused_by_us and not keep_paused:
-                        client.bridge.resume()
-                except Exception:
-                    pass
 
             payload = {
                 "ok": bool(result.get("ok", True)),

@@ -39,7 +39,10 @@ that is not migrated yet is refused for the same reason. Listing all items repor
 those cases as `value: null` with the reason, and profile capture leaves them out.
 A profile with `goldstar_inventory_version` but no `goldstar` is refused, and capture
 never writes one. If any profile write fails, the client writes the earlier targets
-back to their values from before the apply. This selection does not identify or
+back to their values from before the apply. Before applying a profile, attach and
+pause the debugger; the client refuses writes unless both are confirmed and does
+not pause or resume the session itself. A Goldstar dry run without a version also
+needs the paused debugger because it reads the migration marker. This selection does not identify or
 authenticate the loaded ROM; select the flags used to build it. Legacy Portal
 Rod access preserves the Fishing Rod when clearing Portal Rod ownership. In
 the default profile, opening the menu can migrate `customrods` level 2 back
