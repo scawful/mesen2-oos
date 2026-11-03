@@ -36,7 +36,10 @@ so it refuses both Goldstar items. In the default profile, `goldstar` writes nee
 `goldstar_inventory_version` 0xA5 (already in memory or set in the same profile);
 otherwise the menu migration would overwrite them. Reading `goldstar` on a save
 that is not migrated yet is refused for the same reason. Listing all items reports
-those cases as `value: null` with the reason, and profile capture leaves them out. This selection does not identify or
+those cases as `value: null` with the reason, and profile capture leaves them out.
+A profile with `goldstar_inventory_version` but no `goldstar` is refused, and capture
+never writes one. If any profile write fails, the client writes the earlier targets
+back to their values from before the apply. This selection does not identify or
 authenticate the loaded ROM; select the flags used to build it. Legacy Portal
 Rod access preserves the Fishing Rod when clearing Portal Rod ownership. In
 the default profile, opening the menu can migrate `customrods` level 2 back

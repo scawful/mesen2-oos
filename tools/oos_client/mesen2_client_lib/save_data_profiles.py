@@ -149,6 +149,8 @@ def iter_profile_expectations(profile: SaveDataProfile, item_profile: str | None
             )
         )
 
+    if "goldstar_inventory_version" in items and "goldstar" not in items:
+        raise ValueError("goldstar_inventory_version needs goldstar in the same profile")
     if "goldstar" in items and "goldstar_inventory_version" in items:
         if _parse_int(items["goldstar_inventory_version"]) != GOLDSTAR_MIGRATED:
             raise ValueError("goldstar needs goldstar_inventory_version 0xA5 in the same profile")
@@ -258,42 +260,81 @@ def apply_profile(
     if "goldstar" in names and "goldstar_inventory_version" not in names:
         client.require_goldstar_migrated()
 
-    for op in ops:
-        if op.kind == "item":
-            value = int(op.value)
-            actions.append(f"item:{op.name}={value}")
-            if not dry_run and not client.set_item(op.name, value):
-                raise RuntimeError(f"Failed to set item: {op.name}")
-            continue
+    # Snapshot every target first so a failed write can put the earlier ones back.
+    originals: list[tuple[ProfileExpectation, bytes]] = []
+    if not dry_run:
+        for op in ops:
+            data = _read_target(client, op)
+            if len(data) != op.size:
+                raise RuntimeError(f"Cannot read 0x{op.addr:06X} before writing; nothing was written")
+            originals.append((op, data))
 
-        if op.kind == "flag_bit":
-            value = bool(op.value)
-            actions.append(f"flag:{op.name}={'1' if value else '0'}")
-            if not dry_run and not client.set_flag(op.name, value):
-                raise RuntimeError(f"Failed to set flag bit: {op.name}")
-            continue
-
-        if op.kind == "flag_byte":
-            value = int(op.value) & 0xFF
-            actions.append(f"flag:{op.name}=0x{value:02X}")
-            if not dry_run and not client.set_flag(op.name, value):
-                raise RuntimeError(f"Failed to set flag byte: {op.name}")
-            continue
-
-        if op.kind == "write":
-            value = int(op.value)
-            memtype = op.memtype
-            mem_name = memtype or "default"
-            if op.size == 2:
-                actions.append(f"write16:{op.addr:06X}={value:04X}({mem_name})")
-                if not dry_run and not client.bridge.write_memory16(op.addr, value, memtype=memtype):
-                    raise RuntimeError(f"Failed write16 at 0x{op.addr:06X}")
-            else:
-                actions.append(f"write8:{op.addr:06X}={value:02X}({mem_name})")
-                if not dry_run and not client.bridge.write_memory(op.addr, value, memtype=memtype):
-                    raise RuntimeError(f"Failed write8 at 0x{op.addr:06X}")
-            continue
-
-        raise ValueError(f"Unsupported profile operation kind: {op.kind}")
+    for index, op in enumerate(ops):
+        try:
+            _apply_op(client, op, dry_run, actions)
+        except Exception as exc:
+            if dry_run:
+                raise
+            failed = _restore_targets(client, originals[: index + 1])
+            if failed:
+                raise RuntimeError(f"{exc}; rollback also failed at {', '.join(failed)}") from exc
+            raise
 
     return actions
+
+
+def _memtype_kwargs(op: ProfileExpectation) -> dict[str, str]:
+    return {"memtype": op.memtype} if op.memtype else {}
+
+
+def _read_target(client, op: ProfileExpectation) -> bytes:
+    return bytes(client.bridge.read_block(op.addr, op.size, **_memtype_kwargs(op)))
+
+
+def _restore_targets(client, originals: list[tuple[ProfileExpectation, bytes]]) -> list[str]:
+    """Write snapshots back newest first; return the addresses that failed."""
+    failed: list[str] = []
+    for op, data in reversed(originals):
+        for offset, byte in enumerate(data):
+            if not client.bridge.write_memory(op.addr + offset, byte, **_memtype_kwargs(op)):
+                failed.append(f"0x{op.addr + offset:06X}")
+    return failed
+
+
+def _apply_op(client, op: ProfileExpectation, dry_run: bool, actions: list[str]) -> None:
+    if op.kind == "item":
+        value = int(op.value)
+        actions.append(f"item:{op.name}={value}")
+        if not dry_run and not client.set_item(op.name, value):
+            raise RuntimeError(f"Failed to set item: {op.name}")
+        return
+
+    if op.kind == "flag_bit":
+        value = bool(op.value)
+        actions.append(f"flag:{op.name}={'1' if value else '0'}")
+        if not dry_run and not client.set_flag(op.name, value):
+            raise RuntimeError(f"Failed to set flag bit: {op.name}")
+        return
+
+    if op.kind == "flag_byte":
+        value = int(op.value) & 0xFF
+        actions.append(f"flag:{op.name}=0x{value:02X}")
+        if not dry_run and not client.set_flag(op.name, value):
+            raise RuntimeError(f"Failed to set flag byte: {op.name}")
+        return
+
+    if op.kind == "write":
+        value = int(op.value)
+        memtype = op.memtype
+        mem_name = memtype or "default"
+        if op.size == 2:
+            actions.append(f"write16:{op.addr:06X}={value:04X}({mem_name})")
+            if not dry_run and not client.bridge.write_memory16(op.addr, value, memtype=memtype):
+                raise RuntimeError(f"Failed write16 at 0x{op.addr:06X}")
+        else:
+            actions.append(f"write8:{op.addr:06X}={value:02X}({mem_name})")
+            if not dry_run and not client.bridge.write_memory(op.addr, value, memtype=memtype):
+                raise RuntimeError(f"Failed write8 at 0x{op.addr:06X}")
+        return
+
+    raise ValueError(f"Unsupported profile operation kind: {op.kind}")

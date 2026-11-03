@@ -5,7 +5,7 @@ import sys
 from mesen2_client_lib import cli, save_data_transaction
 from mesen2_client_lib.client import OracleDebugClient
 from mesen2_client_lib.constants import SAVEFILE_WRAM_START
-from mesen2_client_lib.save_data_profiles import SaveDataProfile
+from mesen2_client_lib.save_data_profiles import SaveDataProfile, iter_profile_expectations
 from mesen2_client_lib.save_data_transaction import apply_profile_transaction
 
 
@@ -277,3 +277,41 @@ def test_unmigrated_capture_does_not_clear_goldstar_on_replay(tmp_path, monkeypa
     apply_profile_transaction(target, SaveDataProfile(output, data), persist=False, verify=False)
     assert target.bridge.memory[0x7EF3AA] == 0xA5
     assert target.bridge.memory[0x7EF3A9] == 1
+
+
+def _capture(tmp_path, monkeypatch, source, *extra):
+    import json
+
+    output = tmp_path / "profile.json"
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: source)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "default", "save-data", "profile-capture", "t", "--out", str(output), *extra])
+    cli.main()
+    return SaveDataProfile(output, json.loads(output.read_text()))
+
+
+def test_nonzero_capture_does_not_skip_migration_on_replay(tmp_path, monkeypatch):
+    profile = _capture(tmp_path, monkeypatch, client("default", {0x7EF342: 0, 0x7EF3A9: 0, 0x7EF3AA: 0xA5}), "--only-nonzero")
+    assert "goldstar_inventory_version" not in profile.data["items"]
+
+    target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
+    apply_profile_transaction(target, profile, persist=False, verify=False)
+    assert target.bridge.memory[0x7EF3AA] == 0
+    assert target.bridge.memory[0x7EF342] == 2
+
+
+def test_version_only_profile_is_refused(tmp_path):
+    profile = SaveDataProfile(tmp_path / "p.json", {"items": {"goldstar_inventory_version": 0xA5}})
+    with pytest.raises(ValueError, match="needs goldstar"):
+        iter_profile_expectations(profile, "default")
+
+
+def test_failed_goldstar_write_rolls_back_the_version(tmp_path):
+    target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
+    write = target.bridge.write_memory
+    target.bridge.write_memory = lambda addr, value, memtype=None: False if addr == 0x7EF3A9 and value == 1 else write(addr, value, memtype)
+    profile = SaveDataProfile(tmp_path / "p.json", {"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}})
+
+    with pytest.raises(RuntimeError, match="Failed to set item: goldstar"):
+        apply_profile_transaction(target, profile, persist=False, verify=False)
+    assert target.bridge.memory == {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0}

@@ -3729,11 +3729,11 @@ def main():
             out_path.parent.mkdir(parents=True, exist_ok=True)
             # value None = no cell or unmigrated; leave it out instead of saving 0.
             item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items() if v.get("value", 0) is not None}
-            if "goldstar" not in item_values:
-                # Replaying the version alone resets migration and can clear another save's Goldstar.
-                item_values.pop("goldstar_inventory_version", None)
             if args.only_nonzero:
                 item_values = {k: v for k, v in item_values.items() if v != 0}
+            if "goldstar" not in item_values:
+                # The version alone changes how the next menu open migrates another save.
+                item_values.pop("goldstar_inventory_version", None)
 
             flag_values = {}
             if args.flags:
