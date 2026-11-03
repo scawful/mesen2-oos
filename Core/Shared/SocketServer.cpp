@@ -2803,7 +2803,7 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 	if (debugger) {
 		CpuType cpuType = emu->GetCpuTypes()[0];
 		// Step by frames
-		debugger->Step(cpuType, frameCount, StepType::PpuStep);
+		debugger->Step(cpuType, frameCount, StepType::PpuFrame);
 	} else {
 		if(frameCount != 1) {
 			resp.success = false;
