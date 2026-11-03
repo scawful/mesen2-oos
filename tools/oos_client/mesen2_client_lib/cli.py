@@ -3648,6 +3648,7 @@ def main():
             slot = int(args.slot or 0) or None
 
             was_paused = False
+            paused_here = False
             keep_paused = False
             try:
                 try:
@@ -3664,7 +3665,11 @@ def main():
                     was_paused = False
 
                 if not was_paused and not args.dry_run:
-                    client.bridge.pause()
+                    if not client.bridge.pause():
+                        # Writing into a running game can race the menu-open migration.
+                        print("Error: could not pause the emulator; nothing was written.")
+                        sys.exit(1)
+                    paused_here = True
                 result = apply_profile_transaction(
                     client,
                     profile,
@@ -3678,11 +3683,12 @@ def main():
                 if isinstance(e, ProfileRollbackError):
                     # Running the game on half-restored memory can lock in a bad migration.
                     keep_paused = True
-                    print("Emulator left paused: memory is only partly restored.")
+                    if was_paused or paused_here:
+                        print("Emulator left paused: memory is only partly restored.")
                 sys.exit(1)
             finally:
                 try:
-                    if not was_paused and not args.dry_run and not keep_paused:
+                    if paused_here and not keep_paused:
                         client.bridge.resume()
                 except Exception:
                     pass

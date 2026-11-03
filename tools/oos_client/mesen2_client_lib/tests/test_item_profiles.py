@@ -357,7 +357,7 @@ def test_cli_stays_paused_when_rollback_is_incomplete(tmp_path, monkeypatch):
     target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
     _raise_on(target.bridge, 0x7EF3A9)
     target.bridge.get_state = lambda: {"data": {"paused": False}}
-    target.bridge.pause = lambda: target.bridge.calls.append(("pause",))
+    target.bridge.pause = lambda: target.bridge.calls.append(("pause",)) or True
     target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
     path = tmp_path / "p.json"
     path.write_text(json.dumps({"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}}))
@@ -368,4 +368,26 @@ def test_cli_stays_paused_when_rollback_is_incomplete(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         cli.main()
     assert ("pause",) in target.bridge.calls
+    assert ("resume",) not in target.bridge.calls
+
+
+def test_cli_refuses_to_write_when_pause_fails(tmp_path, monkeypatch, capsys):
+    import json
+
+    target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
+    _raise_on(target.bridge, 0x7EF3A9)
+    target.bridge.get_state = lambda: {"data": {"paused": False}}
+    target.bridge.pause = lambda: target.bridge.calls.append(("pause",)) or False
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}}))
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: target)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "default", "save-data", "profile-apply", str(path), "--no-persist", "--no-verify"])
+
+    with pytest.raises(SystemExit):
+        cli.main()
+    out = capsys.readouterr().out
+    assert not [c for c in target.bridge.calls if c[0] == "write"]
+    assert "left paused" not in out
     assert ("resume",) not in target.bridge.calls
