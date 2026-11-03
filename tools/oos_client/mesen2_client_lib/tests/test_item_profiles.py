@@ -226,3 +226,36 @@ def test_unmigrated_goldstar_profile_never_writes(tmp_path, items):
     with pytest.raises(ValueError, match="0xA5"):
         apply_profile_transaction(c, p, persist=False, verify=False)
     assert all(call[0] != "write" for call in c.bridge.calls)
+
+
+def test_legacy_all_items_marks_goldstar_unavailable():
+    c = client("legacy", {0x7EF3D8: 3})
+    items = c.get_all_items()
+    assert items["rings"]["value"] == 3
+    for name in ("goldstar", "goldstar_inventory_version"):
+        assert items[name] == {"value": None, "description": "no cell in the legacy profile"}
+    assert 0x7EF3A9 not in {call[1] for call in c.bridge.calls}
+
+
+def test_unmigrated_goldstar_read_is_refused_not_zero():
+    # Legacy Hookshot level 2 becomes Goldstar ownership on the next menu open.
+    c = client("default", {0x7EF342: 2, 0x7EF3AA: 0, 0x7EF3A9: 0})
+    with pytest.raises(ValueError, match="not readable until"):
+        c.get_item("goldstar")
+    items = c.get_all_items()
+    assert items["goldstar"]["value"] is None
+    assert items["goldstar_inventory_version"]["value"] == 0
+
+
+def test_capture_leaves_out_unavailable_items(tmp_path, monkeypatch):
+    import json
+
+    c = client("legacy", {0x7EF3D8: 3})
+    output = tmp_path / "profile.json"
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: c)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "legacy", "save-data", "profile-capture", "t", "--out", str(output)])
+    cli.main()
+    items = json.loads(output.read_text())["items"]
+    assert items["rings"] == 3
+    assert "goldstar" not in items and "goldstar_inventory_version" not in items

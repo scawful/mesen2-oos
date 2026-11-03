@@ -30,7 +30,14 @@ from .constants import (
     WATCH_PROFILES,
 )
 from .issues import KNOWN_ISSUES
-from .item_profiles import GOLDSTAR_MIGRATED, ITEM_PROFILES, SENSITIVE_ITEMS, item_address, decode_legacy_portalrod
+from .item_profiles import (
+    GOLDSTAR_MIGRATED,
+    ITEM_PROFILES,
+    SENSITIVE_ITEMS,
+    decode_legacy_portalrod,
+    item_address,
+    item_available,
+)
 from .state_library import StateLibrary
 from .save_data_library import SaveDataLibrary
 from .save_data_io import read_savefile_bytes, write_savefile_bytes
@@ -893,6 +900,8 @@ class OracleDebugClient:
         _, name, values = ITEMS[item_name]
         profile = getattr(self, "item_profile", None)
         addr = item_address(item_name, profile)
+        if item_name == "goldstar" and not self._goldstar_migrated():
+            raise ValueError("goldstar is not readable until goldstar_inventory_version is 0xA5; the menu migration decides it")
         if item_name == "rupees":
             val = self.bridge.read_memory16(addr)
         elif item_name in SENSITIVE_ITEMS:
@@ -929,12 +938,24 @@ class OracleDebugClient:
             return self._set_boots(addr, value)
         return self.bridge.write_memory(addr, value)
 
-    def require_goldstar_migrated(self) -> None:
-        """Refuse Goldstar writes the next menu open would overwrite."""
+    def _goldstar_migrated(self) -> bool:
         data = self.bridge.read_block(ITEMS["goldstar_inventory_version"][0], 1)
         if len(data) != 1:
             raise ValueError("goldstar_inventory_version read failed")
-        if data[0] != GOLDSTAR_MIGRATED:
+        return data[0] == GOLDSTAR_MIGRATED
+
+    def _item_unavailable(self, name: str) -> Optional[str]:
+        """Why a profile item has no meaningful value now, or None."""
+        profile = getattr(self, "item_profile", None)
+        if not item_available(name, profile):
+            return f"no cell in the {profile} profile"
+        if name == "goldstar" and not self._goldstar_migrated():
+            return "save not migrated (goldstar_inventory_version != 0xA5)"
+        return None
+
+    def require_goldstar_migrated(self) -> None:
+        """Refuse Goldstar writes the next menu open would overwrite."""
+        if not self._goldstar_migrated():
             raise ValueError("goldstar requires goldstar_inventory_version 0xA5 first; the menu migration rewrites it")
 
     def _set_boots(self, addr: int, value: int) -> bool:
@@ -972,6 +993,7 @@ class OracleDebugClient:
 
         include_profile_items=False skips the SENSITIVE_ITEMS (rings, rods,
         Goldstar), so callers that never show them need no item profile.
+        Profile items with no meaningful value report value None and the reason.
         """
         if include_profile_items:
             item_address("rings", getattr(self, "item_profile", None))
@@ -979,6 +1001,11 @@ class OracleDebugClient:
         for name in ITEMS:
             if not include_profile_items and name in SENSITIVE_ITEMS:
                 continue
+            if name in SENSITIVE_ITEMS:
+                reason = self._item_unavailable(name)
+                if reason:
+                    result[name] = {"value": None, "description": reason}
+                    continue
             try:
                 val, desc = self.get_item(name)
                 result[name] = {"value": val, "description": desc}

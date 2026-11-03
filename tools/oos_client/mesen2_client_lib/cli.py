@@ -3727,7 +3727,8 @@ def main():
                 print(f"Error: {exc}", file=sys.stderr)
                 sys.exit(1)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items()}
+            # value None = no cell or unmigrated; leave it out instead of saving 0.
+            item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items() if v.get("value", 0) is not None}
             if args.only_nonzero:
                 item_values = {k: v for k, v in item_values.items() if v != 0}
 
