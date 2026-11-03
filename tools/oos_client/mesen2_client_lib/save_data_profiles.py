@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START
+from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START, OracleRAM
 from .paths import SAVE_DATA_PROFILE_DIR
 from .item_profiles import GOLDSTAR_MIGRATED, item_address, decode_legacy_portalrod
 
@@ -261,13 +261,16 @@ def apply_profile(
         client.require_goldstar_migrated()
 
     # Snapshot every target first so a failed write can put the earlier ones back.
-    originals: list[tuple[ProfileExpectation, bytes]] = []
+    snapshots: list[list[tuple[int, bytes, str | None]]] = []
     if not dry_run:
         for op in ops:
-            data = _read_target(client, op)
-            if len(data) != op.size:
-                raise RuntimeError(f"Cannot read 0x{op.addr:06X} before writing; nothing was written")
-            originals.append((op, data))
+            op_snapshot = []
+            for addr, size, memtype in _op_targets(op):
+                data = _read_target(client, addr, size, memtype)
+                if len(data) != size:
+                    raise RuntimeError(f"Cannot read 0x{addr:06X} before writing; nothing was written")
+                op_snapshot.append((addr, data, memtype))
+            snapshots.append(op_snapshot)
 
     for index, op in enumerate(ops):
         try:
@@ -275,29 +278,46 @@ def apply_profile(
         except Exception as exc:
             if dry_run:
                 raise
-            failed = _restore_targets(client, originals[: index + 1])
+            failed = _restore_targets(client, [t for op_snapshot in snapshots[: index + 1] for t in op_snapshot])
             if failed:
-                raise RuntimeError(f"{exc}; rollback also failed at {', '.join(failed)}") from exc
+                raise ProfileRollbackError(f"{exc}; rollback also failed at {', '.join(failed)}") from exc
             raise
 
     return actions
 
 
-def _memtype_kwargs(op: ProfileExpectation) -> dict[str, str]:
-    return {"memtype": op.memtype} if op.memtype else {}
+class ProfileRollbackError(RuntimeError):
+    """A profile write failed and some earlier targets could not be restored."""
 
 
-def _read_target(client, op: ProfileExpectation) -> bytes:
-    return bytes(client.bridge.read_block(op.addr, op.size, **_memtype_kwargs(op)))
+def _memtype_kwargs(memtype: str | None) -> dict[str, str]:
+    return {"memtype": memtype} if memtype else {}
 
 
-def _restore_targets(client, originals: list[tuple[ProfileExpectation, bytes]]) -> list[str]:
-    """Write snapshots back newest first; return the addresses that failed."""
+def _op_targets(op: ProfileExpectation) -> list[tuple[int, int, str | None]]:
+    """Every address an operation's setter can write, not just op.addr."""
+    targets = [(op.addr, op.size, op.memtype)]
+    if op.kind == "item" and op.name == "boots":
+        # set_item("boots") also sets the run bit in the ability byte.
+        targets.append((OracleRAM.ABILITY_FLAGS, 1, None))
+    return targets
+
+
+def _read_target(client, addr: int, size: int, memtype: str | None) -> bytes:
+    return bytes(client.bridge.read_block(addr, size, **_memtype_kwargs(memtype)))
+
+
+def _restore_targets(client, snapshots: list[tuple[int, bytes, str | None]]) -> list[str]:
+    """Write snapshots back newest first, past any failure; return the addresses that failed."""
     failed: list[str] = []
-    for op, data in reversed(originals):
+    for addr, data, memtype in reversed(snapshots):
         for offset, byte in enumerate(data):
-            if not client.bridge.write_memory(op.addr + offset, byte, **_memtype_kwargs(op)):
-                failed.append(f"0x{op.addr + offset:06X}")
+            try:
+                ok = client.bridge.write_memory(addr + offset, byte, **_memtype_kwargs(memtype))
+            except Exception:
+                ok = False
+            if not ok:
+                failed.append(f"0x{addr + offset:06X}")
     return failed
 
 

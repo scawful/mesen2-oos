@@ -29,6 +29,7 @@ from .save_data_profiles import (
     list_profiles as list_save_profiles,
     load_profile as load_save_profile,
     iter_profile_expectations,
+    ProfileRollbackError,
 )
 from .save_data_transaction import apply_profile_transaction
 
@@ -3647,6 +3648,7 @@ def main():
             slot = int(args.slot or 0) or None
 
             was_paused = False
+            keep_paused = False
             try:
                 try:
                     st = client.bridge.get_state()
@@ -3673,10 +3675,14 @@ def main():
                 )
             except Exception as e:
                 print(f"Error: {e}")
+                if isinstance(e, ProfileRollbackError):
+                    # Running the game on half-restored memory can lock in a bad migration.
+                    keep_paused = True
+                    print("Emulator left paused: memory is only partly restored.")
                 sys.exit(1)
             finally:
                 try:
-                    if not was_paused and not args.dry_run:
+                    if not was_paused and not args.dry_run and not keep_paused:
                         client.bridge.resume()
                 except Exception:
                     pass

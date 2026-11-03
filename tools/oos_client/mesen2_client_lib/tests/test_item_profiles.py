@@ -5,7 +5,8 @@ import sys
 from mesen2_client_lib import cli, save_data_transaction
 from mesen2_client_lib.client import OracleDebugClient
 from mesen2_client_lib.constants import SAVEFILE_WRAM_START
-from mesen2_client_lib.save_data_profiles import SaveDataProfile, iter_profile_expectations
+from mesen2_client_lib.constants import ITEMS, OracleRAM
+from mesen2_client_lib.save_data_profiles import ProfileRollbackError, SaveDataProfile, iter_profile_expectations
 from mesen2_client_lib.save_data_transaction import apply_profile_transaction
 
 
@@ -315,3 +316,56 @@ def test_failed_goldstar_write_rolls_back_the_version(tmp_path):
     with pytest.raises(RuntimeError, match="Failed to set item: goldstar"):
         apply_profile_transaction(target, profile, persist=False, verify=False)
     assert target.bridge.memory == {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0}
+
+
+def _raise_on(bridge, addr):
+    write = bridge.write_memory
+
+    def write_memory(a, value, memtype=None):
+        if a == addr:
+            raise ConnectionError("socket closed")
+        return write(a, value, memtype)
+
+    bridge.write_memory = write_memory
+
+
+def test_rollback_continues_past_a_raising_restore(tmp_path):
+    target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
+    _raise_on(target.bridge, 0x7EF3A9)
+    profile = SaveDataProfile(tmp_path / "p.json", {"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}})
+
+    with pytest.raises(ProfileRollbackError, match="0x7EF3A9"):
+        apply_profile_transaction(target, profile, persist=False, verify=False)
+    assert target.bridge.memory[0x7EF3AA] == 0
+
+
+def test_rollback_restores_the_boots_ability_bit(tmp_path):
+    boots, flute = ITEMS["boots"][0], ITEMS["flute"][0]
+    target = client("default", {boots: 0, OracleRAM.ABILITY_FLAGS: 0, flute: 0})
+    write = target.bridge.write_memory
+    target.bridge.write_memory = lambda addr, value, memtype=None: False if addr == flute and value == 1 else write(addr, value, memtype)
+    profile = SaveDataProfile(tmp_path / "p.json", {"items": {"boots": 1, "flute": 1}})
+
+    with pytest.raises(RuntimeError, match="Failed to set item: flute"):
+        apply_profile_transaction(target, profile, persist=False, verify=False)
+    assert target.bridge.memory == {boots: 0, OracleRAM.ABILITY_FLAGS: 0, flute: 0}
+
+
+def test_cli_stays_paused_when_rollback_is_incomplete(tmp_path, monkeypatch):
+    import json
+
+    target = client("default", {0x7EF342: 2, 0x7EF3A9: 0, 0x7EF3AA: 0})
+    _raise_on(target.bridge, 0x7EF3A9)
+    target.bridge.get_state = lambda: {"data": {"paused": False}}
+    target.bridge.pause = lambda: target.bridge.calls.append(("pause",))
+    target.bridge.resume = lambda: target.bridge.calls.append(("resume",))
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"items": {"goldstar": 1, "goldstar_inventory_version": 0xA5}}))
+    monkeypatch.setattr(cli, "_preflight_socket", lambda args: None)
+    monkeypatch.setattr(cli, "OracleDebugClient", lambda **kw: target)
+    monkeypatch.setattr(sys, "argv", ["mesen2_client.py", "--item-profile", "default", "save-data", "profile-apply", str(path), "--no-persist", "--no-verify"])
+
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert ("pause",) in target.bridge.calls
+    assert ("resume",) not in target.bridge.calls
