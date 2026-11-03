@@ -28,6 +28,8 @@ from .bridge import (
 from .save_data_profiles import (
     list_profiles as list_save_profiles,
     load_profile as load_save_profile,
+    iter_profile_expectations,
+    ProfileRollbackError,
 )
 from .save_data_transaction import apply_profile_transaction
 
@@ -40,6 +42,25 @@ WATCH_PRESETS = {
 }
 
 SAVE_STATE_LIBRARY_MARKER = f"{os.sep}Roms{os.sep}SaveStates{os.sep}library{os.sep}"
+
+
+def _require_profile_debugger_paused(bridge) -> None:
+    """Require an attached, paused debugger before profile memory access."""
+    state = bridge.get_state()
+    if not isinstance(state, dict) or state.get("success") is not True:
+        raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
+    data = state.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made") from exc
+    if not isinstance(data, dict) or type(data.get("paused")) is not bool:
+        raise RuntimeError("Cannot confirm emulator pause state; no profile writes were made")
+    if data.get("debugging") is not True:
+        raise RuntimeError("Attach and pause the debugger before applying a profile; no profile writes were made")
+    if data["paused"] is not True:
+        raise RuntimeError("Pause the attached debugger before applying a profile; no profile writes were made")
 
 
 def _sha1_file(path: Path) -> str:
@@ -439,6 +460,7 @@ class SessionLogger:
 def main():
     parser = argparse.ArgumentParser(description="Oracle of Secrets Debug Client")
     parser.add_argument("--socket", help="Target Mesen2 socket path (recommended; avoids auto-attaching)")
+    parser.add_argument("--item-profile", choices=("default", "legacy"), help="Oracle build flags for rings and portalrod")
     parser.add_argument("--instance", help="Registry instance name to target (preferred for multi-agent)")
     parser.add_argument("--log", help="Log session activity to JSONL file")
     parser.add_argument("--vanilla", action="store_true", help="Include USDASM vanilla labels")
@@ -1202,7 +1224,7 @@ def main():
             agent_parser.print_help()
             sys.exit(1)
 
-        client = OracleDebugClient()
+        client = OracleDebugClient(item_profile=args.item_profile) if args.item_profile else OracleDebugClient()
         if args.agent_cmd == "health":
             info = client.health_check()
             emit(info, ok=bool(info.get("ok")))
@@ -1231,7 +1253,10 @@ def main():
             emit({"time": client.get_time_state()})
             return
         if args.agent_cmd == "diagnostics":
-            emit({"diagnostics": client.get_diagnostics(deep=getattr(args, "deep", False))})
+            try:
+                emit({"diagnostics": client.get_diagnostics(deep=getattr(args, "deep", False))})
+            except ValueError as exc:
+                emit({"error": str(exc)}, ok=False)
             return
         if args.agent_cmd == "press":
             ok = client.press_button(args.buttons, frames=args.frames, ensure_running=not args.allow_paused)
@@ -1444,7 +1469,7 @@ def main():
         return
 
     _preflight_socket(args)
-    client = OracleDebugClient()
+    client = OracleDebugClient(item_profile=args.item_profile) if args.item_profile else OracleDebugClient()
     if args.vanilla:
         client.load_usdasm_labels()
 
@@ -2334,7 +2359,11 @@ def main():
             print(f"Palette: R={palette.get('red')} G={palette.get('green')} B={palette.get('blue')}")
 
     elif args.command == "diagnostics":
-        diagnostics = client.get_diagnostics(deep=args.deep)
+        try:
+            diagnostics = client.get_diagnostics(deep=args.deep)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         if args.json:
             print(json.dumps(diagnostics, indent=2))
         else:
@@ -2710,7 +2739,11 @@ def main():
                 sys.exit(1)
         else:
             # Show all items with values
-            items = client.get_all_items()
+            try:
+                items = client.get_all_items()
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
             if args.json:
                 print(json.dumps(items, indent=2))
             else:
@@ -2725,6 +2758,7 @@ def main():
                 print(f"Set {args.item} = {args.value}")
             else:
                 print(f"Failed to set {args.item}")
+                sys.exit(1)
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
@@ -3623,6 +3657,7 @@ def main():
         elif args.save_data_cmd == "profile-apply":
             try:
                 profile = load_save_profile(args.profile)
+                iter_profile_expectations(profile, getattr(client, "item_profile", None))
             except Exception as e:
                 print(f"Error: {e}")
                 sys.exit(1)
@@ -3631,23 +3666,12 @@ def main():
             verify = (not bool(args.no_verify)) and (not bool(args.dry_run))
             slot = int(args.slot or 0) or None
 
-            was_paused = False
             try:
-                try:
-                    st = client.bridge.get_state()
-                    data = st.get("data", {})
-                    if isinstance(data, str):
-                        try:
-                            data = json.loads(data)
-                        except Exception:
-                            data = {}
-                    if isinstance(data, dict):
-                        was_paused = bool(data.get("paused", False))
-                except Exception:
-                    was_paused = False
-
-                if not was_paused and not args.dry_run:
-                    client.bridge.pause()
+                items = profile.data.get("items") or {}
+                goldstar_preflight_reads = ("goldstar" in items and
+                                            "goldstar_inventory_version" not in items)
+                if not args.dry_run or goldstar_preflight_reads:
+                    _require_profile_debugger_paused(client.bridge)
                 result = apply_profile_transaction(
                     client,
                     profile,
@@ -3658,13 +3682,9 @@ def main():
                 )
             except Exception as e:
                 print(f"Error: {e}")
+                if isinstance(e, ProfileRollbackError):
+                    print("Rollback incomplete; check memory before resuming the debugger.")
                 sys.exit(1)
-            finally:
-                try:
-                    if not was_paused and not args.dry_run:
-                        client.bridge.resume()
-                except Exception:
-                    pass
 
             payload = {
                 "ok": bool(result.get("ok", True)),
@@ -3706,12 +3726,19 @@ def main():
                 sys.exit(1)
 
             out_path = Path(args.out).expanduser() if args.out else (Path(SAVE_DATA_PROFILE_DIR) / f"{profile_id}.json")
+            try:
+                items = client.get_all_items()
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-
-            items = client.get_all_items()
-            item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items()}
+            # value None = no cell or unmigrated; leave it out instead of saving 0.
+            item_values = {k: int(v.get("value", 0) or 0) for k, v in items.items() if v.get("value", 0) is not None}
             if args.only_nonzero:
                 item_values = {k: v for k, v in item_values.items() if v != 0}
+            if "goldstar" not in item_values:
+                # The version alone changes how the next menu open migrates another save.
+                item_values.pop("goldstar_inventory_version", None)
 
             flag_values = {}
             if args.flags:

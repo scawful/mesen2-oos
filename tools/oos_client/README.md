@@ -23,6 +23,36 @@ Override with `OOS_ROOT` (or `ORACLE_OF_SECRETS_ROOT`).
 `Scripts/Mesen2/mesen2_client_lib/__init__.py` are shims that forward here.
 Override the mesen2-oos location with `MESEN2_OOS_ROOT`.
 
+## Item build profile
+
+Pass `--item-profile default` when both `ENABLE_RING_SRAM_RELOCATE` and
+`ENABLE_PORTAL_ROD_CELL` are enabled, or `--item-profile legacy` when both
+are disabled; `default` also assumes `ENABLE_GOLDSTAR_CELL = 1` and `legacy`
+assumes it is 0. The client refuses `rings`, `portalrod`, `customrods`, `goldstar`,
+and `goldstar_inventory_version` access without a profile; listing all items, deep
+diagnostics, and profile capture include them. Mixed flag combinations are not
+supported. The legacy profile has no Goldstar cell (Hookshot level 2 holds both),
+so it refuses both Goldstar items. In the default profile, `goldstar` writes need
+`goldstar_inventory_version` 0xA5 (already in memory or set in the same profile);
+otherwise the menu migration would overwrite them. Reading `goldstar` on a save
+that is not migrated yet is refused for the same reason. Listing all items reports
+those cases as `value: null` with the reason, and profile capture leaves them out.
+A profile with `goldstar_inventory_version` but no `goldstar` is refused, and capture
+never writes one. If any profile write fails, the client writes the earlier targets
+back to their values from before the apply. Before applying a profile, attach and
+pause the debugger; the client refuses writes unless both are confirmed and does
+not pause or resume the session itself. A Goldstar dry run without a version also
+needs the paused debugger because it reads the migration marker. This selection does not identify or
+authenticate the loaded ROM; select the flags used to build it. Legacy Portal
+Rod access preserves the Fishing Rod when clearing Portal Rod ownership. In
+the default profile, opening the menu can migrate `customrods` level 2 back
+into Portal Rod ownership; clearing only `portalrod` is therefore not durable
+while that legacy level remains set.
+
+```sh
+python3 mesen2_client.py --socket /tmp/mesen2-owned.sock --item-profile legacy items portalrod
+```
+
 ## Grounded dungeon captures
 
 Use the existing `capture` command with an explicit owned, paused test instance:

@@ -23,8 +23,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START
+from .constants import ITEMS, STORY_FLAGS, SAVEFILE_WRAM_SIZE, SAVEFILE_WRAM_START, OracleRAM
 from .paths import SAVE_DATA_PROFILE_DIR
+from .item_profiles import GOLDSTAR_MIGRATED, item_address, decode_legacy_portalrod
 
 
 SAVEFILE_WRAM_END = SAVEFILE_WRAM_START + SAVEFILE_WRAM_SIZE
@@ -58,6 +59,7 @@ class ProfileExpectation:
     memtype: str | None = None
     mask: int | None = None
     persistent: bool = False
+    encoding: str | None = None
 
 
 def profile_dir() -> Path:
@@ -117,7 +119,7 @@ def is_persistent_save_address(addr: int, *, size: int = 1, memtype: str | None 
     return SAVEFILE_WRAM_START <= addr and end_addr < SAVEFILE_WRAM_END
 
 
-def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectation]:
+def iter_profile_expectations(profile: SaveDataProfile, item_profile: str | None = None) -> list[ProfileExpectation]:
     """Parse profile data into normalized operations for apply/verify paths."""
     data = profile.data or {}
     expectations: list[ProfileExpectation] = []
@@ -128,9 +130,13 @@ def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectati
     for key, raw_value in items.items():
         if key not in ITEMS:
             raise ValueError(f"Unknown item in profile: {key}")
-        addr, _, _ = ITEMS[key]
+        addr = item_address(key, item_profile)
         size = 2 if key == "rupees" else 1
         value = _parse_int(raw_value)
+        if key == "portalrod" and value not in (0, 1):
+            raise ValueError("portalrod value must be 0 or 1")
+        if key == "customrods" and value not in (0, 1, 2):
+            raise ValueError("customrods value must be 0, 1, or 2")
         expectations.append(
             ProfileExpectation(
                 kind="item",
@@ -139,8 +145,21 @@ def iter_profile_expectations(profile: SaveDataProfile) -> list[ProfileExpectati
                 size=size,
                 value=value,
                 persistent=is_persistent_save_address(addr, size=size),
+                encoding="legacy_portalrod" if key == "portalrod" and item_profile == "legacy" else None,
             )
         )
+
+    if "goldstar_inventory_version" in items and "goldstar" not in items:
+        raise ValueError("goldstar_inventory_version needs goldstar in the same profile")
+    if "goldstar" in items and "goldstar_inventory_version" in items:
+        if _parse_int(items["goldstar_inventory_version"]) != GOLDSTAR_MIGRATED:
+            raise ValueError("goldstar needs goldstar_inventory_version 0xA5 in the same profile")
+        # Write the version first so set_item("goldstar") sees a migrated save.
+        expectations.sort(key=lambda op: op.name != "goldstar_inventory_version")
+
+    if item_profile == "legacy" and "portalrod" in items and "customrods" in items:
+        if decode_legacy_portalrod(_parse_int(items["customrods"])) != _parse_int(items["portalrod"]):
+            raise ValueError("Legacy customrods and portalrod values conflict")
 
     flags = data.get("flags") or {}
     if not isinstance(flags, dict):
@@ -230,44 +249,112 @@ def apply_profile(
     Returns a list of actions taken (for logging/printing).
     """
     actions: list[str] = []
-    ops = expectations if expectations is not None else iter_profile_expectations(profile)
-
+    ops = expectations if expectations is not None else iter_profile_expectations(profile, getattr(client, "item_profile", None))
+    # Check the whole operation list before the first write, even for dry runs.
     for op in ops:
         if op.kind == "item":
-            value = int(op.value)
-            actions.append(f"item:{op.name}={value}")
-            if not dry_run and not client.set_item(op.name, value):
-                raise RuntimeError(f"Failed to set item: {op.name}")
-            continue
+            expected_addr = item_address(op.name, getattr(client, "item_profile", None))
+            if op.addr != expected_addr:
+                raise ValueError(f"Item profile does not match expectation for {op.name}")
+    names = {op.name for op in ops if op.kind == "item"}
+    if "goldstar" in names and "goldstar_inventory_version" not in names:
+        client.require_goldstar_migrated()
 
-        if op.kind == "flag_bit":
-            value = bool(op.value)
-            actions.append(f"flag:{op.name}={'1' if value else '0'}")
-            if not dry_run and not client.set_flag(op.name, value):
-                raise RuntimeError(f"Failed to set flag bit: {op.name}")
-            continue
+    # Snapshot every target first so a failed write can put the earlier ones back.
+    snapshots: list[list[tuple[int, bytes, str | None]]] = []
+    if not dry_run:
+        for op in ops:
+            op_snapshot = []
+            for addr, size, memtype in _op_targets(op):
+                data = _read_target(client, addr, size, memtype)
+                if len(data) != size:
+                    raise RuntimeError(f"Cannot read 0x{addr:06X} before writing; nothing was written")
+                op_snapshot.append((addr, data, memtype))
+            snapshots.append(op_snapshot)
 
-        if op.kind == "flag_byte":
-            value = int(op.value) & 0xFF
-            actions.append(f"flag:{op.name}=0x{value:02X}")
-            if not dry_run and not client.set_flag(op.name, value):
-                raise RuntimeError(f"Failed to set flag byte: {op.name}")
-            continue
-
-        if op.kind == "write":
-            value = int(op.value)
-            memtype = op.memtype
-            mem_name = memtype or "default"
-            if op.size == 2:
-                actions.append(f"write16:{op.addr:06X}={value:04X}({mem_name})")
-                if not dry_run and not client.bridge.write_memory16(op.addr, value, memtype=memtype):
-                    raise RuntimeError(f"Failed write16 at 0x{op.addr:06X}")
-            else:
-                actions.append(f"write8:{op.addr:06X}={value:02X}({mem_name})")
-                if not dry_run and not client.bridge.write_memory(op.addr, value, memtype=memtype):
-                    raise RuntimeError(f"Failed write8 at 0x{op.addr:06X}")
-            continue
-
-        raise ValueError(f"Unsupported profile operation kind: {op.kind}")
+    for index, op in enumerate(ops):
+        try:
+            _apply_op(client, op, dry_run, actions)
+        except Exception as exc:
+            if dry_run:
+                raise
+            failed = _restore_targets(client, [t for op_snapshot in snapshots[: index + 1] for t in op_snapshot])
+            if failed:
+                raise ProfileRollbackError(f"{exc}; rollback also failed at {', '.join(failed)}") from exc
+            raise
 
     return actions
+
+
+class ProfileRollbackError(RuntimeError):
+    """A profile write failed and some earlier targets could not be restored."""
+
+
+def _memtype_kwargs(memtype: str | None) -> dict[str, str]:
+    return {"memtype": memtype} if memtype else {}
+
+
+def _op_targets(op: ProfileExpectation) -> list[tuple[int, int, str | None]]:
+    """Every address an operation's setter can write, not just op.addr."""
+    targets = [(op.addr, op.size, op.memtype)]
+    if op.kind == "item" and op.name == "boots":
+        # set_item("boots") also sets the run bit in the ability byte.
+        targets.append((OracleRAM.ABILITY_FLAGS, 1, None))
+    return targets
+
+
+def _read_target(client, addr: int, size: int, memtype: str | None) -> bytes:
+    return bytes(client.bridge.read_block(addr, size, **_memtype_kwargs(memtype)))
+
+
+def _restore_targets(client, snapshots: list[tuple[int, bytes, str | None]]) -> list[str]:
+    """Write snapshots back newest first, past any failure; return the addresses that failed."""
+    failed: list[str] = []
+    for addr, data, memtype in reversed(snapshots):
+        for offset, byte in enumerate(data):
+            try:
+                ok = client.bridge.write_memory(addr + offset, byte, **_memtype_kwargs(memtype))
+            except Exception:
+                ok = False
+            if not ok:
+                failed.append(f"0x{addr + offset:06X}")
+    return failed
+
+
+def _apply_op(client, op: ProfileExpectation, dry_run: bool, actions: list[str]) -> None:
+    if op.kind == "item":
+        value = int(op.value)
+        actions.append(f"item:{op.name}={value}")
+        if not dry_run and not client.set_item(op.name, value):
+            raise RuntimeError(f"Failed to set item: {op.name}")
+        return
+
+    if op.kind == "flag_bit":
+        value = bool(op.value)
+        actions.append(f"flag:{op.name}={'1' if value else '0'}")
+        if not dry_run and not client.set_flag(op.name, value):
+            raise RuntimeError(f"Failed to set flag bit: {op.name}")
+        return
+
+    if op.kind == "flag_byte":
+        value = int(op.value) & 0xFF
+        actions.append(f"flag:{op.name}=0x{value:02X}")
+        if not dry_run and not client.set_flag(op.name, value):
+            raise RuntimeError(f"Failed to set flag byte: {op.name}")
+        return
+
+    if op.kind == "write":
+        value = int(op.value)
+        memtype = op.memtype
+        mem_name = memtype or "default"
+        if op.size == 2:
+            actions.append(f"write16:{op.addr:06X}={value:04X}({mem_name})")
+            if not dry_run and not client.bridge.write_memory16(op.addr, value, memtype=memtype):
+                raise RuntimeError(f"Failed write16 at 0x{op.addr:06X}")
+        else:
+            actions.append(f"write8:{op.addr:06X}={value:02X}({mem_name})")
+            if not dry_run and not client.bridge.write_memory(op.addr, value, memtype=memtype):
+                raise RuntimeError(f"Failed write8 at 0x{op.addr:06X}")
+        return
+
+    raise ValueError(f"Unsupported profile operation kind: {op.kind}")
