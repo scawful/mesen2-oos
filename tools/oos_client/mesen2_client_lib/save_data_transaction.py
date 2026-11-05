@@ -13,6 +13,7 @@ from typing import Any
 
 from .cart_sram import read_slot_saveblock
 from .constants import SAVEFILE_WRAM_START
+from .item_profiles import SENSITIVE_ITEMS, decode_legacy_portalrod
 from .save_data_profiles import (
     ProfileExpectation,
     SaveDataProfile,
@@ -58,7 +59,13 @@ def _verify_wram(client, ops: list[ProfileExpectation]) -> list[str]:
             continue
 
         memtype = op.memtype if op.kind == "write" else None
-        got = _read_value(client.bridge, op.addr, op.size, memtype=memtype)
+        if op.kind == "item" and op.name in SENSITIVE_ITEMS:
+            data = client.bridge.read_block(op.addr, 1)
+            if len(data) != 1:
+                raise ValueError(f"{op.name} verification read failed")
+            got = decode_legacy_portalrod(data[0]) if op.encoding == "legacy_portalrod" else data[0]
+        else:
+            got = _read_value(client.bridge, op.addr, op.size, memtype=memtype)
         expected = int(op.value)
         if got != expected:
             fmt = "04X" if op.size == 2 else "02X"
@@ -88,6 +95,8 @@ def _verify_sram_slot(client, slot: int, ops: list[ProfileExpectation]) -> list[
             continue
 
         got = _read_persistent_value(save_blob, op.addr, op.size)
+        if op.encoding == "legacy_portalrod":
+            got = decode_legacy_portalrod(got)
         expected = int(op.value)
         if got != expected:
             fmt = "04X" if op.size == 2 else "02X"
@@ -108,7 +117,7 @@ def apply_profile_transaction(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Apply a save-data profile with optional persistence and verification."""
-    ops = iter_profile_expectations(profile)
+    ops = iter_profile_expectations(profile, getattr(client, "item_profile", None))
     summary = summarize_expectations(ops)
     warnings: list[str] = []
 

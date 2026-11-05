@@ -306,7 +306,7 @@ def _state_summary(client: Any) -> dict[str, Any]:
 
 
 def _build_toggle_entries(client: Any, registry: dict[str, Any], groups: list[tuple[str, list[str]]], *, is_flag: bool) -> list[dict[str, Any]]:
-    current = client.get_all_flags() if is_flag else client.get_all_items()
+    current = client.get_all_flags() if is_flag else client.get_all_items(include_profile_items=False)
     entries: list[dict[str, Any]] = []
     for group_name, keys in groups:
         for key in keys:
@@ -328,7 +328,7 @@ def _build_toggle_entries(client: Any, registry: dict[str, Any], groups: list[tu
 
 
 def _build_choice_entries(client: Any, registry: dict[str, Any], groups: list[tuple[str, list[str]]], *, is_flag: bool) -> list[dict[str, Any]]:
-    current = client.get_all_flags() if is_flag else client.get_all_items()
+    current = client.get_all_flags() if is_flag else client.get_all_items(include_profile_items=False)
     entries: list[dict[str, Any]] = []
     for group_name, keys in groups:
         for key in keys:

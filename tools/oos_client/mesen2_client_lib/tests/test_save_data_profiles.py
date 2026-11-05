@@ -10,6 +10,9 @@ class DummyBridge:
         self.writes8 = []
         self.writes16 = []
 
+    def read_block(self, addr: int, length: int, memtype=None):
+        return bytes(length)
+
     def write_memory(self, addr: int, value: int, memtype=None):
         self.writes8.append((addr, value, memtype))
         return True

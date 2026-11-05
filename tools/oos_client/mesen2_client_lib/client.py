@@ -30,6 +30,14 @@ from .constants import (
     WATCH_PROFILES,
 )
 from .issues import KNOWN_ISSUES
+from .item_profiles import (
+    GOLDSTAR_MIGRATED,
+    ITEM_PROFILES,
+    SENSITIVE_ITEMS,
+    decode_legacy_portalrod,
+    item_address,
+    item_available,
+)
 from .state_library import StateLibrary
 from .save_data_library import SaveDataLibrary
 from .save_data_io import read_savefile_bytes, write_savefile_bytes
@@ -100,7 +108,10 @@ def _guard_active_for_mode(state: dict, mode: int, now: float, cooldown: float) 
 class OracleDebugClient:
     """Oracle of Secrets debugging client wrapping MesenBridge."""
 
-    def __init__(self, socket_path: Optional[str] = None):
+    def __init__(self, socket_path: Optional[str] = None, item_profile: Optional[str] = None):
+        if item_profile is not None and item_profile not in ITEM_PROFILES:
+            raise ValueError(f"Unknown item profile: {item_profile}")
+        self.item_profile = item_profile
         socket_path = socket_path or os.getenv("MESEN2_SOCKET_PATH")
         self.bridge = MesenBridge(socket_path)
         self._last_area: Optional[int] = None
@@ -398,6 +409,8 @@ class OracleDebugClient:
 
     def get_diagnostics(self, deep: bool = False) -> dict:
         """Composite diagnostic snapshot for agents."""
+        if deep:
+            item_address("rings", getattr(self, "item_profile", None))
         oracle_state = self.get_oracle_state()
         run_state = self.get_run_state()
         rom_info = self.get_rom_info()
@@ -884,9 +897,18 @@ class OracleDebugClient:
         """Get an item's current value and description."""
         if item_name not in ITEMS:
             raise ValueError(f"Unknown item: {item_name}")
-        addr, name, values = ITEMS[item_name]
+        _, name, values = ITEMS[item_name]
+        profile = getattr(self, "item_profile", None)
+        addr = item_address(item_name, profile)
+        if item_name == "goldstar" and not self._goldstar_migrated():
+            raise ValueError("goldstar is not readable until goldstar_inventory_version is 0xA5; the menu migration decides it")
         if item_name == "rupees":
             val = self.bridge.read_memory16(addr)
+        elif item_name in SENSITIVE_ITEMS:
+            data = self.bridge.read_block(addr, 1)
+            if len(data) != 1:
+                raise ValueError(f"{item_name} read failed")
+            val = decode_legacy_portalrod(data[0]) if item_name == "portalrod" and profile == "legacy" else data[0]
         else:
             val = self.bridge.read_memory(addr)
         desc = values.get(val, str(val)) if values else str(val)
@@ -896,12 +918,45 @@ class OracleDebugClient:
         """Set an item's value."""
         if item_name not in ITEMS:
             raise ValueError(f"Unknown item: {item_name}")
-        addr, _, _ = ITEMS[item_name]
+        profile = getattr(self, "item_profile", None)
+        addr = item_address(item_name, profile)
+        if item_name == "portalrod" and value not in (0, 1):
+            raise ValueError("portalrod value must be 0 or 1")
+        if item_name == "customrods" and value not in (0, 1, 2):
+            raise ValueError("customrods value must be 0, 1, or 2")
+        if item_name == "portalrod" and profile == "legacy":
+            data = self.bridge.read_block(addr, 1)
+            if len(data) != 1:
+                raise ValueError("Legacy rod read failed")
+            decode_legacy_portalrod(data[0])
+            return self.bridge.write_memory(addr, 2 if value else min(data[0], 1))
+        if item_name == "goldstar":
+            self.require_goldstar_migrated()
         if item_name == "rupees":
             return self.bridge.write_memory16(addr, value)
         if item_name == "boots":
             return self._set_boots(addr, value)
         return self.bridge.write_memory(addr, value)
+
+    def _goldstar_migrated(self) -> bool:
+        data = self.bridge.read_block(ITEMS["goldstar_inventory_version"][0], 1)
+        if len(data) != 1:
+            raise ValueError("goldstar_inventory_version read failed")
+        return data[0] == GOLDSTAR_MIGRATED
+
+    def _item_unavailable(self, name: str) -> Optional[str]:
+        """Why a profile item has no meaningful value now, or None."""
+        profile = getattr(self, "item_profile", None)
+        if not item_available(name, profile):
+            return f"no cell in the {profile} profile"
+        if name == "goldstar" and not self._goldstar_migrated():
+            return "save not migrated (goldstar_inventory_version != 0xA5)"
+        return None
+
+    def require_goldstar_migrated(self) -> None:
+        """Refuse Goldstar writes the next menu open would overwrite."""
+        if not self._goldstar_migrated():
+            raise ValueError("goldstar requires goldstar_inventory_version 0xA5 first; the menu migration rewrites it")
 
     def _set_boots(self, addr: int, value: int) -> bool:
         # Dash is gated on the run bit in the ability byte, not the boots byte.
@@ -933,14 +988,30 @@ class OracleDebugClient:
             return False
         return True
 
-    def get_all_items(self) -> dict:
-        """Get all items and their values."""
+    def get_all_items(self, include_profile_items: bool = True) -> dict:
+        """Get all items and their values.
+
+        include_profile_items=False skips the SENSITIVE_ITEMS (rings, rods,
+        Goldstar), so callers that never show them need no item profile.
+        Profile items with no meaningful value report value None and the reason.
+        """
+        if include_profile_items:
+            item_address("rings", getattr(self, "item_profile", None))
         result = {}
         for name in ITEMS:
+            if not include_profile_items and name in SENSITIVE_ITEMS:
+                continue
+            if name in SENSITIVE_ITEMS:
+                reason = self._item_unavailable(name)
+                if reason:
+                    result[name] = {"value": None, "description": reason}
+                    continue
             try:
                 val, desc = self.get_item(name)
                 result[name] = {"value": val, "description": desc}
             except Exception:
+                if name in SENSITIVE_ITEMS:
+                    raise
                 pass
         return result
 
