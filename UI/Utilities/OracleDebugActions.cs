@@ -66,6 +66,19 @@ namespace Mesen.Utilities
 		private const int ModuleFallIntoDungeon = 0x11;
 		private const int SubmoduleFallToRoom = 0x15;
 		private const int MaxRoomId = 0x127;
+		private const uint LinkYAddr = 0x7E0020;
+		private const uint LinkXAddr = 0x7E0022;
+		private const uint LinkFloorAddr = 0x7E00EE;
+		private const uint SprYLowAddr = 0x7E0D00;
+		private const uint SprXLowAddr = 0x7E0D10;
+		private const uint SprYHighAddr = 0x7E0D20;
+		private const uint SprXHighAddr = 0x7E0D30;
+		private const uint SprStateAddr = 0x7E0DD0;
+		private const uint SprTypeAddr = 0x7E0E20;
+		private const uint SprFloorAddr = 0x7E0F20;
+		private const uint SprHeightAddr = 0x7E0F70;
+		private const int SprStateInitialize = 0x08;
+		private const int SpriteSlotCount = 16;
 
 		// Verified in Roms/TestBuilds/rc-intro-origins-goron-2026-09-25/playtest.md.
 		public static IReadOnlyList<OracleWarpTarget> WarpTargets { get; } = new List<OracleWarpTarget>() {
@@ -117,6 +130,133 @@ namespace Mesen.Utilities
 				OraclePanelBridge.WriteByte(SubmoduleAddr, SubmoduleFallToRoom);
 				return OracleActionResult.Ok($"Falling from room ${currentRoom:X2} to room ${room:X2}.");
 			});
+		}
+
+		/// <summary>
+		/// Spawn a sprite through SpriteModule_Initialize ($0DD0 = $08), the same writes the
+		/// D8 boss native tests use. Without a room point the sprite appears 16 px right of Link;
+		/// a room point is relative to the current dungeon room's origin.
+		/// </summary>
+		public static OracleActionResult SpawnSprite(int spriteId, int? roomX = null, int? roomY = null)
+		{
+			if(spriteId < 0 || spriteId > 0xFF) {
+				return OracleActionResult.Fail($"Sprite ${spriteId:X} is out of range ($00-$FF).");
+			}
+
+			return WithPausedEmulation(() => {
+				int module = OraclePanelBridge.ReadByte(ModuleAddr);
+				int submodule = OraclePanelBridge.ReadByte(SubmoduleAddr);
+				if((module != ModuleDungeon && module != ModuleOverworld && module != ModuleSpecialOverworld) || submodule != 0) {
+					return OracleActionResult.Fail($"Spawning needs normal play (module $07/$09/$0B, submodule $00); now ${module:X2}/${submodule:X2}.");
+				}
+
+				int slot = -1;
+				for(int i = SpriteSlotCount - 1; i >= 0; i--) {
+					if(OraclePanelBridge.ReadByte(SprStateAddr + (uint)i) == 0) {
+						slot = i;
+						break;
+					}
+				}
+				if(slot < 0) {
+					return OracleActionResult.Fail("All 16 sprite slots are in use.");
+				}
+
+				int x, y;
+				if(roomX.HasValue && roomY.HasValue) {
+					if(module != ModuleDungeon) {
+						return OracleActionResult.Fail("A room point needs dungeon play; omit it to spawn next to Link.");
+					}
+					int room = OraclePanelBridge.ReadWord(RoomAddr);
+					x = (room & 0x0F) * 0x200 + roomX.Value;
+					y = ((room >> 4) & 0x0F) * 0x200 + roomY.Value;
+				} else {
+					x = OraclePanelBridge.ReadWord(LinkXAddr) + 16;
+					y = OraclePanelBridge.ReadWord(LinkYAddr);
+				}
+
+				uint s = (uint)slot;
+				OraclePanelBridge.WriteByte(SprTypeAddr + s, spriteId);
+				OraclePanelBridge.WriteByte(SprXLowAddr + s, x & 0xFF);
+				OraclePanelBridge.WriteByte(SprXHighAddr + s, (x >> 8) & 0xFF);
+				OraclePanelBridge.WriteByte(SprYLowAddr + s, y & 0xFF);
+				OraclePanelBridge.WriteByte(SprYHighAddr + s, (y >> 8) & 0xFF);
+				OraclePanelBridge.WriteByte(SprFloorAddr + s, OraclePanelBridge.ReadByte(LinkFloorAddr));
+				OraclePanelBridge.WriteByte(SprHeightAddr + s, 0);
+				OraclePanelBridge.WriteByte(SprStateAddr + s, SprStateInitialize);
+				return OracleActionResult.Ok($"Spawned sprite ${spriteId:X2} in slot {slot} at ({x:X4}, {y:X4}).");
+			});
+		}
+
+		/// <summary>Write one byte of WRAM ($7E0000-$7FFFFF). Macros use this for state the presets do not cover.</summary>
+		public static OracleActionResult WriteMemory(uint address, int value)
+		{
+			if(address < 0x7E0000 || address > 0x7FFFFF) {
+				return OracleActionResult.Fail($"${address:X6} is outside WRAM ($7E0000-$7FFFFF).");
+			}
+			if(value < 0 || value > 0xFF) {
+				return OracleActionResult.Fail($"Value {value} is not a byte.");
+			}
+			return WithPausedEmulation(() => {
+				OraclePanelBridge.WriteByte(address, value);
+				return OracleActionResult.Ok($"${address:X6} = ${value:X2}");
+			});
+		}
+
+		/// <summary>
+		/// Feature flags the loaded ROM was built with: feature_flags.asm beside the ROM, else the
+		/// pre-assembly snapshot in &lt;rom&gt;.build.json (its top-level profile is the restored default).
+		/// </summary>
+		public static (string Summary, string Detail) DescribeBuildFlags(string romPath)
+		{
+			if(string.IsNullOrWhiteSpace(romPath) || !File.Exists(romPath)) {
+				return ("-", "");
+			}
+			string dir = Path.GetDirectoryName(romPath) ?? "";
+			Dictionary<string, int> flags = new(StringComparer.Ordinal);
+			string source;
+			try {
+				string asm = Path.Combine(dir, "feature_flags.asm");
+				string receipt = Path.Combine(dir, Path.GetFileNameWithoutExtension(romPath) + ".build.json");
+				if(File.Exists(asm)) {
+					source = "feature_flags.asm";
+					foreach(string line in File.ReadLines(asm)) {
+						string[] parts = line.Split('=', 2, StringSplitOptions.TrimEntries);
+						if(parts.Length == 2 && parts[0].StartsWith('!') && int.TryParse(parts[1].Split(';')[0].Trim(), out int v)) {
+							flags[parts[0].Substring(1)] = v;
+						}
+					}
+				} else if(File.Exists(receipt)) {
+					source = Path.GetFileName(receipt);
+					using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(receipt));
+					if(doc.RootElement.TryGetProperty("snapshots", out JsonElement snaps) &&
+						snaps.TryGetProperty("pre_assembly", out JsonElement pre) &&
+						pre.TryGetProperty("profile", out JsonElement profile) &&
+						profile.TryGetProperty("effective_flags", out JsonElement effective) &&
+						effective.ValueKind == JsonValueKind.Object) {
+						foreach(JsonProperty p in effective.EnumerateObject()) {
+							if(p.Value.ValueKind == JsonValueKind.Number) {
+								flags[p.Name] = p.Value.GetInt32();
+							}
+						}
+					}
+				} else {
+					return ("No build receipt beside this ROM", "");
+				}
+			} catch(Exception ex) {
+				return ("Unreadable build receipt", ex.Message);
+			}
+
+			List<string> enableOn = flags.Where(f => f.Key.StartsWith("ENABLE_") && f.Value != 0).Select(f => f.Key.Substring(7)).OrderBy(n => n).ToList();
+			List<string> enableOff = flags.Where(f => f.Key.StartsWith("ENABLE_") && f.Value == 0).Select(f => f.Key.Substring(7)).OrderBy(n => n).ToList();
+			List<string> modulesOff = flags.Where(f => f.Key.StartsWith("DISABLE_") && f.Value != 0).Select(f => f.Key).OrderBy(n => n).ToList();
+			if(enableOn.Count + enableOff.Count == 0) {
+				return ($"No flags in {source}", "");
+			}
+			string summary = $"{enableOn.Count} on · off: {(enableOff.Count == 0 ? "none" : string.Join(", ", enableOff))}";
+			if(modulesOff.Count > 0) {
+				summary += " · " + string.Join(", ", modulesOff);
+			}
+			return (summary, $"From {source}. On: {string.Join(", ", enableOn)}");
 		}
 
 		public static IReadOnlyList<OracleSaveProfile> GetSaveProfiles()

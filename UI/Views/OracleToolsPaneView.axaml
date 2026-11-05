@@ -120,6 +120,11 @@
 						<TextBox Grid.Column="1" Text="{Binding FallRoomHex}" Watermark="same dungeon, e.g. 77" />
 						<Button Grid.Column="3" Content="Go" Click="OnFallToRoomClick" IsEnabled="{Binding !IsCommandInFlight}" />
 					</Grid>
+					<Grid Classes="row" ColumnDefinitions="Auto,*,6,Auto" ToolTip.Tip="Spawns the sprite 16 px right of Link through its init routine. The room's sprite graphics must already include it.">
+						<TextBlock Grid.Column="0" Classes="key" Text="Spawn sprite $" VerticalAlignment="Center" />
+						<TextBox Grid.Column="1" Text="{Binding SpawnSpriteHex}" Watermark="e.g. C3 (D8 boss), D3 (Ganondorf)" />
+						<Button Grid.Column="3" Content="Go" Click="OnSpawnSpriteClick" IsEnabled="{Binding !IsCommandInFlight}" />
+					</Grid>
 					<TextBlock Classes="section" Text="Checkpoints" />
 					<Grid Classes="row" ColumnDefinitions="*,6,Auto">
 						<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding Cheats.Checkpoints}" SelectedItem="{Binding Cheats.SelectedCheckpoint}">
@@ -245,7 +250,7 @@
 					<Expander Header="State details" HorizontalAlignment="Stretch" Margin="0,8,0,0">
 						<StackPanel>
 							<TextBlock Classes="section" Text="State" />
-							<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+							<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
 								<TextBlock Grid.Row="0" Classes="key" Text="Mode" />
 								<TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding ModeText}" />
 								<TextBlock Grid.Row="1" Classes="key" Text="Where" />
@@ -258,6 +263,8 @@
 								<TextBlock Grid.Row="4" Grid.Column="1" Classes="value" Text="{Binding StoryText}" />
 								<TextBlock Grid.Row="5" Classes="key" Text="ROM" />
 								<TextBlock Grid.Row="5" Grid.Column="1" Classes="value" Text="{Binding RomText}" ToolTip.Tip="{Binding RomText}" />
+								<TextBlock Grid.Row="6" Classes="key" Text="Flags" />
+								<TextBlock Grid.Row="6" Grid.Column="1" Classes="value" Text="{Binding BuildFlagsText}" TextWrapping="Wrap" ToolTip.Tip="{Binding BuildFlagsDetail}" />
 							</Grid>
 						</StackPanel>
 					</Expander>

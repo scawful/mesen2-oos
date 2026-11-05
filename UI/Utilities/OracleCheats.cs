@@ -49,6 +49,9 @@ namespace Mesen.Utilities
 			new() { Label = "Bottle 2", Address = 0x7EF35D, Choices = Bottle() },
 			new() { Label = "Bottle 3", Address = 0x7EF35E, Choices = Bottle() },
 			new() { Label = "Bottle 4", Address = 0x7EF35F, Choices = Bottle() },
+			// The game clears Bombchu ammo above 20 to 0.
+			new() { Label = "Bombchus", Address = 0x7EF3B0, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
+			new() { Label = "Deku Sticks", Address = 0x7EF395, Choices = C((0, "0"), (1, "1"), (5, "5"), (10, "10")) },
 		};
 
 		// Vanilla bottle contents (Core/sram.asm Bottles: 0 = no bottle, 2 = empty, 3+ = contents).
@@ -70,6 +73,13 @@ namespace Mesen.Utilities
 			new() { Label = "Bunny Hood", Address = 0x7EF348 },
 			new() { Label = "Stone Mask", Address = 0x7EF352 },
 			new() { Label = "Wolf Mask", Address = 0x7EF358 },
+			// Oracle ownership bytes ($7EF3A6, $7EF3A9, $7EF3AC-$7EF3AF): only exactly 1 counts as owned.
+			new() { Label = "Cane of Byrna", Address = 0x7EF3AC },
+			new() { Label = "Bombchu", Address = 0x7EF3AD },
+			new() { Label = "Switch Hook", Address = 0x7EF3AE },
+			new() { Label = "Garo Mask", Address = 0x7EF3AF },
+			new() { Label = "Portal Rod", Address = 0x7EF3A6 },
+			new() { Label = "Goldstar", Address = 0x7EF3A9 },
 		};
 
 		// Core/sram.asm bit constants and addresses (StoryProgress, Crystals, Pendants, SideQuest*, Dreams, EonOwlFlags, ...).
@@ -100,6 +110,7 @@ namespace Mesen.Utilities
 			Bit("Crystals $7EF37A", "D5 Glacia", 0x7EF37A, 0x04),
 			Bit("Crystals $7EF37A", "D6 Goron", 0x7EF37A, 0x01),
 			Bit("Crystals $7EF37A", "D7 Dragon", 0x7EF37A, 0x08),
+			Bit("Crystals $7EF37A", "D8 Sky", 0x7EF37A, 0x80),
 			Bit("Pendants $7EF374", "Wisdom", 0x7EF374, 0x01),
 			Bit("Pendants $7EF374", "Power", 0x7EF374, 0x02),
 			Bit("Pendants $7EF374", "Courage", 0x7EF374, 0x04),
@@ -121,6 +132,7 @@ namespace Mesen.Utilities
 			Bit("Eon Owl $7EF3A7", "Arrival Owl", 0x7EF3A7, 0x01),
 			Bit("Eon Owl $7EF3A7", "Sword Owl ($E6)", 0x7EF3A7, 0x02),
 			Bit("Misc", "Maku Tree met", 0x7EF3D4, 0x01),
+			Bit("Misc", "Maku Seed", 0x7EF3D4, 0x02),
 			Bit("Misc", "Kydrog/Farore gone", 0x7EF300, 0x01),
 			Bit("Misc", "Deku Mask quest", 0x7EF301, 0x01),
 			Bit("Misc", "Zora Mask quest", 0x7EF302, 0x01),
@@ -218,6 +230,8 @@ namespace Mesen.Utilities
 		public string? After { get; init; }
 		public int? Entrance { get; init; }
 		public int? Area { get; init; }
+		/// <summary>After the entrance load, fall into this room of the same dungeon (rooms no entrance reaches).</summary>
+		public int? Room { get; init; }
 		public List<int> ExpectModules { get; init; } = new();
 		public List<OracleCheckpointWrite> Writes { get; init; } = new();
 		public string Notes { get; init; } = "";
@@ -354,6 +368,7 @@ namespace Mesen.Utilities
 					After = c.TryGetProperty("after", out JsonElement after) ? after.GetString() : null,
 					Entrance = loc.ValueKind == JsonValueKind.Object ? Hex(loc, "entrance") : null,
 					Area = loc.ValueKind == JsonValueKind.Object ? Hex(loc, "area") : null,
+					Room = loc.ValueKind == JsonValueKind.Object ? Hex(loc, "room") : null,
 					ExpectModules = modules,
 					Writes = writes,
 					Notes = Str(c, "notes")
@@ -469,6 +484,19 @@ namespace Mesen.Utilities
 				}
 				if(!warp.Success) {
 					return warp;
+				}
+				if(cp.Room is int targetRoom) {
+					if(!cp.Entrance.HasValue) {
+						return OracleActionResult.Fail("A checkpoint room needs an entrance into the same dungeon.");
+					}
+					OracleActionResult fall = OracleDebugActions.FallToRoom(targetRoom);
+					if(!fall.Success) {
+						return fall;
+					}
+					if(!WaitForModules(new[] { ModDungeon }, 8000, out int fallModule)) {
+						return OracleActionResult.Fail($"Fall to room ${targetRoom:X3} did not settle (module ${fallModule:X2}).");
+					}
+					warp = OracleActionResult.Ok($"{warp.Message}; fell to room ${targetRoom:X3}");
 				}
 
 				List<string> problems = new();

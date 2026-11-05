@@ -88,6 +88,9 @@ namespace Mesen.ViewModels
 		private string _statsText = "-";
 		private string _storyText = "-";
 		private string _romText = "-";
+		private string _buildFlagsText = "-";
+		private string _buildFlagsDetail = "";
+		private string? _buildFlagsRomPath;
 		private string _pauseButtonText = "Pause";
 		private string _statusLine = "";
 		private string _sessionLog = "";
@@ -97,6 +100,7 @@ namespace Mesen.ViewModels
 		private string _captureNotes = "";
 		private string _warpEntranceHex = "";
 		private string _fallRoomHex = "";
+		private string _spawnSpriteHex = "";
 		private string _frameAdvanceCount = "1";
 		private string _macroProfilePath = "";
 		private string _macroStatus = "No macro profile loaded.";
@@ -209,6 +213,8 @@ namespace Mesen.ViewModels
 		public string StatsText { get => _statsText; private set => this.RaiseAndSetIfChanged(ref _statsText, value); }
 		public string StoryText { get => _storyText; private set => this.RaiseAndSetIfChanged(ref _storyText, value); }
 		public string RomText { get => _romText; private set => this.RaiseAndSetIfChanged(ref _romText, value); }
+		public string BuildFlagsText { get => _buildFlagsText; private set => this.RaiseAndSetIfChanged(ref _buildFlagsText, value); }
+		public string BuildFlagsDetail { get => _buildFlagsDetail; private set => this.RaiseAndSetIfChanged(ref _buildFlagsDetail, value); }
 		public string PauseButtonText { get => _pauseButtonText; private set => this.RaiseAndSetIfChanged(ref _pauseButtonText, value); }
 
 		// Tools pane: warp
@@ -217,6 +223,7 @@ namespace Mesen.ViewModels
 		public string WarpEntranceHex { get => _warpEntranceHex; set => this.RaiseAndSetIfChanged(ref _warpEntranceHex, value); }
 		public string FallRoomHex { get => _fallRoomHex; set => this.RaiseAndSetIfChanged(ref _fallRoomHex, value); }
 		public bool CanFallToRoom { get => _canFallToRoom; private set => this.RaiseAndSetIfChanged(ref _canFallToRoom, value); }
+		public string SpawnSpriteHex { get => _spawnSpriteHex; set => this.RaiseAndSetIfChanged(ref _spawnSpriteHex, value); }
 
 		// Tools pane: cheats & warps (warp search, checkpoints, items, flags)
 		public OracleCheatsViewModel Cheats { get; }
@@ -300,6 +307,15 @@ namespace Mesen.ViewModels
 				return Task.CompletedTask;
 			}
 			return RunActionAsync("fall", () => OracleDebugActions.FallToRoom(room));
+		}
+
+		public Task ExecuteSpawnSpriteAsync()
+		{
+			if(!TryParseHex(SpawnSpriteHex, out int sprite)) {
+				StatusLine = "Enter a sprite ID in hex, e.g. C3.";
+				return Task.CompletedTask;
+			}
+			return RunActionAsync("spawn", () => OracleDebugActions.SpawnSprite(sprite));
 		}
 
 		public async Task ExecuteCaptureStateAsync()
@@ -439,6 +455,10 @@ namespace Mesen.ViewModels
 				RomInfo rom = EmuApi.GetRomInfo();
 				string romName = rom.GetRomName();
 				RomText = string.IsNullOrWhiteSpace(romName) ? "-" : romName;
+				if(rom.RomPath != _buildFlagsRomPath) {
+					_buildFlagsRomPath = rom.RomPath;
+					(BuildFlagsText, BuildFlagsDetail) = OracleDebugActions.DescribeBuildFlags(rom.RomPath);
+				}
 
 				if(!isRunning) {
 					LocationText = "No game";
@@ -536,6 +556,24 @@ namespace Mesen.ViewModels
 					return TryParseHex(Arg("room"), out int room)
 						? OracleDebugActions.FallToRoom(room)
 						: OracleActionResult.Fail($"Invalid room '{Arg("room")}'.");
+				case "checkpoint":
+					return OracleCheats.ApplyCheckpoint(Arg("id"));
+				case "write":
+					return TryParseHex(Arg("addr"), out int writeAddr) && TryParseFlagValue(Arg("value"), out int writeValue)
+						? OracleDebugActions.WriteMemory((uint)writeAddr, writeValue)
+						: OracleActionResult.Fail($"Invalid write '{Arg("addr")}' = '{Arg("value")}'.");
+				case "spawn": {
+					if(!TryParseHex(Arg("sprite"), out int sprite)) {
+						return OracleActionResult.Fail($"Invalid sprite '{Arg("sprite")}'.");
+					}
+					string sx = Arg("x"), sy = Arg("y");
+					if(sx.Length == 0 && sy.Length == 0) {
+						return OracleDebugActions.SpawnSprite(sprite);
+					}
+					return TryParseHex(sx, out int x) && TryParseHex(sy, out int y)
+						? OracleDebugActions.SpawnSprite(sprite, x, y)
+						: OracleActionResult.Fail($"Invalid room point '{sx}', '{sy}'.");
+				}
 				default:
 					return OracleActionResult.Fail($"Unsupported action '{step.Action}'.");
 			}
@@ -729,7 +767,10 @@ namespace Mesen.ViewModels
 			"sync_sram",
 			"frame",
 			"warp",
-			"fall"
+			"fall",
+			"checkpoint",
+			"write",
+			"spawn"
 		};
 
 		private sealed record class MacroStep(string Action, IReadOnlyDictionary<string, string>? Args);

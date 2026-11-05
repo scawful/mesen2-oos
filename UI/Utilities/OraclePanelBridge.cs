@@ -206,7 +206,14 @@ namespace Mesen.Utilities
 			new() { Group = "Masks", Key = "wolfmask", Label = "Wolf Mask", Address = 0x7EF358 },
 			new() { Group = "Travel / Gear", Key = "boots", Label = "Pegasus Boots", Address = 0x7EF355 },
 			new() { Group = "Travel / Gear", Key = "flippers", Label = "Flippers", Address = 0x7EF356 },
-			new() { Group = "Travel / Gear", Key = "moonpearl", Label = "Moon Pearl", Address = 0x7EF357 }
+			new() { Group = "Travel / Gear", Key = "moonpearl", Label = "Moon Pearl", Address = 0x7EF357 },
+			// Oracle ownership bytes: the game treats only exactly 1 as owned (Core/sram.asm).
+			new() { Group = "Oracle Items", Key = "byrna", Label = "Cane of Byrna", Address = 0x7EF3AC },
+			new() { Group = "Oracle Items", Key = "bombchu", Label = "Bombchu", Address = 0x7EF3AD },
+			new() { Group = "Oracle Items", Key = "switchhook", Label = "Switch Hook", Address = 0x7EF3AE },
+			new() { Group = "Oracle Items", Key = "garomask", Label = "Garo Mask", Address = 0x7EF3AF },
+			new() { Group = "Oracle Items", Key = "portalrod", Label = "Portal Rod", Address = 0x7EF3A6 },
+			new() { Group = "Oracle Items", Key = "goldstar", Label = "Goldstar", Address = 0x7EF3A9 }
 		};
 
 		private static readonly List<ChoiceDef> ItemChoiceDefs = new() {
@@ -219,7 +226,10 @@ namespace Mesen.Utilities
 			new() { Group = "Inventory Upgrades", Key = "hookshot", Label = "Hookshot", Address = 0x7EF342, Choices = ChoiceList((0, "None"), (1, "Hookshot"), (2, "Goldstar")) },
 			new() { Group = "Inventory Upgrades", Key = "mirror", Label = "Mirror", Address = 0x7EF353, Choices = ChoiceList((0, "None"), (1, "Letter"), (2, "Mirror")) },
 			new() { Group = "Inventory Upgrades", Key = "flute", Label = "Ocarina Songs", Address = 0x7EF34C, Choices = ChoiceList((0, "None"), (1, "Ocarina"), (2, "Healing"), (3, "Healing + Storms"), (4, "Healing + Storms + Soaring"), (5, "+ Time"), (6, "+ Secrets"), (7, "All Six Songs")) },
-			new() { Group = "Inventory Upgrades", Key = "ocarina_song", Label = "Selected Song", Address = 0x7E030F, Choices = ChoiceList((0, "None"), (1, "Healing"), (2, "Storms"), (3, "Soaring"), (4, "Time"), (5, "Secrets"), (6, "Stone")) }
+			new() { Group = "Inventory Upgrades", Key = "ocarina_song", Label = "Selected Song", Address = 0x7E030F, Choices = ChoiceList((0, "None"), (1, "Healing"), (2, "Storms"), (3, "Soaring"), (4, "Time"), (5, "Secrets"), (6, "Stone")) },
+			// The game clears Bombchu ammo above 20 to 0.
+			new() { Group = "Oracle Items", Key = "bombchu_ammo", Label = "Bombchus", Address = 0x7EF3B0, Choices = ChoiceList((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
+			new() { Group = "Oracle Items", Key = "dekusticks", Label = "Deku Sticks", Address = 0x7EF395, Choices = ChoiceList((0, "0"), (1, "1"), (5, "5"), (10, "10")) }
 		};
 
 		private static readonly List<FlagBitDef> FlagToggleDefs = new() {
@@ -233,6 +243,7 @@ namespace Mesen.Utilities
 			new() { Group = "Story", Key = "kydrog", Label = "Kydrog Encounter", Address = OosProg2Addr, Mask = 0x04 },
 			new() { Group = "Story", Key = "bookflag", Label = "Book of Secrets", Address = OosProg2Addr, Mask = 0x20 },
 			new() { Group = "Story", Key = "makutree", Label = "Maku Tree Quest", Address = MakuTreeQuestAddr, Mask = 0x01 },
+			new() { Group = "Story", Key = "makuseed", Label = "Maku Seed", Address = MakuTreeQuestAddr, Mask = 0x02 },
 			new() { Group = "Story", Key = "dekuquest", Label = "Deku Quest Done", Address = DekuQuestDoneAddr, Mask = 0x01 },
 			new() { Group = "Story", Key = "zoraquest", Label = "Zora Quest Done", Address = ZoraQuestDoneAddr, Mask = 0x01 },
 			// D1 = $02 and D6 = $01 (ROM dungeon IDs $0C/$0E; oracle-of-secrets Core/sram.asm, fixed 2026-09-26).
@@ -243,6 +254,7 @@ namespace Mesen.Utilities
 			new() { Group = "Dungeons", Key = "d5", Label = "D5 Glacia Estate", Address = CrystalsAddr, Mask = 0x04 },
 			new() { Group = "Dungeons", Key = "d6", Label = "D6 Goron Mines", Address = CrystalsAddr, Mask = 0x01 },
 			new() { Group = "Dungeons", Key = "d7", Label = "D7 Dragon Ship", Address = CrystalsAddr, Mask = 0x08 },
+			new() { Group = "Dungeons", Key = "d8", Label = "D8 Sky", Address = CrystalsAddr, Mask = 0x80 },
 			new() { Group = "Pendants", Key = "wisdom", Label = "Pendant of Wisdom", Address = PendantsAddr, Mask = 0x01 },
 			new() { Group = "Pendants", Key = "power", Label = "Pendant of Power", Address = PendantsAddr, Mask = 0x02 },
 			new() { Group = "Pendants", Key = "courage", Label = "Pendant of Courage", Address = PendantsAddr, Mask = 0x04 },

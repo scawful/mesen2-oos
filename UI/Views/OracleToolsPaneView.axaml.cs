@@ -98,6 +98,13 @@ namespace Mesen.Views
 			}
 		}
 
+		private async void OnSpawnSpriteClick(object? sender, RoutedEventArgs e)
+		{
+			if(ViewModel != null) {
+				await ViewModel.ExecuteSpawnSpriteAsync();
+			}
+		}
+
 		private async void OnCaptureStateClick(object? sender, RoutedEventArgs e)
 		{
 			if(ViewModel != null) {
