@@ -413,6 +413,7 @@ void SocketServer::RegisterHandlers() {
 	// Capture handlers
 	_handlers["CAMERA"] = HandleCamera;
 	_handlers["RECORD"] = HandleRecord;
+	_handlers["MOVIE"] = HandleMovie;
 	_handlers["LIVE"] = HandleLive;
 	_handlers["PROJECT"] = HandleProject;
 
@@ -6854,6 +6855,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"SCREENSHOT", "Capture screen as base64 PNG, or write it to a file", "path (optional, absolute .png), camera (optional, frame through CAMERA), overwrite (optional)", "{\"type\":\"SCREENSHOT\",\"path\":\"/tmp/shot.png\",\"camera\":\"true\"}"},
 			{"CAMERA", "Virtual capture camera for recordings, screenshots and LIVE (never changes game state)", "action (get/set/pan/reset); set: mode (full/manual/follow), width, height, x, y, zoom, clamp, filter (nearest/bilinear), smoothing, deadzone_x, deadzone_y, follow_x, follow_y, scroll_x, scroll_y, offset_x, offset_y, memtype, size; pan: x, y, zoom, frames, ease (smooth/linear)", "{\"type\":\"CAMERA\",\"action\":\"set\",\"mode\":\"follow\",\"width\":\"1280\",\"height\":\"720\",\"zoom\":\"2\",\"follow_x\":\"0x7E0022\",\"follow_y\":\"0x7E0020\",\"scroll_x\":\"0x7E00E2\",\"scroll_y\":\"0x7E00E8\"}"},
 			{"RECORD", "Record video (AVI/GIF, with audio) or audio (WAV) to a file", "action (start/stop/status); start: path (absolute), kind (avi/gif/wav, default from extension), codec (zmbv/cscd/raw), compression, camera, system_hud, input_hud, overwrite; stop: kind (video/audio/all)", "{\"type\":\"RECORD\",\"action\":\"start\",\"path\":\"/tmp/clip.avi\",\"camera\":\"true\"}"},
+			{"MOVIE", "Record or play a Mesen input movie (.mmo); input_row is the movie row of the next frame", "action (status/record/play/stop); record: path (absolute .mmo), from (current/save/power, default current), author, description, overwrite; play: path (absolute .mmo), pause (default true)", "{\"type\":\"MOVIE\",\"action\":\"play\",\"path\":\"/tmp/run.mmo\",\"pause\":\"true\"}"},
 			{"LIVE", "Stream camera video (BGRA) and audio (s16le stereo) to named pipes for an external encoder", "action (start/stop/status); start: video (FIFO path), audio (FIFO path, optional), every (frame interval)", "{\"type\":\"LIVE\",\"action\":\"start\",\"video\":\"/tmp/live/video.fifo\",\"audio\":\"/tmp/live/audio.fifo\"}"},
 			{"PROJECT", "Show the yaze project (.yaze) the ROM was loaded from; load one with LOADROM path=<file>.yaze", "", "{\"type\":\"PROJECT\"}"},
 			{"SAVESTATE", "Save state to slot or file", "slot or path, label (optional), pause (optional), allow_external (optional)", "{\"type\":\"SAVESTATE\",\"slot\":\"1\",\"label\":\"Boss room\",\"pause\":\"true\"}"},
@@ -6925,7 +6927,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"ROMINFO", "SPEED", "REWIND", "CHEAT", "INPUT",
 		"STATEINSPECT", "LOGPOINT", "SUBSCRIBE", "EXEC_LUA", "LOADSCRIPT", "HELP",
 		"GAMESTATE", "SPRITES", "VIDEO_RECORD",
-		"CAMERA", "RECORD", "LIVE", "PROJECT"
+		"CAMERA", "RECORD", "MOVIE", "LIVE", "PROJECT"
 	};
 
 	stringstream ss;

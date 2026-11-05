@@ -8,6 +8,12 @@
 #include "Shared/Video/VideoRenderer.h"
 #include "Shared/Video/CaptureCamera.h"
 #include "Shared/Video/LiveStreamSink.h"
+#include "Shared/DebuggerRequest.h"
+#include "Shared/Movies/MovieManager.h"
+#include "Utilities/VirtualFile.h"
+#include "Shared/Interfaces/IConsole.h"
+#include "Shared/BaseControlManager.h"
+#include "Shared/BaseControlDevice.h"
 #include "Utilities/PNGHelper.h"
 #include "Utilities/Video/AviWriter.h"
 #include "Utilities/FolderUtilities.h"
@@ -243,6 +249,11 @@ namespace {
 	}
 
 	string WavPath;
+
+	// The movie started by MOVIE record/play; the poll counter at that start maps
+	// the console poll counter onto movie input rows.
+	string MoviePath;
+	uint32_t MovieStartPoll = 0;
 }
 
 SocketResponse SocketServer::HandleCamera(Emulator* emu, const SocketCommand& cmd)
@@ -440,6 +451,111 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 	if(!renderer->StartRecording(path, options, throughCamera)) {
 		return Fail("Could not write to " + path, SocketErrorCode::InternalError);
 	}
+	return Ok(status());
+}
+
+SocketResponse SocketServer::HandleMovie(Emulator* emu, const SocketCommand& cmd)
+{
+	MovieManager* movies = emu->GetMovieManager();
+	string action = Lower(cmd.GetParam("action", "status"));
+
+	auto status = [&]() {
+		bool playing = movies->Playing();
+		bool recording = movies->Recording();
+		shared_ptr<IConsole> console = emu->GetConsole();
+		BaseControlManager* controls = console ? console->GetControlManager() : nullptr;
+		stringstream ss;
+		ss << "{\"playing\":" << (playing ? "true" : "false");
+		ss << ",\"recording\":" << (recording ? "true" : "false");
+		ss << ",\"path\":\"" << Escape(playing || recording ? MoviePath : "") << "\"";
+		ss << ",\"frame\":" << emu->GetFrameCount();
+		ss << ",\"paused\":" << (emu->IsPaused() ? "true" : "false");
+		if(controls && (playing || recording)) {
+			ss << ",\"input_row\":" << (controls->GetPollCounter() - MovieStartPoll);
+		} else {
+			ss << ",\"input_row\":null";
+		}
+		shared_ptr<BaseControlDevice> pad = controls ? controls->GetControlDevice(0) : nullptr;
+		ss << ",\"pad1\":\"" << Escape(pad ? pad->GetTextState() : "") << "\"}";
+		return ss.str();
+	};
+
+	if(action == "status") {
+		return Ok(status());
+	}
+
+	if(action == "stop") {
+		movies->Stop();
+		return Ok(status());
+	}
+
+	if(action != "record" && action != "play") {
+		return Fail("Unknown action: " + action + " (status/record/play/stop)");
+	}
+	if(!emu->IsRunning()) {
+		return Fail("No ROM loaded", SocketErrorCode::EmulatorNotRunning);
+	}
+	if(movies->Playing() || movies->Recording()) {
+		return Fail("A movie is already playing or recording (stop it first)");
+	}
+
+	string path = cmd.GetParam("path");
+	if(Lower(FolderUtilities::GetExtension(path)) != ".mmo") {
+		return Fail("path must end in .mmo");
+	}
+
+	if(action == "record") {
+		string error;
+		if(!ValidateOutputPath(cmd, path, error)) {
+			return Fail(error);
+		}
+		string from = Lower(cmd.GetParam("from", "current"));
+		RecordMovieOptions options = {};
+		if(from == "current") {
+			options.RecordFrom = RecordMovieFrom::CurrentState;
+		} else if(from == "save") {
+			options.RecordFrom = RecordMovieFrom::StartWithSaveData;
+		} else if(from == "power") {
+			options.RecordFrom = RecordMovieFrom::StartWithoutSaveData;
+		} else {
+			return Fail("from must be current, save or power");
+		}
+		string author = cmd.GetParam("author");
+		string description = cmd.GetParam("description");
+		snprintf(options.Filename, sizeof(options.Filename), "%s", path.c_str());
+		snprintf(options.Author, sizeof(options.Author), "%s", author.c_str());
+		snprintf(options.Description, sizeof(options.Description), "%s", description.c_str());
+
+		movies->Record(options);
+		if(!movies->Recording()) {
+			return Fail("Could not write to " + path, SocketErrorCode::InternalError);
+		}
+		shared_ptr<IConsole> console = emu->GetConsole();
+		MovieStartPoll = console && console->GetControlManager() ? console->GetControlManager()->GetPollCounter() : 0;
+		MoviePath = path;
+		return Ok(status());
+	}
+
+	if(!IsAbsolute(path) || !FileExists(path)) {
+		return Fail("path must be an existing absolute .mmo file");
+	}
+	// Playback power-cycles the console; pausing first keeps input row 0 unconsumed
+	// so a client can step from the movie's first frame. The pause must be a debugger
+	// break: a plain Emulator::Pause parks the emulation thread and STEP cannot advance it.
+	bool pause = ParseBool(cmd.GetParam("pause", "true"));
+	if(pause) {
+		emu->GetDebugger(true);
+		emu->Pause();
+	}
+	movies->Play(VirtualFile(path), true);
+	if(pause && !emu->IsPaused()) {
+		emu->Pause();
+	}
+	if(!movies->Playing()) {
+		return Fail("Could not play " + path + " (not a Mesen movie, or made by an incompatible version)", SocketErrorCode::InternalError);
+	}
+	MovieStartPoll = 0;
+	MoviePath = path;
 	return Ok(status());
 }
 
