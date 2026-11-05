@@ -1,0 +1,38 @@
+diff --color -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
+--- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 10:03:15
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 10:35:37
+@@ -687,6 +687,7 @@
+     load_rom_live_parser.add_argument("path", nargs="?", help="Path to the ROM (default: the pending offer)")
+     load_rom_live_parser.add_argument("--label", help="Label recorded for this load")
+     load_rom_live_parser.add_argument("--no-state", action="store_true", help="Skip the backup save state before the swap")
++    load_rom_live_parser.add_argument("--no-resume", action="store_true", help="Stop at the title instead of continuing the save file in play")
+     load_rom_live_parser.add_argument("--json", "-j", action="store_true")
+ 
+     # Socket cleanup command
+@@ -2204,7 +2205,7 @@
+         elif args.command == "offer-clear":
+             result = client.clear_rom_offer()
+         else:
+-            result = client.load_rom_live(args.path, label=args.label, state=not args.no_state)
++            result = client.load_rom_live(args.path, label=args.label, state=not args.no_state, resume=not args.no_resume)
+         if result is None:
+             if args.json:
+                 print(json.dumps({"ok": False, "error": client.last_error}, indent=2))
+diff --color -ruN a/tools/oos_client/mesen2_client_lib/client.py b/tools/oos_client/mesen2_client_lib/client.py
+--- a/tools/oos_client/mesen2_client_lib/client.py	2026-09-26 08:27:36
++++ b/tools/oos_client/mesen2_client_lib/client.py	2026-09-26 10:35:37
+@@ -1457,9 +1457,11 @@
+     def clear_rom_offer(self) -> dict | None:
+         return self._rom_offer_command("OFFER_ROM_CLEAR", {})
+ 
+-    def load_rom_live(self, path: str | None = None, label: str | None = None, state: bool = True) -> dict | None:
+-        """Load a ROM keeping the running game's .srm; no path accepts the pending offer."""
+-        params: dict = {"state": str(state).lower()}
++    def load_rom_live(self, path: str | None = None, label: str | None = None, state: bool = True,
++                      resume: bool = True) -> dict | None:
++        """Load a ROM keeping the running game's .srm; no path accepts the pending offer.
++        resume: continue the save file in play past the title (ALTTP-layout saves)."""
++        params: dict = {"state": str(state).lower(), "resume": str(resume).lower()}
+         if path:
+             rom_path = Path(path).expanduser().resolve()
+             if not rom_path.is_file():

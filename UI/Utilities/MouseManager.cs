@@ -54,6 +54,17 @@ namespace Mesen.Utilities
 			return _mainMenu.IsPointerOver || MenuHelper.IsPointerInMenu(_mainMenu.MainMenu);
 		}
 
+		private bool IsPointerInGameArea(SystemMouseState mouseState)
+		{
+			//Only clicks on the game area give the renderer focus. Controls docked around it (ROM offer
+			//banner, Oracle strip and tools pane) would otherwise lose focus mid-click: buttons never
+			//raise Click and text boxes never receive typing.
+			Control area = _renderer.Parent as Control ?? _renderer;
+			PixelPoint topLeft = area.PointToScreen(new Point());
+			PixelRect areaRect = new PixelRect(topLeft, PixelSize.FromSize(area.Bounds.Size, LayoutHelper.GetLayoutScale(_wnd) / InputApi.GetPixelScale()));
+			return areaRect.Contains(new PixelPoint(mouseState.XPosition, mouseState.YPosition));
+		}
+
 		private void tmrProcessMouse(object? sender, EventArgs e)
 		{
 			UpdateMainMenuVisibility();
@@ -63,8 +74,8 @@ namespace Mesen.Utilities
 			}
 
 			SystemMouseState mouseState = InputApi.GetSystemMouseState(GetRendererHandle());
-			
-			if(_wnd.IsActive && mouseState.LeftButton && !IsPointerInMenu() && (EmuApi.IsRunning() || !MainWindowViewModel.Instance.RecentGames.Visible)) {
+
+			if(_wnd.IsActive && mouseState.LeftButton && !IsPointerInMenu() && IsPointerInGameArea(mouseState) && (EmuApi.IsRunning() || !MainWindowViewModel.Instance.RecentGames.Visible)) {
 				//Close menu when renderer is clicked
 				_mainMenu.MainMenu.Close();
 				if(MainWindowViewModel.Instance.AudioPlayer == null) {
@@ -246,7 +257,7 @@ namespace Mesen.Utilities
 			if(!_mouseCaptured && AllowMouseCapture) {
 				PixelPoint topLeft = _renderer.PointToScreen(new Point());
 				PixelRect rendererScreenRect = new PixelRect(topLeft, PixelSize.FromSize(_renderer.Bounds.Size, LayoutHelper.GetLayoutScale(_wnd)));
-				
+
 				if(InputApi.CaptureMouse(topLeft.X, topLeft.Y, rendererScreenRect.Width, rendererScreenRect.Height, GetRendererHandle())) {
 					DisplayMessageHelper.DisplayMessage("Input", ResourceHelper.GetMessage("MouseModeEnabled"));
 					_mouseCaptured = true;

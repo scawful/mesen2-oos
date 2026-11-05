@@ -248,7 +248,7 @@ void Debugger::ProcessInstruction()
 	}
 
 	debugger->AllowChangeProgramCounter = false;
-	
+
 	if(_scriptManager->HasCpuMemoryCallbacks()) {
 		MemoryOperationInfo memOp = debugger->InstructionProgress.LastMemOperation;
 		AddressInfo relAddr = { (int32_t)memOp.Address, memOp.MemType };
@@ -305,11 +305,11 @@ bool Debugger::ProcessMemoryWrite(uint32_t addr, T& value, MemoryOperationType o
 		case CpuType::Sms: GetDebugger<CpuType::Sms, SmsDebugger>()->ProcessWrite(addr, value, opType); break;
 		case CpuType::Gba: GetDebugger<CpuType::Gba, GbaDebugger>()->ProcessWrite<accessWidth>(addr, value, opType); break;
 	}
-	
+
 	if(_scriptManager->HasCpuMemoryCallbacks()) {
 		ProcessScripts<type>(addr, value, opType);
 	}
-	
+
 	return !_debuggers[(int)type].Debugger->GetFrozenAddressManager().IsFrozenAddress(addr);
 }
 
@@ -369,7 +369,7 @@ void Debugger::ProcessHaltedCpu()
 	//Set AllowChangeProgramCounter to allow SleepUntilResume to break properly
 	dbg->AllowChangeProgramCounter = true;
 	dbg->InstructionProgress.CurrentCycle = 0;
-	
+
 	//Process cpu step requests as if each call to ProcessHaltedCpu is an instruction
 	StepRequest* req = dbg->GetStepRequest();
 	req->ProcessCpuExec();
@@ -463,7 +463,7 @@ void Debugger::SleepUntilResume(CpuType sourceCpu, BreakSource source, MemoryOpe
 	}
 
 	_executionStopped = true;
-	
+
 	bool notificationSent = false;
 	if(source != BreakSource::Unspecified || _breakRequestCount == 0) {
 		_emu->GetSoundMixer()->StopAudio();
@@ -677,7 +677,15 @@ void Debugger::PauseOnNextFrame()
 
 void Debugger::Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source)
 {
-	DebugBreakHelper helper(this);
+	TryStep(cpuType, stepCount, type, source, 0);
+}
+
+bool Debugger::TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs)
+{
+	DebugBreakHelper helper(this, false, timeoutMs);
+	if(!helper.IsAcquired()) {
+		return false;
+	}
 	IDebugger* debugger = _debuggers[(int)cpuType].Debugger.get();
 
 	if(debugger) {
@@ -699,6 +707,7 @@ void Debugger::Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSour
 	}
 
 	_waitForBreakResume = false;
+	return true;
 }
 
 bool Debugger::IsPaused()
@@ -868,7 +877,7 @@ void Debugger::GetPpuState(BaseState& state, CpuType cpuType)
 			GetDebugger<CpuType::Sms, SmsDebugger>()->GetPpuState(state);
 			break;
 		}
-		
+
 		case CpuType::Gba: {
 			GetDebugger<CpuType::Gba, GbaDebugger>()->GetPpuState(state);
 			break;

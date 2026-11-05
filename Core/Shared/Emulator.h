@@ -83,7 +83,7 @@ private:
 	const unique_ptr<CheatManager> _cheatManager;
 	const unique_ptr<MovieManager> _movieManager;
 	const unique_ptr<HistoryViewer> _historyViewer;
-	
+
 	const shared_ptr<GameServer> _gameServer;
 	const shared_ptr<GameClient> _gameClient;
 	const shared_ptr<RewindManager> _rewindManager;
@@ -120,7 +120,7 @@ private:
 	unique_ptr<FrameLimiter> _frameLimiter;
 	Timer _lastFrameTimer;
 	double _frameDelay = 0;
-	
+
 	uint32_t _autoSaveStateFrameCounter = 0;
 	int32_t _stopCode = 0;
 	bool _stopRequested = false;
@@ -128,6 +128,15 @@ private:
 	// Keep release-only state at the end to preserve existing member offsets.
 	SimpleLock _releaseLock;
 	bool _releaseStarted = false;
+
+	// Save file name rules: a live ROM swap keeps the previous save name for its ROM path,
+	// and Oracle ROMs can share one save name (Oracle.PersistentSaveName, off when empty).
+	SimpleLock _batteryNameLock;
+	string _batteryNameRomPath;
+	string _batteryNameOverride;
+	string _oracleSaveName;
+	string _lastSaveBackupPath;
+	bool _liveLoadBackupPending = false;
 
 	void WaitForLock();
 	void WaitForPauseEnd();
@@ -142,6 +151,8 @@ private:
 
 	double GetFrameDelay();
 
+	string GetBatteryName(VirtualFile& romFile, bool* sharedSave = nullptr);
+	void BackupSharedSave(VirtualFile& romFile);
 	void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
 	template<typename T> void TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_ptr<IConsole>& console, bool useFileSignature);
 
@@ -170,10 +181,15 @@ public:
 	void PauseOnNextFrame();
 
 	void Pause();
+	bool TryPause(uint32_t timeoutMs = 500);
 	void Resume();
 	bool IsPaused();
 
 	bool LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom = true, bool forPowerCycle = false);
+	void SetBatteryNameOverride(string romPath, string batteryName);
+	void SetOracleSaveName(string saveName);
+	string GetCurrentBatteryName();
+	string GetLastSaveBackupPath();
 	RomInfo& GetRomInfo() { return _rom; }
 	string GetHash(HashType type);
 	uint32_t GetCrc32();
@@ -251,7 +267,7 @@ public:
 	uint32_t GetFrameCount();
 
 	uint32_t GetLagCounter();
-	void ResetLagCounter();	
+	void ResetLagCounter();
 	bool HasControlDevice(ControllerType type);
 	void RegisterInputRecorder(IInputRecorder* recorder);
 	void UnregisterInputRecorder(IInputRecorder* recorder);
@@ -259,7 +275,7 @@ public:
 	void UnregisterInputProvider(IInputProvider* provider);
 
 	double GetFps();
-	
+
 	template<CpuType type> __forceinline void ProcessInstruction()
 	{
 		if(_debugger) {

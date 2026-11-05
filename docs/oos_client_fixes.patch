@@ -1,0 +1,174 @@
+diff -ruN a/tools/oos_client/mesen2_client_lib/cli.py b/tools/oos_client/mesen2_client_lib/cli.py
+--- a/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 08:27:36
++++ b/tools/oos_client/mesen2_client_lib/cli.py	2026-09-26 09:46:42
+@@ -889,7 +889,7 @@
+ 
+     # Save state commands
+     save_parser = subparsers.add_parser("save", help="Save state")
+-    save_parser.add_argument("slot", type=int, nargs="?", help="Slot number (1-99 or configured)")
++    save_parser.add_argument("target", nargs="?", help="Slot number (1-99 or configured) or path to a .mss file")
+     save_parser.add_argument("--path", "-p", help="Custom save path")
+ 
+     load_parser = subparsers.add_parser("load", help="Load state")
+@@ -1231,8 +1231,9 @@
+         if args.agent_cmd == "save":
+             ok = False
+             if args.path:
+-                ok = client.save_state(path=args.path)
+-                emit({"saved": args.path}, ok=ok)
++                state_path = _normalize_filesystem_path(args.path)
++                ok = client.save_state(path=state_path) and Path(state_path).is_file()
++                emit({"saved": state_path, "error": client.last_error}, ok=ok)
+             elif args.slot is not None:
+                 ok = client.save_state(slot=args.slot)
+                 emit({"saved": args.slot}, ok=ok)
+@@ -1485,10 +1486,21 @@
+ 
+     if args.command == "health":
+         info = client.health_check()
++        if not info.get("ok"):
++            # No PING answer: the ROM state is unknown, not "not loaded"
++            if args.json:
++                print(json.dumps({**info, "connected": False}, indent=2))
++            else:
++                print("Health: FAIL (cannot reach Mesen)")
++                print(f"Socket: {info.get('socket') or '(none found)'}")
++                print(f"Error: {info.get('error') or 'PING failed'}")
++                print("Hint: the instance is not running or the socket file is stale (pid is in <socket>.status)")
++            sys.exit(1)
+         rom_info = client.get_rom_info()
+         rom_loaded = bool(rom_info)
+         if args.json:
+             payload = dict(info)
++            payload["connected"] = True
+             payload["rom_loaded"] = rom_loaded
+             payload["rom_info"] = rom_info
+             if not rom_loaded and client.last_error:
+@@ -3069,24 +3081,31 @@
+             print("Frame advance failed")
+ 
+     elif args.command == "save":
+-        ok = False
+-        if args.path:
+-            if client.save_state(path=args.path):
+-                print(f"Saved to {args.path}")
+-                ok = True
+-            else:
+-                print("Save failed")
+-        elif args.slot is not None:
+-            if client.save_state(slot=args.slot):
+-                print(f"Saved to slot {args.slot}")
+-                ok = True
+-            else:
+-                print("Save failed")
+-        else:
+-            print("Usage: save <slot> OR save --path <file>")
++        slot, path, error = _resolve_slot_or_path(getattr(args, "target", None), args.path)
++        if error:
++            print(error, file=sys.stderr)
++            print("Usage: save <slot|path> OR save --path <file>", file=sys.stderr)
+             sys.exit(1)
+-        if not ok:
+-            sys.exit(1)
++        if path:
++            # Relative paths are the caller's, not Mesen's (the core would put them in SaveStates/)
++            state_path = Path(_normalize_filesystem_path(path))
++            try:
++                state_path.parent.mkdir(parents=True, exist_ok=True)
++            except OSError as exc:
++                print(f"Save failed: cannot create {state_path.parent}: {exc.strerror}", file=sys.stderr)
++                sys.exit(1)
++            if not client.save_state(path=str(state_path)):
++                print(f"Save failed: {client.last_error or 'SAVESTATE failed'}", file=sys.stderr)
++                sys.exit(1)
++            if not state_path.is_file():
++                print(f"Save reported OK but {state_path} was not written", file=sys.stderr)
++                sys.exit(1)
++            print(f"Saved to {state_path} ({state_path.stat().st_size} bytes)")
++        else:
++            if not client.save_state(slot=slot):
++                print(f"Save to slot {slot} failed: {client.last_error or 'SAVESTATE failed'}", file=sys.stderr)
++                sys.exit(1)
++            print(f"Saved to slot {slot}")
+ 
+     elif args.command == "load":
+         ok = False
+diff -ruN a/tools/oos_client/mesen2_registry.py b/tools/oos_client/mesen2_registry.py
+--- a/tools/oos_client/mesen2_registry.py	2026-09-23 14:16:18
++++ b/tools/oos_client/mesen2_registry.py	2026-09-26 09:43:15
+@@ -6,10 +6,9 @@
+ import argparse
+ import json
+ import os
++import signal
+ import sys
+ import time
+-import subprocess
+-import shutil
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Any
+@@ -84,6 +83,15 @@
+         return None
+ 
+ 
++def _pid_from_status_file(socket_path: str) -> int | None:
++    """Named instance sockets carry no pid; Mesen writes it to <socket>.status."""
++    status_path = Path(socket_path).with_suffix(".status")
++    try:
++        return int(json.loads(status_path.read_text()).get("pid"))
++    except (OSError, ValueError, TypeError):
++        return None
++
++
+ def _check_socket_health(bridge: MesenBridge) -> tuple[bool, dict[str, Any]]:
+     if hasattr(bridge, "check_health"):
+         info = bridge.check_health()
+@@ -412,7 +420,7 @@
+         raise SystemExit(f"Instance not found: {args.instance}")
+     record = _load_record(record_path)
+     if args.force:
+-        print("Note: --force only extends the graceful-quit wait; no kill signals are sent.")
++        print("Note: --force only extends the graceful-quit wait.")
+     if record.get("active") and not args.force:
+         warning = f"Instance {args.instance} is marked active (owner={record.get('owner')})."
+         if args.confirm:
+@@ -424,7 +432,7 @@
+     if not pid:
+         socket = record.get("socket")
+         if socket:
+-            pid = _parse_pid_from_socket(socket)
++            pid = _parse_pid_from_socket(socket) or _pid_from_status_file(socket)
+     if not pid:
+         raise SystemExit(f"No PID available for {args.instance}")
+ 
+@@ -443,15 +451,11 @@
+         print(f"Closed {args.instance} (pid={pid})")
+         return
+ 
+-    app_name = record.get("app_name") or "Mesen2 OOS"
+-    if sys.platform != "darwin":
+-        raise SystemExit("Graceful close is only supported on macOS. Close the app manually.")
+-    osascript = shutil.which("osascript")
+-    if not osascript:
+-        raise SystemExit("osascript not available; close the app manually.")
+-
+-    subprocess.run([osascript, "-e", f'tell application \"{app_name}\" to quit'], check=False)
+-    wait_loops = 40 if args.force else 20
++    # Signal this instance's pid only. "tell application <name> to quit" reaches whichever
++    # Mesen2 OOS process AppleScript picks, which can be the player's window.
++    # Builds with the SIGTERM handler close through the normal shutdown path (SRAM saved).
++    os.kill(int(pid), signal.SIGTERM)
++    wait_loops = 100 if args.force else 50
+     for _ in range(wait_loops):
+         if not _pid_alive(int(pid)):
+             record["closed_at"] = _now_iso()
+@@ -554,7 +558,7 @@
+     heartbeat_cmd.add_argument("--instance", required=True)
+     heartbeat_cmd.set_defaults(func=cmd_heartbeat)
+ 
+-    close_cmd = sub.add_parser("close", help="Close instance via graceful app quit")
++    close_cmd = sub.add_parser("close", help="Close this instance only (SIGTERM to its pid; graceful on builds with the signal handler)")
+     close_cmd.add_argument("--instance", required=True)
+     close_cmd.add_argument("--owner")
+     close_cmd.add_argument("--force", action="store_true")

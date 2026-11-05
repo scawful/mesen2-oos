@@ -28,6 +28,7 @@ enum class ConsoleNotificationType
 	CheatsChanged,
 	RequestConfigChange,
 	RefreshSoftwareRenderer,
+	RomOfferChanged,
 };
 
 struct GameLoadedEventParams

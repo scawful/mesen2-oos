@@ -331,6 +331,7 @@ ITEMS = {
     "garomask": (0x7EF3AF, "Garo Mask", {0: "None", 1: "Have"}),
     # 0..20; values above 20 are cleared to 0 by the game.
     "bombchuammo": (0x7EF3B0, "Bombchu Ammo", None),
+    "bombchu_ammo": (0x7EF3B0, "Bombchu Ammo", None),
     "rings": (0x7EF3A2, "Appraised Rings", None),
     "bananas": (0x7EF38B, "Bananas", None),
     "pineapples": (0x7EF38D, "Pineapples", None),

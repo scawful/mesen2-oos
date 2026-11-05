@@ -358,3 +358,47 @@ def test_save_preview_calls_racing_release_are_safe(tmp_path: Path) -> None:
 			f"iteration {iteration}: " + result.stdout + result.stderr
 		)
 		assert "save preview release safe" in result.stdout
+
+
+def test_rapid_shared_save_loads_preserve_each_backup(tmp_path: Path) -> None:
+    rom = tmp_path / "shared-save.sfc"
+    _write_minimal_snes_rom(rom)
+    data = bytearray(rom.read_bytes())
+    data.extend(b"\xea" * (0x200000 - len(data)))
+    data[0x7FC0:0x7FD3] = b"THE LEGEND OF ZELDA"
+    data[0x7FD6:0x7FD9] = bytes((2, 11, 3))  # Battery, 2 MiB ROM, 8 KiB SRAM.
+    rom.write_bytes(data)
+    script = r'''
+import ctypes
+import os
+from pathlib import Path
+import shutil
+import sys
+
+core_path, rom_path, home_path = sys.argv[1:]
+home = Path(home_path)
+home.mkdir()
+os.environ["MESEN2_SOCKET_PATH"] = str(home / "test.sock")
+core = ctypes.CDLL(core_path)
+core.InitializeEmu.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
+    ctypes.c_bool, ctypes.c_bool, ctypes.c_bool, ctypes.c_bool]
+core.LoadRom.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+core.LoadRom.restype = ctypes.c_bool
+core.SetOracleSaveName.argtypes = [ctypes.c_char_p]
+core.InitDll()
+core.InitializeEmu(str(home).encode(), None, None, True, True, True, True)
+core.SetOracleSaveName(b"test-shared")
+try:
+    for index in range(5):
+        copy = home / ("build-" + str(index) + ".sfc")
+        shutil.copy2(rom_path, copy)
+        assert core.LoadRom(str(copy).encode(), None), "private ROM load failed"
+finally:
+    core.Release()
+backups = list((home / "Saves/SrmBackups").glob("test-shared_*.srm"))
+print("retained backups", len(backups), flush=True)
+assert len(backups) == 4, "a later rapid load overwrote a prior battery backup"
+assert all(path.stat().st_size == 8192 for path in backups), "short battery backup"
+'''
+    result = _run_child(script, str(rom), str(tmp_path / "home"), timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr

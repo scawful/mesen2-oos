@@ -26,14 +26,15 @@ private:
 
 public:
 	void Initialize(string romName, bool setBatteryFlag = false);
+	string GetRomName() { return _romName; }
 
 	bool HasBattery() { return _hasBattery; }
 
 	void SetBatteryProvider(shared_ptr<IBatteryProvider> provider);
 	void SetBatteryRecorder(shared_ptr<IBatteryRecorder> recorder);
-	
+
 	void SaveBattery(string extension, uint8_t* data, uint32_t length);
-	
+
 	vector<uint8_t> LoadBattery(string extension);
 	void LoadBattery(string extension, uint8_t* data, uint32_t length);
 	uint32_t GetBatteryFileSize(string extension);

@@ -224,6 +224,73 @@ class TestBridgeCommands:
         assert "error" in result
 
 
+class TestSocketLifetime:
+    @pytest.mark.parametrize("target", ["/tmp/owned-mesen.sock", "tcp://127.0.0.1:27015"])
+    @pytest.mark.parametrize("operation", ["settimeout", "connect"])
+    def test_failed_socket_setup_closes_socket(self, monkeypatch, target, operation):
+        from unittest.mock import Mock
+        from mesen2_client_lib.bridge import _connect_socket
+
+        connection = Mock()
+        getattr(connection, operation).side_effect = OSError("setup failed")
+        monkeypatch.setattr("mesen2_client_lib.bridge.socket.socket", lambda *args: connection)
+
+        with pytest.raises(OSError, match="setup failed"):
+            _connect_socket(target, 1.0)
+
+        connection.close.assert_called_once_with()
+
+    @pytest.mark.parametrize("operation", ["sendall", "recv"])
+    def test_probe_failure_closes_socket(self, monkeypatch, operation):
+        from unittest.mock import Mock
+
+        connection = Mock()
+        getattr(connection, operation).side_effect = OSError("request failed")
+        monkeypatch.setattr("mesen2_client_lib.bridge.socket.socket", lambda *args: connection)
+
+        assert MesenBridge._probe_socket("/tmp/owned-mesen.sock") is False
+        connection.close.assert_called_once_with()
+
+    @pytest.mark.parametrize("operation", ["sendall", "recv"])
+    def test_command_failure_closes_socket(self, monkeypatch, operation):
+        from unittest.mock import Mock
+
+        connection = Mock()
+        getattr(connection, operation).side_effect = OSError("request failed")
+        monkeypatch.setattr("mesen2_client_lib.bridge.socket.socket", lambda *args: connection)
+        bridge = MesenBridge(socket_path="/tmp/owned-mesen.sock", max_retries=0)
+
+        with pytest.raises(ConnectionError, match="request failed"):
+            bridge.send_command("PING")
+
+        connection.close.assert_called_once_with()
+
+    def test_receive_timeout_closes_before_retrying_same_target(self, monkeypatch):
+        from unittest.mock import Mock
+
+        first, second = Mock(), Mock()
+        first.recv.side_effect = socket.timeout("not ready")
+        second.recv.return_value = b'{"success":true,"data":"PONG"}\n'
+        connections = []
+
+        def factory(*args):
+            if connections:
+                first.close.assert_called_once_with()
+            connection = first if not connections else second
+            connections.append(connection)
+            return connection
+
+        monkeypatch.setattr("mesen2_client_lib.bridge.socket.socket", factory)
+        target = "/tmp/owned-mesen.sock"
+        bridge = MesenBridge(socket_path=target, max_retries=1, retry_delay=0)
+        assert bridge.send_command("PING") == {"success": True, "data": "PONG"}
+        assert len(connections) == 2
+        for connection in connections:
+            connection.connect.assert_called_once_with(target)
+            connection.sendall.assert_called_once_with(b'{"type": "PING"}\n')
+            connection.close.assert_called_once_with()
+
+
 class TestMemoryOperations:
     def test_read_memory(self, mock_server, mock_socket_path):
         mock_server.set_response("READ", {"success": True, "data": '"0x42"'})

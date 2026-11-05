@@ -288,6 +288,20 @@ Events are pushed to subscribed clients:
 
 ---
 
+## Instance lifecycle log and stopping instances
+
+Each profile folder (`MESEN2_HOME`, e.g. `~/Library/Application Support/Mesen2-instances/<name>/`)
+gets an append-only `instance.log` (rotated to `instance.log.1` past 1 MB): start (pid, args,
+socket), ROM loads, quit requests (window close, app quit, SIGTERM/SIGINT, headless stop),
+SIGHUP/SIGQUIT, unhandled exceptions and the process exit code. An exit line tagged
+`no quit request seen` means something outside Mesen ended it (Force Quit, `kill -9`).
+
+Stop one instance with `kill -TERM <pid>` or `mesen2_registry.py close --instance <name>`
+(it signals that pid only). SIGTERM/SIGINT close the GUI through the normal shutdown path
+(config and SRAM saved, exit 0); a second signal falls back to the default. Headless
+instances stop like Ctrl+C. Never quit by app name (`tell application "Mesen2 OOS" to quit`,
+the Dock or Force Quit list): every instance has the same name, including the player's.
+
 ## Building and Deployment
 
 ### Build Commands

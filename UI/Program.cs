@@ -82,6 +82,7 @@ namespace Mesen
 
 			//Extract core dll & other native dependencies
 			ExtractNativeDependencies(ConfigManager.HomeFolder);
+			InstanceLog.Start(ConfigManager.HomeFolder, args, headlessRequested);
 
 			if(CommandLineHelper.IsTestRunner(args)) {
 				return TestRunner.Run(args);
@@ -97,6 +98,8 @@ namespace Mesen
 				Program.CommandLineArgs = (string[])args.Clone();
 				BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnMainWindowClose);
 				EmuApi.Release();
+			} else {
+				InstanceLog.QuitRequested("another process owns this instance GUID; arguments forwarded to it");
 			}
 
 			return 0;

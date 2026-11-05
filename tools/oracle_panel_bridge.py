@@ -38,19 +38,19 @@ PRESET_ORDER = ["all_items", "early_game", "dungeon_ready", "clear_progress"]
 PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
     "all_items": {
         "label": "All Items",
-        "description": "Full gameplay loadout without story progress bits.",
+        "description": "Tools, six songs, rings, maps, scrolls and collectibles; fills empty bottles and 20 Bombchus. Preserves filled bottles, higher counts, valid song selection and story flags.",
         "items": {
             "bow": 4,
             "boomerang": 2,
-            "hookshot": 2,
+            "hookshot": 1,
             "bombs": 50,
             "powder": 2,
             "firerod": 1,
             "icerod": 1,
             "lamp": 1,
             "hammer": 1,
-            "flute": 5,
-            "ocarina_song": 4,
+            "flute": 7,
+            "ocarina_song": 1,
             "feather": 1,
             "book": 1,
             "somaria": 1,
@@ -73,6 +73,29 @@ PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
             "rupees": 9999,
             "arrows": 70,
             "keys": 9,
+            "bottle1": 3,
+            "bottle2": 4,
+            "bottle3": 5,
+            "bottle4": 6,
+            "customrods": 2,
+            "portalrod": 1,
+            "goldstar": 1,
+            "goldstar_inventory_version": 165,
+            "saved_ocarina_song": 1,
+            "rings": 63,
+            "tinglemaps": 127,
+            "dungeonscrolls": 127,
+            "byrna": 1,
+            "bombchu": 1,
+            "switchhook": 1,
+            "garomask": 1,
+            "bombchu_ammo": 20,
+            "bananas": 10,
+            "pineapples": 10,
+            "rockmeat": 5,
+            "seashells": 10,
+            "honeycombs": 10,
+            "dekusticks": 10,
         },
     },
     "early_game": {
@@ -226,14 +249,12 @@ def _bootstrap() -> tuple[Any, dict[str, Any], dict[str, Any]]:
     oos_root = _resolve_oos_root()
     if not oos_root:
         raise RuntimeError("Oracle-of-Secrets root not found")
+    # The client lives next to this file; it reads Oracle data via OOS_ROOT.
+    os.environ.setdefault("OOS_ROOT", str(oos_root))
 
-    scripts_dir = oos_root / "scripts"
-    if not scripts_dir.exists():
-        raise RuntimeError(f"Oracle scripts folder not found: {scripts_dir}")
-
-    scripts_str = str(scripts_dir)
-    if scripts_str not in sys.path:
-        sys.path.insert(0, scripts_str)
+    client_dir = str(Path(__file__).resolve().parent / "oos_client")
+    if client_dir not in sys.path:
+        sys.path.insert(0, client_dir)
 
     from mesen2_client_lib.client import OracleDebugClient  # type: ignore
     from mesen2_client_lib.constants import ITEMS, STORY_FLAGS  # type: ignore
@@ -382,7 +403,25 @@ def _apply_preset(client: Any, preset_id: str) -> tuple[int, int]:
     if preset_id not in PRESET_DEFINITIONS:
         raise ValueError(f"Unknown preset: {preset_id}")
     preset = PRESET_DEFINITIONS[preset_id]
-    changed_items = _apply_items(client, dict(preset.get("items") or {}))
+    items = dict(preset.get("items") or {})
+    if preset_id == "all_items":
+        # The current selection is volatile; keep the saved copy synchronized.
+        current_song = client.get_item("ocarina_song")[0]
+        saved_song = client.get_item("saved_ocarina_song")[0]
+        song = current_song if 1 <= current_song <= 6 else saved_song if 1 <= saved_song <= 6 else 1
+        for key, value in list(items.items()):
+            current = client.get_item(key)[0]
+            if key in {"bottle1", "bottle2", "bottle3", "bottle4"} and 3 <= current <= 10:
+                del items[key]  # Includes Oracle's Magic Bean and Milk bottles.
+            elif key in {"ocarina_song", "saved_ocarina_song"}:
+                items[key] = song
+            elif key in {"rings", "tinglemaps", "dungeonscrolls"}:
+                items[key] = current | value
+            elif key in {"bananas", "pineapples", "rockmeat", "seashells", "honeycombs", "dekusticks",
+                         "bombs", "arrows", "keys", "rupees", "health", "maxhealth", "magic"}:
+                items[key] = max(current, value)
+        # Bombchu ammo deliberately resets to its valid cap20, including invalid old bytes.
+    changed_items = _apply_items(client, items)
     changed_flags = _apply_flags(client, dict(preset.get("flags") or {}))
     return changed_items, changed_flags
 

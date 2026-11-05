@@ -40,6 +40,7 @@ namespace Mesen
 				} else {
 					desktop.MainWindow = new MainWindow();
 				}
+				desktop.ShutdownRequested += (s, e) => InstanceLog.QuitRequested("application shutdown (main window closed, Quit menu, Cmd+Q or Apple Event quit)");
 			}
 			base.OnFrameworkInitializationCompleted();
 		}

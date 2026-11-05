@@ -345,6 +345,9 @@ SocketResponse SocketServer::HandleCamera(Emulator* emu, const SocketCommand& cm
 
 SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cmd)
 {
+	SocketServer* server = emu->GetSocketServer();
+	// Serialize both recording APIs against the same owner and encoder state.
+	auto lock = server->_lock.AcquireSafe();
 	VideoRenderer* renderer = emu->GetVideoRenderer();
 	SoundMixer* mixer = emu->GetSoundMixer();
 	string action = Lower(cmd.GetParam("action", "status"));
@@ -367,6 +370,9 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 		string kind = Lower(cmd.GetParam("kind", "all"));
 		if(kind != "all" && kind != "video" && kind != "audio") {
 			return Fail("kind must be video, audio or all");
+		}
+		if(kind != "audio" && !server->_videoRecordOwner.empty()) {
+			return Fail("Recording is owned by VIDEO_RECORD; stop it with the owner token");
 		}
 		if(kind != "audio" && renderer->IsRecording()) {
 			renderer->StopRecording();
