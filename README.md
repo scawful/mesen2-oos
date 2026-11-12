@@ -16,6 +16,11 @@ Unlike the upstream Mesen2, which aims for accuracy and user experience, this fo
 - **Custom Debuggers:** Specialized views for Zelda 3 and Oracle of Secrets memory structures.
 
 ## Build
+
+Start with the [generic socket quickstart](docs/Getting_Started.md) for build
+prerequisites, an isolated headless session and commands that work without an
+Oracle of Secrets checkout. Public release binaries are not currently published.
+
 ```bash
 make
 ```

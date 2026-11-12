@@ -11,12 +11,18 @@ This guide provides best practices for integrating AI agents and automation tool
 Set the `MESEN2_SOCKET_PATH` environment variable when launching Mesen2. This guarantees the socket location.
 
 ```bash
-# Launch Mesen2
+# Set these to your built executable and test ROM.
+export MESEN_BIN="/absolute/path/to/Mesen"
+export MESEN_ROM="/absolute/path/to/test.sfc"
+export MESEN2_HOME="$PWD/.mesen-agent-profile"
 export MESEN2_SOCKET_PATH="/tmp/mesen2-agent.sock"
-./bin/mesen-run --headless --profile agent
+"$MESEN_BIN" "$MESEN_ROM" --headless --noaudio --noinput --multiInstance
 ```
 
-Then simply connect to `/tmp/mesen2-agent.sock`.
+Use an unused socket path and your own profile directory. Then connect to that
+explicit socket. See the [generic quickstart](Getting_Started.md) for the build
+output, CLI checks and shutdown. The supported profile override is `MESEN2_HOME`;
+there is no `--profile agent` switch or checked-in `bin/mesen-run` launcher.
 
 **Method 2: Canonical discovery (when env is not set)**
 

@@ -676,9 +676,10 @@ def get_socket_path(args) -> Optional[str]:
 
     env_path = os.environ.get("MESEN2_SOCKET_PATH")
     if env_path:
-        p = Path(env_path)
-        if p.exists() and p.is_socket():
-            return env_path
+        # An explicit target must not fall through to another instance when it
+        # exits or its socket is not ready yet. Let connect report its error,
+        # just as it does for --socket.
+        return env_path
 
     # Find most recently used socket
     sockets = find_mesen_sockets()
