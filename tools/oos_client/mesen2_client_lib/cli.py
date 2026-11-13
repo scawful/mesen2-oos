@@ -1194,6 +1194,11 @@ def main():
     video_parser.add_argument("action", choices=["start", "stop", "status"])
     video_parser.add_argument("--token", default="")
     video_parser.add_argument("--path", type=Path)
+    save_quit_parser = subparsers.add_parser(
+        "save-quit", help="Controller-driven Save/Quit on an explicit paused ALTTP/Oracle instance")
+    save_quit_parser.add_argument("--rom", type=Path, required=True, help="Exact currently loaded ROM")
+    save_quit_parser.add_argument("--timeout", type=float, default=60.0)
+    save_quit_parser.add_argument("--max-frames", type=int, default=1500)
 
     args = parser.parse_args()
     logger = SessionLogger(args.log) if args.log else None
@@ -1210,6 +1215,26 @@ def main():
             print(json.dumps(plan_scene(args.catalog, args.map_id, args.preset), indent=2))
         except (ValueError, KeyError, OSError) as exc:
             print(json.dumps({"ok": False, "error": str(exc)}))
+            sys.exit(1)
+        return
+
+    if args.command == "save-quit":
+        from .bridge import MesenBridge
+        from .save_quit import bind_local_authority, save_quit
+        # Do not enter the general CLI discovery path for a mutating episode.
+        if not args.socket:
+            parser.error("save-quit requires an explicit --socket")
+        try:
+            authorize, authority = bind_local_authority(args.socket, args.rom)
+            bridge = MesenBridge(socket_path=args.socket, auto_reconnect=False, max_retries=0)
+            result = save_quit(bridge, args.rom, endpoint=args.socket, authorize=authorize,
+                               timeout=args.timeout, max_frames=args.max_frames)
+            result["authority"] = authority
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            result = {"schema": "mesen.save-quit.v1", "ok": False,
+                      "phase": "authority", "error": str(exc)}
+        print(json.dumps(result, indent=2))
+        if not result["ok"]:
             sys.exit(1)
         return
 

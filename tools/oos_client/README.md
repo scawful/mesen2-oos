@@ -79,6 +79,38 @@ closer to a door is not door-traversal evidence. Object catalog names describe
 vanilla objects; hacks may reuse their art or behavior. Overlays show anchors and
 render bounds, not live collision footprints.
 
+## Save and Quit through the game
+
+On your own paused ALTTP/Oracle test instance, run:
+
+```sh
+python3 tools/oos_client/mesen2_client.py --socket /tmp/my-test.sock save-quit \
+  --rom /absolute/exact-loaded.sfc > /absolute/save-quit-result.json
+```
+
+The command checks the existing socket status, live PID/start and ROM identity.
+It presses Select, waits until the actual choice command accepts input, selects
+Save and Quit, waits for the choice redraw, and confirms. It must observe game
+module `$17` before title/file select and validate the active SRAM slot's matching
+main/mirror copies and checksum. The JSON includes frames, phase events and the
+live SRAM hash. It leaves the emulator paused; it does not close it, flush its
+profile, write a save file directly, or claim cold-reopen proof.
+
+This command requires an explicit local `--socket`; it never discovers another
+instance. It uses native `FRAME` completion rather than sleeping for estimated
+frames. A different message layout or unsupported emulator fails with a receipt.
+The default bounds are 1,500 frames and 60 seconds, plus at most four one-second
+cleanup requests after failure. Keep the first failure receipt and fix the
+reported prerequisite before a separate retry.
+
+Agents run the same command inside their existing owned NativeSession. When
+`OOS_NATIVE_SESSION_REGISTRY` is set, the command also revalidates the existing
+PID/start/socket record before each action. It neither acquires nor releases
+the caller's lease. Library callers use
+`mesen2_client_lib.save_quit.save_quit(bridge, rom, endpoint=..., authorize=...)`
+with their current ownership callback. A normal human invocation needs no
+private Oracle registry or helper.
+
 ## Scene requests and native video/audio
 
 `scene-plan` resolves an exact hash-verified overworld fixture by map ID and
