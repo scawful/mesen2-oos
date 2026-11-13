@@ -16,6 +16,55 @@ from .cart_sram import read_cart_sram, validate_inverse_checksum
 from .gameplay import _reply, advance_exact
 
 
+def _rom_bytes(rom, address, length):
+    """Read a bounded ROM-backed LoROM pointer, never a WRAM mirror."""
+    bank, offset = address >> 16, address & 0xFFFF
+    if (bank & 0x7F) >= 0x7E or offset < 0x8000 or offset + length > 0x10000:
+        raise ValueError("Save/Quit choice script is outside supported LoROM")
+    pc = (bank & 0x7F) * 0x8000 + (offset & 0x7FFF)
+    if pc + length > len(rom):
+        raise ValueError("Save/Quit choice script exceeds ROM")
+    return rom[pc:pc+length]
+
+
+def _decode_choice_redraw(rom, address):
+    """Decode only the native two-choice arrow script, not general dialogue.
+
+    RenderText_ParseMessage ($0EC4E2) replaces $7F1200 on an arrow move.
+    Arrow scripts copy speed/line/choice commands and expand dictionary words;
+    other parse-time commands or side effects are unsupported here.
+    """
+    decoded = bytearray()
+    for _ in range(256):
+        value = _rom_bytes(rom, address, 1)[0]
+        address += 1
+        if value == 0x7F:
+            decoded.append(value)
+            if decoded[-2:] != b"\x72\x7f" or decoded.count(0x72) != 1:
+                raise ValueError("Unsupported Save/Quit redraw choice command")
+            return bytes(decoded)
+        if value >= 0x88:
+            entry = 0x0EC703 + (value-0x88)*2
+            first = int.from_bytes(_rom_bytes(rom, entry, 2), "little")
+            end = int.from_bytes(_rom_bytes(rom, entry+2, 2), "little")
+            if not 0 < end-first <= 128:
+                raise ValueError("Unsupported Save/Quit redraw dictionary span")
+            word = _rom_bytes(rom, 0x0E0000 | first, end-first)
+            if any(c >= 0x67 for c in word):
+                raise ValueError("Unsupported command in redraw dictionary word")
+            decoded.extend(word)
+        elif value == 0x7A:
+            decoded.extend((value, _rom_bytes(rom, address, 1)[0]))
+            address += 1
+        elif value < 0x67 or value in (0x74, 0x75, 0x72):
+            decoded.append(value)
+        else:
+            raise ValueError("Unsupported Save/Quit redraw script command")
+        if len(decoded) >= 0x800:
+            break
+    raise ValueError("Save/Quit redraw script has no bounded terminator")
+
+
 def bind_local_authority(endpoint, rom_path):
     """Bind existing public status/PID identity, plus an agent registry if set.
 
@@ -82,6 +131,9 @@ def save_quit(bridge, rom_path, *, endpoint, authorize, timeout=60.0,
                "events": [], "cold_reopen": "not_run"}
     mutated = False
     rom_sha1 = None
+    dialog_contract = None
+    decoded_script = None
+    confirmed = False
 
     def raw(command, params=None, *, limit=None):
         remaining = (deadline - time.monotonic()) if limit is None else limit
@@ -124,25 +176,78 @@ def save_quit(bridge, rom_path, *, endpoint, authorize, timeout=60.0,
     bounded = BoundedBridge()
 
     def observe():
+        nonlocal decoded_script
         before = _reply(bounded, "STATE")
         if before.get("paused") is not True:
             raise ValueError("Save/Quit requires a paused owned instance")
         ram = bounded.read_block(0x7E0000, 0x70)
         dialog = bounded.read_block(0x7E1CD0, 0x24)
         offset = int.from_bytes(dialog[9:11], "little")
+        menu_context = ram[0x10] == 0x0E and ram[0x11] == 0x0B
+        decoded_script = bounded.read_block(0x7F1200, 0x800) if menu_context else None
+        command = (decoded_script[offset]
+                   if decoded_script is not None and offset < 0x800 else None)
         ready = (dialog[8] == 1 and dialog[4] == 3 and dialog[0x19] == 0
-                 and offset < 0x800
-                 and bounded.read_block(0x7F1200+offset, 1)[0] in (0x68, 0x6F, 0x71, 0x72))
+                 and command in (0x68, 0x6F, 0x71, 0x72))
         after = _reply(bounded, "STATE")
         if after.get("paused") is not True or after.get("frame") != before.get("frame"):
             raise ValueError("Instance advanced during Save/Quit observation")
         result = {"frame": after["frame"], "module": ram[0x10], "submodule": ram[0x11],
                   "indoors": ram[0x1B], "hero": ram[0x5D],
                   "message": int.from_bytes(dialog[0x20:0x22], "little"),
-                  "choice": dialog[0x18], "choice_ready": ready}
+                  "choice": dialog[0x18], "choice_ready": ready,
+                  "stream_offset": offset, "choice_command": command}
+        # $1CF0 is an initial message ID, then an arrow-redraw message scratch.
+        # Preserve the old receipt key, but never treat it as a permanent ID.
+        result["message_scratch"] = result["message"]
         receipt["last_state"] = result
         receipt["module17_seen"] |= result["module"] == 0x17
+        if dialog_contract is not None and not receipt["module17_seen"]:
+            if (not menu_context
+                    or result["indoors"] != dialog_contract["indoors"]
+                    or result["hero"] != dialog_contract["hero"]):
+                raise ValueError("Unexpected Save/Quit context after authentication")
+            if not confirmed and (dialog[8] != 1 or dialog[4] != 3):
+                raise ValueError("Unexpected Save/Quit renderer state during redraw")
+            # Confirmation normally closes the authenticated window before
+            # module17. Only the active draw stage still consumes this script.
+            if not confirmed or (dialog[8] == 1 and dialog[4] == 3):
+                token = dialog_contract["initial" if result["choice"] == 0 else "redraw"]
+                if (result["choice"] not in (0, 1)
+                        or result["message"] != token["message"]
+                        or not decoded_script.startswith(token["bytes"])):
+                    raise ValueError("Authenticated Save/Quit choice script changed")
+                if ready and (offset != token["offset"] or command != 0x72):
+                    raise ValueError("Authenticated Save/Quit choice command moved")
         return result
+
+    def authenticate_dialog(state):
+        nonlocal dialog_contract
+        offset = state["stream_offset"]
+        if state["choice_command"] != 0x72 or decoded_script[offset+1:offset+2] != b"\x7f":
+            raise ValueError("Save/Quit requires the native two-choice script")
+        initial = decoded_script[:offset+2]
+        # Native RenderText_Choose1or2 ($0ECF72) selects its redraw message
+        # through $0ECF6E. Bind that ROM table and the runtime ROM pointer,
+        # rather than accepting message $000A in every dialog.
+        if (_rom_bytes(blob, 0x0ECA19, 2) != b"\x72\xcf"
+                or _rom_bytes(blob, 0x0ECFBB, 3) != b"\xbd\x6e\xcf"):
+            raise ValueError("Unsupported Save/Quit two-choice dispatch")
+        redraw_id = int.from_bytes(_rom_bytes(blob, 0x0ECF70, 2), "little")
+        pointer = int.from_bytes(bounded.read_block(0x7F71C0+redraw_id*3, 3), "little")
+        redraw = _decode_choice_redraw(blob, pointer)
+        final = _reply(bounded, "STATE")
+        if final.get("paused") is not True or final.get("frame") != state["frame"]:
+            raise ValueError("Instance advanced during dialog authentication")
+        dialog_contract = {
+            "indoors": state["indoors"], "hero": state["hero"],
+            "initial": {"message": message_id, "bytes": initial, "offset": offset},
+            "redraw": {"message": redraw_id, "bytes": redraw, "offset": len(redraw)-2}}
+        receipt["dialog_contract"] = {
+            "choice_command": 0x72, "initial_message": message_id,
+            "initial_offset": offset, "initial_script_sha256": hashlib.sha256(initial).hexdigest(),
+            "redraw_message": redraw_id, "redraw_source": f"0x{pointer:06X}",
+            "redraw_offset": len(redraw)-2, "redraw_script_sha256": hashlib.sha256(redraw).hexdigest()}
 
     def step():
         if receipt["frames"] >= max_frames:
@@ -165,7 +270,8 @@ def save_quit(bridge, rom_path, *, endpoint, authorize, timeout=60.0,
         receipt["phase"] = phase
         state = observe()
         while not predicate(state):
-            if state["module"] == 0x0E and (state["submodule"] != 0x0B or state["message"] != message_id):
+            if (dialog_contract is None and state["module"] == 0x0E
+                    and (state["submodule"] != 0x0B or state["message"] != message_id)):
                 raise ValueError("Unexpected dialog while waiting for Save/Quit")
             state = step()
         receipt["events"].append({"phase": phase, **state})
@@ -174,6 +280,11 @@ def save_quit(bridge, rom_path, *, endpoint, authorize, timeout=60.0,
     try:
         if not callable(authorize) or not endpoint or bridge.socket_path != endpoint:
             raise ValueError("Explicit matching endpoint and ownership callback required")
+        # MesenBridge retries inside send_command, below the ownership checks.
+        # Refuse that caller policy rather than silently modifying its client.
+        if (getattr(bridge, "_auto_reconnect", False)
+                and getattr(bridge, "_max_retries", 0) > 0):
+            raise ValueError("Save/Quit requires a non-retrying transport")
         if not 0 < timeout <= 120 or type(max_frames) is not int or not 1 <= max_frames <= 3600:
             raise ValueError("Require timeout in (0,120] and max_frames in 1..3600")
         if type(message_id) is not int or not 0 <= message_id <= 0xFFFF:
@@ -197,10 +308,13 @@ def save_quit(bridge, rom_path, *, endpoint, authorize, timeout=60.0,
         state = wait(ready, "choice_ready_before_down")
         if state["choice"] != 0:
             raise ValueError("Save/Quit did not start at Continue")
+        authenticate_dialog(state)
         press("down")
+        ready = lambda s: s["module"] == 0x0E and s["submodule"] == 0x0B and s["choice_ready"]
         state = wait(ready, "choice_ready_before_confirm")
         if state["choice"] != 1:
             raise ValueError("Save and Quit choice was not selected")
+        confirmed = True
         press("a")
         wait(lambda s: receipt["module17_seen"] and s["module"] in (0, 1), "save_to_title")
         same_rom()

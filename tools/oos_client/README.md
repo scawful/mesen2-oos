@@ -89,8 +89,11 @@ python3 tools/oos_client/mesen2_client.py --socket /tmp/my-test.sock save-quit \
 ```
 
 The command checks the existing socket status, live PID/start and ROM identity.
-It presses Select, waits until the actual choice command accepts input, selects
-Save and Quit, waits for the choice redraw, and confirms. It must observe game
+It presses Select, authenticates the initial Save/Quit message and decoded
+two-choice script, and waits until its actual choice command accepts input.
+It selects Save and Quit, waits for the exact ROM-backed arrow-redraw script
+to accept input, and confirms. The renderer reuses `$1CF0` while redrawing;
+that scratch value is not treated as a permanent message ID. It must observe game
 module `$17` before title/file select and validate the active SRAM slot's matching
 main/mirror copies and checksum. The JSON includes frames, phase events and the
 live SRAM hash. It leaves the emulator paused; it does not close it, flush its
@@ -110,6 +113,12 @@ the caller's lease. Library callers use
 `mesen2_client_lib.save_quit.save_quit(bridge, rom, endpoint=..., authorize=...)`
 with their current ownership callback. A normal human invocation needs no
 private Oracle registry or helper.
+Library callers must supply a non-retrying transport, such as
+`MesenBridge(socket_path=endpoint, auto_reconnect=False, max_retries=0)`.
+A retry-enabled maintained bridge is refused without changing its caller's
+configuration: replaying `FRAME` or `INPUT` after a lost reply is unsafe.
+The current script profile supports the native `Choose1or2` command (`$72`)
+and its ROM-backed arrow scripts; other choice handlers fail explicitly.
 
 ## Scene requests and native video/audio
 

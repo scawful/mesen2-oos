@@ -1,6 +1,7 @@
 """Offline Save/Quit lifecycle tests; no native emulator proof is inferred."""
 import hashlib
 import json
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -10,6 +11,20 @@ import pytest
 from mesen2_client_lib import cli
 from mesen2_client_lib import save_quit as sq
 from mesen2_client_lib.cart_sram import apply_inverse_checksum
+
+
+def synthetic_choice_rom():
+    rom = bytearray(0x80000)
+    pc = lambda address: (address >> 16)*0x8000 + (address & 0x7FFF)
+    def put(address, data):
+        rom[pc(address):pc(address)+len(data)] = data
+    put(0x0ECA19, b"\x72\xcf")
+    put(0x0ECFBB, b"\xbd\x6e\xcf")
+    put(0x0ECF6E, b"\x09\x00\x0a\x00")
+    put(0x0EC707, b"\xce\xc7\xd0\xc7")
+    put(0x0EC7CE, b"\x59\x59")
+    put(0x0E8000, b"\x7a\x00\x74\x8a\x75\x44\x72\x7f")
+    return bytes(rom)
 
 
 class MenuBridge:
@@ -33,6 +48,24 @@ class MenuBridge:
         self.start_module = 9
         self.paused = True
         self.changed_rom = False
+        self.redraw_frames = 44
+        self.replace_redraw = False
+        self.wrong_redraw_command = False
+        self.redraw_module = 0x0E
+        self.redraw_submodule = 0x0B
+        self.initial_message = 0x186
+        self.redraw_message = 0xA
+
+    def script(self):
+        initial = b"\x59"*0x20 + b"\x72\x7f"
+        if self.choice == 0:
+            return initial.ljust(0x800, b"\x00")
+        redraw = bytearray(b"\x7a\x00\x74\x59\x59\x75\x44\x72\x7f")
+        if self.replace_redraw:
+            redraw[6] = 0x45
+        if self.wrong_redraw_command:
+            redraw[7] = 0x71
+        return (bytes(redraw) + initial[len(redraw):]).ljust(0x800, b"\x00")
 
     @property
     def ready(self):
@@ -73,18 +106,22 @@ class MenuBridge:
                 data = self.sram()[address:address+size].hex()
             elif address == 0x7E0000:
                 ram = bytearray(size)
-                ram[0x10] = self.module
-                ram[0x11] = 0x0B if self.phase == "menu" else 0
+                ram[0x10] = self.redraw_module if self.phase == "menu" and self.choice else self.module
+                ram[0x11] = (self.redraw_submodule if self.choice else 0x0B) if self.phase == "menu" else 0
                 data = ram.hex()
             elif address == 0x7E1CD0:
                 ram = bytearray(size)
-                ram[4], ram[8], ram[9] = 3, 1, 0x20
+                ram[4], ram[8] = 3, 1
+                offset = 0x20 if self.choice == 0 else (7 if self.ready else 0)
+                ram[9:11] = offset.to_bytes(2, "little")
                 ram[0x18], ram[0x19] = self.choice, 0 if self.ready else 2
-                message = 0x123 if self.wrong_dialog else 0x186
+                message = 0x123 if self.wrong_dialog else (self.redraw_message if self.choice else self.initial_message)
                 ram[0x20:0x22] = message.to_bytes(2, "little")
                 data = ram.hex()
-            elif address == 0x7F1220:
-                data = "72"
+            elif address == 0x7F1200:
+                data = self.script()[:size].hex()
+            elif address == 0x7F71C0+0xA*3:
+                data = bytes.fromhex("00800e").hex()
             else:
                 raise AssertionError(hex(address))
         elif command == "INPUT":
@@ -96,7 +133,7 @@ class MenuBridge:
                 self.phase, self.ready_at = "menu", self.frame+9
             elif button == "down":
                 assert self.ready and self.choice == 0, "Down before input-ready"
-                self.choice, self.ready_at = 1, self.frame+6
+                self.choice, self.ready_at = 1, self.frame+self.redraw_frames
             elif button == "a":
                 assert self.ready and self.choice == 1, "A before choice redraw finished"
                 self.phase = "title" if self.skip_save_module else "saving"
@@ -118,7 +155,7 @@ class MenuBridge:
 @pytest.fixture
 def setup(tmp_path):
     path = tmp_path/"exact.sfc"
-    path.write_bytes(b"exact synthetic test ROM")
+    path.write_bytes(synthetic_choice_rom())
     bridge = MenuBridge(path.read_bytes())
     return bridge, path
 
@@ -144,6 +181,99 @@ def test_waits_for_both_ready_states_and_validates_active_slot(setup, slot):
     assert bridge.buttons[1][1] >= 109
     assert bridge.buttons[2][1] >= bridge.buttons[1][1]+6
     assert not any(cmd in ("WRITE", "WRITEBLOCK", "LOADSTATE", "SAVESTATE", "RESUME") for cmd, _, _ in bridge.commands)
+
+
+def test_native_message_scratch_redraw_waits_for_authenticated_script(setup):
+    result = run(setup)
+    assert result["ok"], result
+    before, after = result["events"][:2]
+    assert (before["message"], before["choice"]) == (0x186, 0)
+    assert (after["message_scratch"], after["choice"]) == (0xA, 1)
+    down = next(frame for button, frame, _ in setup[0].buttons if button == "down")
+    confirm = next(frame for button, frame, _ in setup[0].buttons if button == "a")
+    assert confirm >= down+44
+    assert result["dialog_contract"]["choice_command"] == 0x72
+    assert result["dialog_contract"]["redraw_offset"] == 7
+    assert result["dialog_contract"]["initial_script_sha256"] != result["dialog_contract"]["redraw_script_sha256"]
+
+
+def test_redraw_message_is_not_accepted_as_initial_dialog_identity(setup):
+    setup[0].initial_message = 0xA
+    result = run(setup)
+    assert not result["ok"] and "Unexpected dialog" in result["error"]
+    assert [button for button, _, _ in setup[0].buttons] == ["select"]
+
+
+def test_other_message_cannot_reuse_the_authenticated_redraw_script(setup):
+    setup[0].redraw_message = 0xB
+    result = run(setup)
+    assert not result["ok"] and "script changed" in result["error"]
+    assert "a" not in [button for button, _, _ in setup[0].buttons]
+
+
+@pytest.mark.parametrize("address", [0x0ECA19, 0x0E8000])
+def test_unsupported_rom_dispatch_or_redraw_side_effect_is_refused_before_down(setup, address):
+    server, path = setup
+    rom = bytearray(path.read_bytes())
+    pc = (address >> 16)*0x8000 + (address & 0x7FFF)
+    rom[pc] = 0x6B  # Different handler, or an unsupported window-type command.
+    path.write_bytes(rom)
+    server.rom = bytes(rom)
+    result = run(setup)
+    assert not result["ok"] and "Unsupported Save/Quit" in result["error"]
+    assert [button for button, _, _ in server.buttons] == ["select"]
+
+
+@pytest.mark.parametrize("fault", ["replace_redraw", "wrong_redraw_command"])
+def test_replaced_script_is_refused_even_with_expected_redraw_message(setup, fault):
+    setattr(setup[0], fault, True)
+    result = run(setup)
+    assert not result["ok"] and "script changed" in result["error"]
+    assert result["last_state"]["message"] == 0xA
+    assert "a" not in [button for button, _, _ in setup[0].buttons]
+
+
+@pytest.mark.parametrize("field,value", [("redraw_module", 7), ("redraw_submodule", 2)])
+def test_changed_context_during_redraw_is_not_confirmed(setup, field, value):
+    setattr(setup[0], field, value)
+    result = run(setup)
+    assert not result["ok"] and "context after authentication" in result["error"]
+    assert "a" not in [button for button, _, _ in setup[0].buttons]
+
+
+def test_default_retrying_transport_is_refused_without_changing_caller_policy(setup):
+    from mesen2_client_lib.bridge import MesenBridge
+    bridge = MesenBridge(socket_path=setup[0].socket_path, auto_reconnect=True, max_retries=2)
+    with mock.patch.object(bridge, "send_command") as send:
+        result = sq.save_quit(bridge, setup[1], endpoint=bridge.socket_path, authorize=lambda _: True)
+    assert not result["ok"] and "non-retrying transport" in result["error"]
+    send.assert_not_called()
+    assert bridge._auto_reconnect is True and bridge._max_retries == 2
+
+
+def test_real_no_retry_transport_does_not_replay_a_completed_frame_after_lost_reply(setup, monkeypatch):
+    from mesen2_client_lib import bridge as transport
+    server, path = setup
+    class Connection:
+        def sendall(self, data):
+            request = json.loads(data)
+            command = request.pop("type")
+            self.result = server.send_command(command, request)
+            self.lost = command == "FRAME"
+        def recv(self, size):
+            if self.lost:
+                raise socket.timeout("reply lost after native frame completed")
+            return (json.dumps(self.result)+"\n").encode()
+        def close(self):
+            pass
+    monkeypatch.setattr(transport, "_connect_socket", lambda *args: Connection())
+    bridge = transport.MesenBridge(socket_path=server.socket_path, auto_reconnect=False, max_retries=0)
+    result = sq.save_quit(bridge, path, endpoint=server.socket_path, authorize=lambda _: True)
+    assert not result["ok"] and "No response" in result["error"]
+    assert sum(command == "FRAME" for command, _, _ in server.commands) == 1
+    assert server.frame == 101  # The missing reply never causes a second step.
+    assert result["cleanup"] == "input_released_and_paused"
+    assert "a" not in [button for button, _, _ in server.buttons]
 
 
 @pytest.mark.parametrize("module", (0, 1, 0x0C, 0x0E, 0x17))
