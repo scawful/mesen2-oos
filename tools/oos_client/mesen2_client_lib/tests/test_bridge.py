@@ -638,6 +638,8 @@ class TestDrawPath:
 
 
 class TestPauseAcknowledgement:
+    CPU = {"success": True, "data": {"pc": "0x008000", "flags": "0x34", "consoleType": 1}}
+
     @pytest.fixture
     def bridge(self):
         from unittest.mock import Mock
@@ -653,48 +655,106 @@ class TestPauseAcknowledgement:
     def test_waits_for_delayed_positive_paused_state(self, bridge, monkeypatch):
         monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda _: None)
         bridge.send_command.side_effect = [
+            self.CPU,
             {"success": True},
-            {"success": True, "data": {"paused": False}},
-            {"success": True, "data": '{"paused":true}'},
+            {"success": True, "data": {"paused": False, "debugging": True}},
+            {"success": True, "data": '{"paused":true,"debugging":true}'},
         ]
         assert bridge.pause(wait=True) is True
-        assert [c.args[0] for c in bridge.send_command.call_args_list] == ["PAUSE", "STATE", "STATE"]
+        assert [c.args[0] for c in bridge.send_command.call_args_list] == ["CPU", "PAUSE", "STATE", "STATE"]
         assert all(0 < c.kwargs["timeout"] <= 3 for c in bridge.send_command.call_args_list)
 
     @pytest.mark.parametrize("response", [
         {"success": False}, {"success": True, "data": {}},
-        {"success": True, "data": {"paused": "true"}},
+        {"success": True, "data": {"paused": "true", "debugging": True}},
+        {"success": True, "data": {"paused": True}},
+        {"success": True, "data": {"paused": True, "debugging": "true"}},
         {"success": True, "data": "invalid-json"},
     ])
     def test_bad_state_fails_without_more_polling(self, bridge, response):
-        bridge.send_command.side_effect = [{"success": True}, response]
+        bridge.send_command.side_effect = [self.CPU, {"success": True}, response]
+        assert bridge.pause(wait=True) is False
+        assert bridge.send_command.call_count == 3
+
+    def test_failed_pause_does_not_poll(self, bridge):
+        bridge.send_command.side_effect = [self.CPU, {"success": False}]
         assert bridge.pause(wait=True) is False
         assert bridge.send_command.call_count == 2
 
-    def test_failed_pause_does_not_poll(self, bridge):
-        bridge.send_command.return_value = {"success": False}
+    @pytest.mark.parametrize("response", [
+        {"success": False, "error": "No ROM loaded"},
+        {"success": True, "data": {}},
+        {"success": True, "data": "invalid-json"},
+        {"success": True, "data": {"pc": "invalid", "flags": "0x34", "consoleType": 1}},
+        {"success": True, "data": {"pc": "0x1000000", "flags": "0x34", "consoleType": 1}},
+        {"success": True, "data": {"pc": "0x8000", "flags": "0x100", "consoleType": 1}},
+        {"success": True, "data": {"pc": 0x8000, "flags": "0x34", "consoleType": 1}},
+        {"success": True, "data": {"pc": "0x8000", "flags": "0x34", "consoleType": True}},
+    ])
+    def test_bad_debugger_initialization_never_pauses(self, bridge, response):
+        bridge.send_command.return_value = response
         assert bridge.pause(wait=True) is False
         assert bridge.send_command.call_count == 1
+        assert bridge.send_command.call_args.args == ("CPU",)
+
+    def test_memory_read_does_not_replace_confirmed_pause_owner(self, bridge):
+        state = {"debugger": False, "paused": False}
+        def send(command, params=None, **kwargs):
+            if command in ("CPU", "READBLOCK") and not state["debugger"]:
+                # Installed InitDebugger transfers ordinary pause to a pending
+                # debugger Step. A later PAUSE must acknowledge this owner.
+                state.update(debugger=True, paused=False)
+            if command == "CPU":
+                return self.CPU
+            if command == "PAUSE":
+                state["paused"] = True
+                return {"success": True}
+            if command == "READBLOCK":
+                return {"success": True, "data": "00"}
+            return {"success": True, "data": {"paused": state["paused"], "debugging": state["debugger"]}}
+        bridge.send_command.side_effect = send
+        assert bridge.pause(wait=True) is True
+        assert bridge.read_block(0x7E0000, 1) == b"\0"
+        assert state == {"debugger": True, "paused": True}
 
     def test_timeout_does_not_accept_late_positive_state(self, bridge, monkeypatch):
         now = [0.0]
         monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
         def send(command, **kwargs):
+            if command == "CPU":
+                return self.CPU
             if command == "STATE":
                 now[0] = 1.0
-                return {"success": True, "data": {"paused": True}}
+                return {"success": True, "data": {"paused": True, "debugging": True}}
             return {"success": True}
         bridge.send_command.side_effect = send
         assert bridge.pause(wait=True, timeout=1) is False
-        assert bridge.send_command.call_count == 2
+        assert bridge.send_command.call_count == 3
+
+    def test_initialization_consumes_the_same_deadline(self, bridge, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
+        def send(command, **kwargs):
+            now[0] = 1.0
+            return self.CPU
+        bridge.send_command.side_effect = send
+        assert bridge.pause(wait=True, timeout=1) is False
+        assert bridge.send_command.call_count == 1
 
     def test_never_pauses_stops_at_deadline(self, bridge, monkeypatch):
         now = [0.0]
         monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
         monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
-        bridge.send_command.side_effect = lambda cmd, **kw: {"success": True, "data": {"paused": False}}
+        bridge.send_command.side_effect = lambda cmd, **kw: self.CPU if cmd == "CPU" else {"success": True, "data": {"paused": False, "debugging": True}}
         assert bridge.pause(wait=True, timeout=.02, interval=.01) is False
-        assert bridge.send_command.call_count == 3
+        assert bridge.send_command.call_count == 4
+
+    def test_ordinary_pause_does_not_count_as_debugger_ack(self, bridge, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+        bridge.send_command.side_effect = lambda cmd, **kw: self.CPU if cmd == "CPU" else {"success": True, "data": {"paused": True, "debugging": False}}
+        assert bridge.pause(wait=True, timeout=.02, interval=.01) is False
 
     @pytest.mark.parametrize("kwargs", [{"timeout": 0}, {"timeout": float("inf")}, {"interval": 0}])
     def test_invalid_bound_has_no_commands(self, bridge, kwargs):

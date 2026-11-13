@@ -622,10 +622,13 @@ class MesenBridge:
 
     def pause(self, *, wait: bool = False, timeout: float = 3.0,
               interval: float = 0.002) -> bool:
-        """Request pause; optionally wait for positive STATE.paused acknowledgement.
+        """Request pause; optionally establish and confirm a debugger-owned pause.
 
-        A PAUSE reply only acknowledges the request. Even confirmed pause does
-        not prove that the game's NMI/input cache has consumed an input change.
+        With wait=True, the read-only CPU command first initializes the debugger.
+        Otherwise a later memory read can replace an acknowledged ordinary pause
+        with a pending debugger pause. Initialization may advance emulation; the
+        guarantee begins at the final positive paused/debugging acknowledgement.
+        This still does not prove that the game's NMI consumed an input change.
         """
         if not wait:
             return self.send_command("PAUSE").get("success", False)
@@ -634,7 +637,32 @@ class MesenBridge:
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("Pause interval must be finite and positive")
         deadline = time.monotonic() + timeout
-        result = self.send_command("PAUSE", timeout=timeout)
+
+        def object_data(result):
+            if result.get("success") is not True:
+                return None
+            data = result.get("data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (TypeError, ValueError):
+                    return None
+            return data if isinstance(data, dict) else None
+
+        cpu = object_data(self.send_command("CPU", timeout=timeout))
+        if cpu is None or type(cpu.get("consoleType")) is not int:
+            return False
+        try:
+            if not isinstance(cpu.get("pc"), str) or not isinstance(cpu.get("flags"), str):
+                return False
+            if not 0 <= int(cpu["pc"], 16) <= 0xFFFFFF or not 0 <= int(cpu["flags"], 16) <= 0xFF:
+                return False
+        except ValueError:
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        result = self.send_command("PAUSE", timeout=remaining)
         if result.get("success") is not True:
             return False
         while time.monotonic() < deadline:
@@ -642,19 +670,13 @@ class MesenBridge:
             if remaining <= 0:
                 return False
             result = self.send_command("STATE", timeout=remaining)
-            if result.get("success") is not True:
-                return False
-            data = result.get("data")
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except (TypeError, ValueError):
-                    return False
-            if not isinstance(data, dict) or type(data.get("paused")) is not bool:
+            data = object_data(result)
+            if (data is None or type(data.get("paused")) is not bool or
+                    type(data.get("debugging")) is not bool):
                 return False
             if time.monotonic() >= deadline:
                 return False
-            if data["paused"]:
+            if data["paused"] and data["debugging"]:
                 return True
             time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
         return False

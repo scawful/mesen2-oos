@@ -33,10 +33,11 @@ def test_stale_cache_then_guarded_advances_and_delayed_pause(client, monkeypatch
     # PAUSE acknowledgement precedes actual pause; first completed tick may
     # still leave the game's NMI cache stale. Every advance stays caller-owned.
     bridge = MesenBridge.__new__(MesenBridge)
+    cpu = {"success": True, "data": {"pc": "0x008000", "flags": "0x34", "consoleType": 1}}
     bridge.send_command = Mock(side_effect=[
-        {"success": True}, {"success": True, "data": {"paused": False}},
-        {"success": True, "data": {"paused": True}},
-        {"success": True}, {"success": True, "data": {"paused": True}},
+        cpu, {"success": True}, {"success": True, "data": {"paused": False, "debugging": True}},
+        {"success": True, "data": {"paused": True, "debugging": True}},
+        cpu, {"success": True}, {"success": True, "data": {"paused": True, "debugging": True}},
     ])
     monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda _: None)
     client.bridge.read_block.side_effect = [b'\x08', b'\x08', b'\x80']
@@ -48,7 +49,7 @@ def test_stale_cache_then_guarded_advances_and_delayed_pause(client, monkeypatch
     assert len(advances) == 2
     assert client.bridge.read_block.call_count == 3
     client.read_address.assert_not_called()
-    assert [c.args[0] for c in bridge.send_command.call_args_list] == ['PAUSE', 'STATE', 'STATE', 'PAUSE', 'STATE']
+    assert [c.args[0] for c in bridge.send_command.call_args_list] == ['CPU', 'PAUSE', 'STATE', 'STATE', 'CPU', 'PAUSE', 'STATE']
 
 
 @pytest.mark.parametrize("cap", [0, 1, 4])

@@ -53,6 +53,18 @@ while that legacy level remains set.
 python3 mesen2_client.py --socket /tmp/mesen2-owned.sock --item-profile legacy items portalrod
 ```
 
+## Confirmed pause for owned debug reads
+
+`MesenBridge.pause(wait=True, timeout=3.0)` initializes the debugger through the
+read-only `CPU` command, requests `PAUSE`, and waits for both `STATE.paused` and
+`STATE.debugging`. All commands share one deadline; initialization failure or
+malformed acknowledgements fail without a fallback. Use it only on an owned
+session: initialization can advance emulation before the final acknowledgement.
+It leaves the debugger attached so subsequent memory reads keep the same pause
+owner. The ordinary `pause()` call is unchanged. A confirmed pause does not prove
+that ALTTP has consumed a controller release; use the bounded semantic wait for
+that separate condition.
+
 ## Grounded dungeon captures
 
 Use the existing `capture` command with an explicit owned, paused test instance:
