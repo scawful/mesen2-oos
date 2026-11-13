@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .bridge import MesenBridge
 from .constants import (
@@ -1852,9 +1853,51 @@ class OracleDebugClient:
             return res.get("data")
         return {"error": "Lua execution failed", "bridge_response": res}
 
-    def wait_for_value(self, address: int, value: int, timeout: float = 5.0, interval: float = 0.05) -> bool:
-        """Wait for a memory address to hold a specific value."""
-        import time
+    def wait_for_value(self, address: int, value: int, timeout: float = 5.0,
+                       interval: float = 0.05, *, mask: int | None = None,
+                       advance: Callable[[], object] | None = None,
+                       max_advances: int | None = None) -> bool:
+        """Wait for a byte value, optionally using bounded caller-owned advances.
+
+        The advanced mode uses strict one-byte block reads. The callback owns
+        input, pause acknowledgement and all health/terrain/frame/time guards;
+        this helper never resumes, writes input mirrors or advances implicitly.
+        Callback exceptions propagate, and an explicit False result stops.
+        """
+        if mask is not None or advance is not None or max_advances is not None:
+            if not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError("Wait timeout must be finite and positive")
+            if not math.isfinite(interval) or interval <= 0:
+                raise ValueError("Wait interval must be finite and positive")
+            if mask is not None and (type(mask) is not int or not 0 <= mask <= 255):
+                raise ValueError("Mask must be a byte")
+            if type(value) is not int or not 0 <= value <= 255:
+                raise ValueError("Expected value must be a byte")
+            if advance is not None:
+                if not callable(advance) or type(max_advances) is not int or max_advances < 0:
+                    raise ValueError("Advance requires a finite nonnegative integer cap")
+            elif max_advances is not None:
+                raise ValueError("max_advances requires an advance callback")
+            effective_mask = 255 if mask is None else mask
+            deadline = time.monotonic() + timeout
+            advances = 0
+            while time.monotonic() < deadline:
+                data = self.bridge.read_block(address, 1)
+                if not isinstance(data, (bytes, bytearray)) or len(data) != 1:
+                    raise RuntimeError("Wait requires an exact one-byte memory read")
+                if time.monotonic() >= deadline:
+                    return False
+                if data[0] & effective_mask == value & effective_mask:
+                    return True
+                if advance is not None:
+                    if advances >= max_advances:
+                        return False
+                    advances += 1
+                    if advance() is False:
+                        return False
+                else:
+                    time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+            return False
         start = time.time()
         while time.time() - start < timeout:
             if self.read_address(address) == value:

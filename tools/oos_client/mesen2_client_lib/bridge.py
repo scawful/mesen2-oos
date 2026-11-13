@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import closing
 import glob
 import json
+import math
 import os
 import errno
 import socket
@@ -619,9 +620,44 @@ class MesenBridge:
             threading.Thread(target=_detach, daemon=True).start()
         return ok
 
-    def pause(self) -> bool:
-        result = self.send_command("PAUSE")
-        return result.get("success", False)
+    def pause(self, *, wait: bool = False, timeout: float = 3.0,
+              interval: float = 0.002) -> bool:
+        """Request pause; optionally wait for positive STATE.paused acknowledgement.
+
+        A PAUSE reply only acknowledges the request. Even confirmed pause does
+        not prove that the game's NMI/input cache has consumed an input change.
+        """
+        if not wait:
+            return self.send_command("PAUSE").get("success", False)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Pause timeout must be finite and positive")
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError("Pause interval must be finite and positive")
+        deadline = time.monotonic() + timeout
+        result = self.send_command("PAUSE", timeout=timeout)
+        if result.get("success") is not True:
+            return False
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            result = self.send_command("STATE", timeout=remaining)
+            if result.get("success") is not True:
+                return False
+            data = result.get("data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (TypeError, ValueError):
+                    return False
+            if not isinstance(data, dict) or type(data.get("paused")) is not bool:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            if data["paused"]:
+                return True
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        return False
 
     def resume(self) -> bool:
         result = self.send_command("RESUME")

@@ -635,3 +635,69 @@ class TestDrawPath:
         assert cmd["points"] == "10,10,20,20"
         assert cmd["color"] == "0x00FF00"
         assert cmd["frames"] == "30"
+
+
+class TestPauseAcknowledgement:
+    @pytest.fixture
+    def bridge(self):
+        from unittest.mock import Mock
+        bridge = MesenBridge.__new__(MesenBridge)
+        bridge.send_command = Mock()
+        return bridge
+
+    def test_default_only_acknowledges_request(self, bridge):
+        bridge.send_command.return_value = {"success": True}
+        assert bridge.pause() is True
+        bridge.send_command.assert_called_once_with("PAUSE")
+
+    def test_waits_for_delayed_positive_paused_state(self, bridge, monkeypatch):
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda _: None)
+        bridge.send_command.side_effect = [
+            {"success": True},
+            {"success": True, "data": {"paused": False}},
+            {"success": True, "data": '{"paused":true}'},
+        ]
+        assert bridge.pause(wait=True) is True
+        assert [c.args[0] for c in bridge.send_command.call_args_list] == ["PAUSE", "STATE", "STATE"]
+        assert all(0 < c.kwargs["timeout"] <= 3 for c in bridge.send_command.call_args_list)
+
+    @pytest.mark.parametrize("response", [
+        {"success": False}, {"success": True, "data": {}},
+        {"success": True, "data": {"paused": "true"}},
+        {"success": True, "data": "invalid-json"},
+    ])
+    def test_bad_state_fails_without_more_polling(self, bridge, response):
+        bridge.send_command.side_effect = [{"success": True}, response]
+        assert bridge.pause(wait=True) is False
+        assert bridge.send_command.call_count == 2
+
+    def test_failed_pause_does_not_poll(self, bridge):
+        bridge.send_command.return_value = {"success": False}
+        assert bridge.pause(wait=True) is False
+        assert bridge.send_command.call_count == 1
+
+    def test_timeout_does_not_accept_late_positive_state(self, bridge, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
+        def send(command, **kwargs):
+            if command == "STATE":
+                now[0] = 1.0
+                return {"success": True, "data": {"paused": True}}
+            return {"success": True}
+        bridge.send_command.side_effect = send
+        assert bridge.pause(wait=True, timeout=1) is False
+        assert bridge.send_command.call_count == 2
+
+    def test_never_pauses_stops_at_deadline(self, bridge, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.monotonic", lambda: now[0])
+        monkeypatch.setattr("mesen2_client_lib.bridge.time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+        bridge.send_command.side_effect = lambda cmd, **kw: {"success": True, "data": {"paused": False}}
+        assert bridge.pause(wait=True, timeout=.02, interval=.01) is False
+        assert bridge.send_command.call_count == 3
+
+    @pytest.mark.parametrize("kwargs", [{"timeout": 0}, {"timeout": float("inf")}, {"interval": 0}])
+    def test_invalid_bound_has_no_commands(self, bridge, kwargs):
+        with pytest.raises(ValueError):
+            bridge.pause(wait=True, **kwargs)
+        bridge.send_command.assert_not_called()
