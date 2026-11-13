@@ -328,11 +328,62 @@ class OracleCheats:
         return {int.from_bytes(data[0x26 + i * 2:0x28 + i * 2], "little")
                 for i in range(0x13) if data[0x4C + i] == eid}
 
+    def _entrance_room(self, eid: int) -> int:
+        # Bus addresses. Follow Underworld_LoadEntrance's selected DBR/table,
+        # not populated stale legacy data. Contract: usdasm bank02 D8B3/D99F
+        # and Yaze zelda3/dungeon/entrance_layout.h (legacy/ZScream layouts).
+        def block(address: int, size: int) -> bytes:
+            data = bytes(self.b.read_block(address, size))
+            if len(data) != size:
+                raise CheatsError("Could not read this ROM's entrance loader")
+            return data
+
+        start = 0x02D8B3
+        loader = block(start, 0x02DAD2 - start)
+        expanded = block(0x0FF000, 0x1F)
+
+        def matches(address: int, expected: bytes) -> bool:
+            offset = address - start
+            return loader[offset:offset + len(expected)] == expected
+
+        attributed = (expanded[:2] == b"\x00\x01" or
+                      matches(0x02D99F, b"\x22") or
+                      matches(0x02DA74, b"\xBD\x00\x96"))
+        if attributed:
+            valid = (expanded[:2] == b"\x00\x01" and
+                     matches(0x02D99F, bytes.fromhex("22 08 F0 0F")) and
+                     matches(0x02DACE, bytes.fromhex("22 15 F0 0F")) and
+                     expanded[8:21] == bytes.fromhex("AA 0A 0A A8 E2 20 A9 0F 48 AB C2 20 6B") and
+                     expanded[21:30] == bytes.fromhex("29 0F 85 AA A9 02 48 AB 6B"))
+            # Every table selector in the supported expanded loader must agree.
+            sites = ((0xD9A3, 0xBD, 0x8000), (0xDA1A, 0xB9, 0x8200),
+                     (0xD9AB, 0xBD, 0x8C00), (0xD9B8, 0xBD, 0x8A00),
+                     (0xD9CB, 0xBD, 0x8E00), (0xD9D0, 0xBD, 0x9000),
+                     (0xD9D5, 0xBD, 0x9200), (0xD9E0, 0xBD, 0x9400),
+                     (0xDA74, 0xBD, 0x9600), (0xDA91, 0xBD, 0x9700),
+                     (0xDA96, 0xBD, 0x9800), (0xDA9C, 0xBD, 0x9900),
+                     (0xDAA1, 0xBD, 0x9A00), (0xDAB2, 0xBD, 0x9B00),
+                     (0xDAC2, 0xBD, 0x9C00), (0xD9F0, 0xBD, 0x9D00),
+                     (0xDA7A, 0xBD, 0x9F00), (0xDAAA, 0xBD, 0x9A00),
+                     (0xDABB, 0xBD, 0x9B00), (0xDACB, 0xBD, 0x9C00))
+            sites += tuple((0xDA1A + i * 6, 0xB9, 0x8200 + i) for i in range(1, 8))
+            valid = valid and all(matches(0x020000 | site, bytes([opcode]) + table.to_bytes(2, "little"))
+                                  for site, opcode, table in sites)
+            table = 0x0F8000
+        else:
+            valid = (matches(0x02D8B3, bytes.fromhex("8B 4B AB")) and
+                     matches(0x02D99F, bytes.fromhex("AA 0A 0A A8")) and
+                     matches(0x02D9A3, bytes.fromhex("BD 13 C8")))
+            table = 0x02C813
+        if not valid:
+            raise CheatsError("Unsupported or malformed dungeon entrance loader; refusing stale-table fallback")
+        return int.from_bytes(block(table + eid * 2, 2), "little")
+
     def _entrance_destination(self, entrance: dict) -> tuple[int, int]:
         eid = hexint(entrance["id"])
         if not 0 <= eid < 0x85:
             raise CheatsError("Entrance must be between $00 and $84")
-        room = self.r16(0x02C813 + eid * 2)
+        room = self._entrance_room(eid)
         exit_area = None if self._uses_cached_exit(room) else self._exit_area(room)
         # The exit table's unused rows also read room $0000 / area $00, so a room $0000
         # match is only a last resort after the door and hole tables.

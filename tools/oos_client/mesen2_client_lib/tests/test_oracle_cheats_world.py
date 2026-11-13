@@ -8,6 +8,10 @@ from mesen2_client_lib import oracle_cheats as oc
 class MemoryBridge:
     def __init__(self, world=0):
         self.memory = {}
+        # This fixture models the native legacy entrance loader explicitly.
+        for address, raw in ((0x02D8B3, bytes.fromhex("8B 4B AB")),
+                             (0x02D99F, bytes.fromhex("AA 0A 0A A8 BD 13 C8"))):
+            self.memory.update((address + i, value) for i, value in enumerate(raw))
         self.writes = []
         self.loaded_worlds = []
         self.saved = []
