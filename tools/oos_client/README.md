@@ -65,6 +65,23 @@ owner. The ordinary `pause()` call is unchanged. A confirmed pause does not prov
 that ALTTP has consumed a controller release; use the bounded semantic wait for
 that separate condition.
 
+## Caller-controlled entrance reload
+
+Owned exact-frame callers can prepare an entrance reload without resuming:
+
+```python
+cheats.warp_entrance(0x29, method="reload", wait=False, auto_resume=False)
+```
+
+This library option requires a successful `STATE` reply with both `paused` and
+`debugging` exactly true, checked again immediately before the existing write
+batch. It refuses other methods or `wait=True` before setup writes. It uses the
+same ROM loader validation and writer, but never resumes or waits for loading;
+the result reports `execution: paused_setup`. The caller owns ROM identity,
+expected destination, exact frame advances, bounds and completion checks. A
+failure leaves execution under caller control. The default `auto_resume=True`
+keeps the existing warp behavior; no CLI option is added.
+
 ## Grounded dungeon captures
 
 Use the existing `capture` command with an explicit owned, paused test instance:

@@ -252,15 +252,28 @@ class OracleCheats:
         data = res.get("data", {}) if isinstance(res, dict) else {}
         return bool(isinstance(data, dict) and data.get("paused"))
 
+    def _require_paused_debugger(self) -> None:
+        response = self.b.send_command("STATE")
+        data = response.get("data") if isinstance(response, dict) else None
+        if (not isinstance(response, dict) or response.get("success") is not True
+                or response.get("error")
+                or not isinstance(data, dict) or data.get("paused") is not True
+                or data.get("debugging") is not True):
+            raise CheatsError("Caller-controlled reload requires a confirmed paused debugger")
+
     def _require_idle(self) -> GameState:
         s = self.state()
         if s.module not in PLAY_MODULES or s.submodule != 0:
             raise CheatsError(f"needs normal play (module $07/$09/$0B, submodule 0); now {s.describe()}")
         return s
 
-    def _poke(self, writes: list[tuple[int, int]]) -> None:
+    def _poke(self, writes: list[tuple[int, int]], *, require_paused_debugger: bool = False) -> None:
         """Write a batch while paused so no frame sees half of it."""
-        was_paused = self._is_paused()
+        if require_paused_debugger:
+            self._require_paused_debugger()
+            was_paused = True
+        else:
+            was_paused = self._is_paused()
         if not was_paused:
             self.b.pause()
         try:
@@ -411,7 +424,15 @@ class OracleCheats:
         return [(SAVED_WORLD, world), (WORLD_FLAG, int(world != 0))]
 
     def warp_entrance(self, query: str | int, method: str = "auto", wait: bool = True,
-                      modules: tuple[int, ...] = (MOD_DUNGEON, MOD_MESSAGE)) -> dict:
+                      modules: tuple[int, ...] = (MOD_DUNGEON, MOD_MESSAGE), *,
+                      auto_resume: bool = True) -> dict:
+        """Reload setup can remain paused for caller-owned exact frame advances."""
+        if type(auto_resume) is not bool:
+            raise CheatsError("auto_resume must be a boolean")
+        if not auto_resume:
+            if method != "reload" or wait is not False:
+                raise CheatsError("auto_resume=False requires method='reload', wait=False")
+            self._require_paused_debugger()
         entrance = find_entrance(self.warps, f"0x{query:02X}" if isinstance(query, int) else str(query))
         eid = hexint(entrance["id"])
         s = self._require_idle()
@@ -420,7 +441,7 @@ class OracleCheats:
         room, destination = self._entrance_destination(entrance)
         changes_world = destination < 0x80 and (destination & 0x40) != self.r(SAVED_WORLD)
         steps: list[str] = []
-        resume_after = self._is_paused()
+        resume_after = self._is_paused() if auto_resume else False
         if resume_after:
             self.b.resume()
         try:
@@ -450,12 +471,15 @@ class OracleCheats:
                             (MODULE, 0x0F)])
             elif method == "reload":
                 self._poke(self._world_writes(destination) + [(ENTRANCE, eid), (ENTRANCE + 1, 0), (CONTINUE_FLAG, 1), (RESPAWN_FLAG, 0),
-                            (INDOORS, 1), (SUBMODULE, 0), (SUBSUB, 0), (MODULE, 0x05)])
+                            (INDOORS, 1), (SUBMODULE, 0), (SUBSUB, 0), (MODULE, 0x05)],
+                           require_paused_debugger=not auto_resume)
             else:
                 raise CheatsError(f"unknown warp method '{method}'")
             steps.append(f"entrance 0x{eid:02X} via {method}")
             result = {"ok": True, "entrance": entrance["id"], "label": entrance["label"], "method": method,
                       "steps": steps, "expected_room": f"0x{room:04X}" if room is not None else None}
+            if not auto_resume:
+                result["execution"] = "paused_setup"
             if wait:
                 landed = self.wait_play(modules)
                 if landed is None:

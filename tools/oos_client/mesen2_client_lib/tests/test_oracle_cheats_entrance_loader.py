@@ -110,3 +110,143 @@ def test_invalid_public_entrance_refuses_before_reads(eid):
         entrance_cheats(bridge)._entrance_destination({"id": eid})
     assert bridge.reads == []
     assert bridge.writes == []
+
+
+class PausedReloadBridge(EntranceROMBridge):
+    """Actual loader bytes plus paused WRAM IO; never connects to Mesen."""
+    def __init__(self):
+        super().__init__(expanded=True)
+        self.memory.update({0x7E0010:7,0x7E001B:1})
+        self.paused=True;self.debugging=True;self.controls=[];self.states=[]
+        self.state_calls=0;self.attempts=[];self.fail_write_at=None
+
+    def read_memory(self,address):return self.memory.get(address,0)
+
+    def read_memory16(self,address):
+        return self.read_memory(address)|(self.read_memory(address+1)<<8)
+
+    def write_memory(self,address,value):
+        assert self.paused
+        self.attempts.append((address,value))
+        if len(self.attempts)==self.fail_write_at:return False
+        self.writes.append((address,value));self.memory[address]=value;return True
+
+    def send_command(self,command):
+        assert command=='STATE';self.state_calls+=1
+        if self.states:
+            state=self.states.pop(0)
+            if isinstance(state,Exception):raise state
+            return state
+        return {'success':True,'data':{'paused':self.paused,'debugging':self.debugging}}
+
+    def pause(self):self.controls.append('pause');self.paused=True;return True
+
+    def resume(self):self.controls.append('resume');self.paused=False;return True
+
+
+def paused_reload_cheats():
+    bridge=PausedReloadBridge();cheats=entrance_cheats(bridge)
+    cheats._warps={'entrances':[],'areas':[]}
+    cheats.wait_play=Mock(side_effect=AssertionError('Caller owns exact frame advances'))
+    return bridge,cheats
+
+
+EXPECTED_RELOAD29=[(0x7E010E,0x29),(0x7E010F,0),(0x7E010A,1),
+                   (0x7E04AA,0),(0x7E001B,1),(0x7E0011,0),
+                   (0x7E00B0,0),(0x7E0010,5)]
+
+
+def test_paused_reload29_uses_same_eight_writes_without_resume_or_wait():
+    bridge,cheats=paused_reload_cheats()
+    result=cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert bridge.writes==EXPECTED_RELOAD29 and bridge.controls==[]
+    assert bridge.paused and bridge.debugging and bridge.state_calls==2
+    assert result['ok'] and result['method']=='reload' and result['expected_room']=='0x0090'
+    assert result['execution']=='paused_setup' and 'state' not in result
+    cheats.wait_play.assert_not_called()
+
+
+def test_default_reload_preserves_existing_resume_pause_and_writer():
+    bridge,cheats=paused_reload_cheats()
+    result=cheats.warp_entrance(0x29,method='reload',wait=False)
+    assert bridge.writes==EXPECTED_RELOAD29
+    assert bridge.controls==['resume','pause','resume','pause'] and bridge.paused
+    assert 'execution' not in result
+    cheats.wait_play.assert_not_called()
+
+
+@pytest.mark.parametrize('method,wait',[('auto',False),('door',False),('reload',True),('reload',0)])
+def test_paused_reload_rejects_unsupported_combinations_before_io(method,wait):
+    bridge,cheats=paused_reload_cheats()
+    with pytest.raises(CheatsError,match='requires method'):
+        cheats.warp_entrance(0x29,method=method,wait=wait,auto_resume=False)
+    assert not bridge.writes and not bridge.reads and not bridge.controls and bridge.state_calls==0
+
+
+@pytest.mark.parametrize('value',[0,1,None,'false'])
+def test_reload_auto_resume_requires_explicit_bool(value):
+    bridge,cheats=paused_reload_cheats()
+    with pytest.raises(CheatsError,match='must be a boolean'):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=value)
+    assert not bridge.writes and bridge.state_calls==0
+
+
+@pytest.mark.parametrize('state',[
+    None,{}, {'success':False,'error':'No ROM loaded'},
+    {'success':True,'data':None}, {'success':True,'data':[]},
+    {'success':True,'data':{'paused':False,'debugging':True}},
+    {'success':True,'data':{'paused':True,'debugging':False}},
+    {'success':True,'data':{'paused':True}},
+    {'success':True,'data':{'paused':1,'debugging':True}},
+    {'success':1,'data':{'paused':True,'debugging':True}},
+    {'success':True,'error':'conflicting failure','data':{'paused':True,'debugging':True}},
+])
+def test_paused_reload_refuses_running_malformed_or_unowned_state_before_writes(state):
+    bridge,cheats=paused_reload_cheats();bridge.states=[state]
+    with pytest.raises(CheatsError,match='confirmed paused debugger'):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert not bridge.writes and not bridge.controls and not bridge.reads
+
+
+def test_paused_reload_rechecks_actual_state_immediately_before_batch():
+    bridge,cheats=paused_reload_cheats()
+    bridge.states=[{'success':True,'data':{'paused':True,'debugging':True}},
+                   {'success':True,'data':{'paused':False,'debugging':True}}]
+    with pytest.raises(CheatsError,match='confirmed paused debugger'):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert not bridge.writes and not bridge.controls and bridge.state_calls==2
+
+
+def test_paused_reload_unknown_loader_refuses_before_writes():
+    bridge,cheats=paused_reload_cheats();bridge.put(0x02D99F,b'\xEA')
+    with pytest.raises(CheatsError,match='Unsupported or malformed'):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert not bridge.writes and not bridge.controls
+
+
+def test_paused_reload_state_exception_refuses_before_writes():
+    bridge,cheats=paused_reload_cheats();bridge.states=[TimeoutError('offline state deadline')]
+    with pytest.raises(TimeoutError):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert not bridge.writes and not bridge.controls
+
+
+def test_paused_reload_write_failure_stops_without_resume_or_repair():
+    bridge,cheats=paused_reload_cheats();bridge.fail_write_at=2
+    with pytest.raises(CheatsError,match='write failed'):
+        cheats.warp_entrance(0x29,method='reload',wait=False,auto_resume=False)
+    assert bridge.attempts==EXPECTED_RELOAD29[:2] and bridge.writes==EXPECTED_RELOAD29[:1]
+    assert not bridge.controls and bridge.paused
+    cheats.wait_play.assert_not_called()
+
+
+def test_default_reload_wait_still_uses_existing_wait_play_and_result():
+    from mesen2_client_lib.oracle_cheats import GameState
+    bridge,cheats=paused_reload_cheats()
+    landed=GameState(7,0,1,0x87,0x90,0x29,0,0)
+    cheats.wait_play=Mock(return_value=landed)
+    result=cheats.warp_entrance(0x29,method='reload',modules=(7,))
+    assert bridge.writes==EXPECTED_RELOAD29
+    assert bridge.controls==['resume','pause','resume','pause'] and bridge.paused
+    assert result['ok'] and result['state']==landed.as_dict() and 'execution' not in result
+    cheats.wait_play.assert_called_once_with((7,))
