@@ -12,16 +12,16 @@
         <item name="android:textColor">@color/hud_ink</item>
         <item name="android:textSize">11sp</item>
         <item name="android:fontFamily">sans-serif-condensed</item>
-        <item name="android:letterSpacing">0.08</item>
+        <item name="android:letterSpacing">0.02</item>
         <item name="android:includeFontPadding">false</item>
     </style>
 
     <style name="OracleTitle">
         <item name="android:textColor">@color/triforce_gold</item>
         <item name="android:textSize">15sp</item>
-        <item name="android:fontFamily">serif</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:textAllCaps">true</item>
-        <item name="android:letterSpacing">0.22</item>
+        <item name="android:letterSpacing">0.02</item>
         <item name="android:includeFontPadding">false</item>
     </style>
 
@@ -44,7 +44,7 @@
     <style name="OracleMenuButton" parent="android:Widget.Button">
         <item name="android:textColor">@color/parchment</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">serif</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:background">@drawable/menu_row</item>
         <item name="android:gravity">center</item>
         <item name="android:paddingTop">8dp</item>

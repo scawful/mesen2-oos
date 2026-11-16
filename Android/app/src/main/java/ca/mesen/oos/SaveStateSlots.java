@@ -11,6 +11,8 @@ import java.util.Locale;
 
 final class SaveStateSlots {
     static final int SLOT_COUNT = 10;
+    /** Mesen's auto-save: one past the handheld slot count (EmuApiWrapper SaveStateSlotCount = 10). */
+    static final int AUTO_SLOT = SLOT_COUNT + 1;
 
     static final class Entry {
         final int slot;
@@ -49,7 +51,7 @@ final class SaveStateSlots {
     private SaveStateSlots() {}
 
     static Entry inspect(int slot, String path) {
-        if (slot < 1 || slot > SLOT_COUNT || path == null || path.isEmpty()) {
+        if (slot < 1 || slot > AUTO_SLOT || path == null || path.isEmpty()) {
             return new Entry(slot, null, false, 0, 0, "");
         }
         File file = new File(path);

@@ -711,6 +711,65 @@ void SocketServer::UpdateStatusFile()
 	WriteFileAtomic(statusPath, ss.str());
 }
 
+bool SocketServer::HasActiveSocketDebugState() {
+	{
+		auto lock = _breakpointLock.AcquireSafe();
+		if(!_breakpoints.empty()) return true;
+	}
+	{
+		auto lock = _pRegisterLock.AcquireSafe();
+		if(_pRegisterWatchEnabled) return true;
+	}
+	{
+		auto lock = _memoryWatchLock.AcquireSafe();
+		if(!_memoryWatches.empty()) return true;
+	}
+	{
+		auto lock = _logpointLock.AcquireSafe();
+		if(!_logpoints.empty()) return true;
+	}
+	{
+		auto lock = _watchTriggerLock.AcquireSafe();
+		if(!_watchTriggers.empty()) return true;
+	}
+	auto dbg = _emu->GetDebugger(false);
+	Debugger* debugger = dbg.GetDebugger();
+	if(debugger) {
+		if(debugger->GetScriptManager() && debugger->GetScriptManager()->HasScript()) {
+			return true;
+		}
+		for(CpuType cpuType : _emu->GetCpuTypes()) {
+			ITraceLogger* logger = debugger->GetTraceLogger(cpuType);
+			if(logger && logger->IsEnabled()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void SocketServer::MaybeAutoDetachDebugger(size_t clientCount) {
+	static constexpr auto kAutoDetachIdle = std::chrono::seconds(3);
+	auto now = std::chrono::steady_clock::now();
+	if(clientCount > 0) {
+		_lastClientActivity = now;
+		return;
+	}
+	if(!_socketStartedDebugger || !_emu) {
+		return;
+	}
+	if(!_emu->IsDebugging()) {
+		_socketStartedDebugger = false;
+		return;
+	}
+	if(now - _lastClientActivity < kAutoDetachIdle || HasActiveSocketDebugState()) {
+		return;
+	}
+	_emu->StopDebugger();
+	_socketStartedDebugger = false;
+	MessageManager::Log("[Socket] Auto-detached debugger: no socket client for 3s");
+}
+
 void SocketServer::ServerLoop() {
 	vector<struct pollfd> pfds;
 	pfds.push_back({ _serverFd, POLLIN, 0 });
@@ -730,6 +789,11 @@ void SocketServer::ServerLoop() {
 			UpdateStatusFile();
 			lastStatusUpdate = now;
 		}
+
+#ifdef __ANDROID__
+		// Android only: desktop debugger windows can share a socket-attached debugger.
+		MaybeAutoDetachDebugger(pfds.size() - 1);
+#endif
 
 		if (ret == 0) continue; // Timeout, check _running flag
 
@@ -844,6 +908,8 @@ bool SocketServer::HandleClient(int clientFd) {
 	}
 
 	SocketResponse response;
+	_lastClientActivity = std::chrono::steady_clock::now();
+	const bool debuggerBefore = _emu && _emu->IsDebugging();
 	if (handler) {
 		try {
 			response = handler(_emu, cmd);
@@ -857,6 +923,13 @@ bool SocketServer::HandleClient(int clientFd) {
 			response.error = "Unknown internal error";
 			response.errorCode = SocketErrorCode::InternalError;
 			response.retryable = false;
+		}
+		if(_emu) {
+			if(!debuggerBefore && _emu->IsDebugging()) {
+				_socketStartedDebugger = true;
+			} else if(!_emu->IsDebugging()) {
+				_socketStartedDebugger = false;
+			}
 		}
 	} else {
 		response.success = false;

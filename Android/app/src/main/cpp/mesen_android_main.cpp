@@ -2,6 +2,7 @@
 #include <SDL_system.h>
 #include <SDL_syswm.h>
 #include <string>
+#include <vector>
 #include <sstream>
 #include <mutex>
 #include <unistd.h>
@@ -36,11 +37,15 @@ extern "C" {
 	bool HandheldIsPerformanceMode();
 	bool HandheldSaveState(uint32_t stateIndex);
 	bool HandheldLoadState(uint32_t stateIndex);
+	bool HandheldLoadStateFile(const char* path);
 	void HandheldGetSaveStatePath(uint32_t stateIndex, char* outBuffer, uint32_t maxLength);
+	int32_t GetSaveStatePreview(char* saveStatePath, uint8_t* pngData);
 	void HandheldReset();
 	bool HandheldWriteByte(uint32_t cpuAddr, uint8_t value);
 	bool HandheldWriteWord(uint32_t cpuAddr, uint16_t value);
 	int HandheldReadByte(uint32_t cpuAddr);
+	int HandheldReadSram(uint32_t offset);
+	bool HandheldWriteSram(uint32_t offset, uint8_t value);
 	bool HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot);
 	void Pause();
 	void Resume();
@@ -776,6 +781,24 @@ extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_readByte(
 	return HandheldReadByte(static_cast<uint32_t>(addr));
 }
 
+extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_readSram(
+	JNIEnv*,
+	jclass,
+	jint offset
+) {
+	return HandheldReadSram(static_cast<uint32_t>(offset));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_writeSram(
+	JNIEnv*,
+	jclass,
+	jint offset,
+	jint value
+) {
+	return HandheldWriteSram(static_cast<uint32_t>(offset), static_cast<uint8_t>(value & 0xFF))
+		? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_saveState(
 	JNIEnv*,
 	jclass,
@@ -800,6 +823,54 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_saveStatePath
 	char path[4096] = {};
 	HandheldGetSaveStatePath(static_cast<uint32_t>(slot), path, sizeof(path));
 	return env->NewStringUTF(path);
+}
+
+/** Load a .mss file by path (auto-save slot). Returns false when nothing is running. */
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadStateFile(
+	JNIEnv* env,
+	jclass,
+	jstring path
+) {
+	if(!env || !path) {
+		return JNI_FALSE;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string statePath = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	return !statePath.empty() && HandheldLoadStateFile(statePath.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+/** PNG preview stored inside a .mss save state, or null. Works for any ROM's state file. */
+extern "C" JNIEXPORT jbyteArray JNICALL Java_ca_mesen_oos_MesenNative_statePreviewPng(
+	JNIEnv* env,
+	jclass,
+	jstring path
+) {
+	if(!env || !path) {
+		return nullptr;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string statePath = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	if(statePath.empty()) {
+		return nullptr;
+	}
+	// Mesen writes the PNG with no size limit; frames are at most 512x478 RGBA,
+	// so 2 MiB covers an uncompressed worst case.
+	std::vector<uint8_t> png(2 * 1024 * 1024);
+	int32_t size = GetSaveStatePreview(&statePath[0], png.data());
+	if(size <= 0 || static_cast<size_t>(size) > png.size()) {
+		return nullptr;
+	}
+	jbyteArray out = env->NewByteArray(size);
+	if(out) {
+		env->SetByteArrayRegion(out, 0, size, reinterpret_cast<const jbyte*>(png.data()));
+	}
+	return out;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadRom(JNIEnv* env, jclass, jstring path)

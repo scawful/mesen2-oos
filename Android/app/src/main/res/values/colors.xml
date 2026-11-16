@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="night_moss">#0B1410</color>
-    <color name="night_moss_scrim">#E00B1410</color>
-    <color name="slate_face">#D9141E18</color>
-    <color name="triforce_gold">#D4A017</color>
-    <color name="parchment">#E6D7A2</color>
-    <color name="forest_edge">#2F6B3A</color>
-    <color name="socket_teal">#7EC8C3</color>
-    <color name="hud_ink">#99E6D7A2</color>
+    <color name="night_moss">#16191F</color>
+    <color name="night_moss_scrim">#F016191F</color>
+    <color name="slate_face">#FF20242C</color>
+    <color name="triforce_gold">#70B7FF</color>
+    <color name="parchment">#EDF0F5</color>
+    <color name="forest_edge">#315B85</color>
+    <color name="socket_teal">#A9C9EA</color>
+    <color name="hud_ink">#B9C1CC</color>
 </resources>

@@ -500,8 +500,8 @@ extern "C" {
 		}
 		cfg.Port1.Keys.Mapping1.A = mapKey("Pad1 A");
 		cfg.Port1.Keys.Mapping1.B = mapKey("Pad1 B");
-		cfg.Port1.Keys.Mapping1.X = mapKey("Pad1 Y");
-		cfg.Port1.Keys.Mapping1.Y = mapKey("Pad1 X");
+		cfg.Port1.Keys.Mapping1.X = mapKey("Pad1 X");
+		cfg.Port1.Keys.Mapping1.Y = mapKey("Pad1 Y");
 		cfg.Port1.Keys.Mapping1.L = mapKey("Pad1 L1");
 		cfg.Port1.Keys.Mapping1.R = mapKey("Pad1 R1");
 		cfg.Port1.Keys.Mapping1.Select = selectKey;
@@ -582,6 +582,16 @@ extern "C" {
 		return _emu->GetSaveStateManager()->LoadState(stateIndex);
 	}
 
+	/** Load a state file by path (used for the auto-save, which sits one past the slot range). */
+	DllExport bool __stdcall HandheldLoadStateFile(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning()) {
+			return false;
+		}
+		return _emu->GetSaveStateManager()->LoadState(string(path), false);
+	}
+
 	DllExport void __stdcall HandheldGetSaveStatePath(
 		uint32_t stateIndex,
 		char* outBuffer,
@@ -651,6 +661,35 @@ extern "C" {
 		}
 		bytes[offset] = static_cast<uint8_t>(value & 0xFF);
 		bytes[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+		return true;
+	}
+
+	// Battery SRAM access for the Progression page (save-slot sync). Offsets
+	// are cartridge SRAM offsets ($70:0000 = 0), not CPU addresses.
+	DllExport int __stdcall HandheldReadSram(uint32_t offset)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		if(!_emu->IsRunning()) {
+			return -1;
+		}
+		ConsoleMemoryInfo sram = _emu->GetMemory(MemoryType::SnesSaveRam);
+		if(!sram.Memory || offset >= sram.Size) {
+			return -1;
+		}
+		return static_cast<uint8_t*>(sram.Memory)[offset];
+	}
+
+	DllExport bool __stdcall HandheldWriteSram(uint32_t offset, uint8_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning()) {
+			return false;
+		}
+		ConsoleMemoryInfo sram = _emu->GetMemory(MemoryType::SnesSaveRam);
+		if(!sram.Memory || offset >= sram.Size) {
+			return false;
+		}
+		static_cast<uint8_t*>(sram.Memory)[offset] = value;
 		return true;
 	}
 

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <deque>
 #include <set>
+#include <chrono>
 
 class Emulator;
 
@@ -284,6 +285,15 @@ private:
 	
 	// Initialize validation rules (called once)
 	static void InitializeValidationRules();
+
+	// Debugger auto-detach guard: socket reads attach the debugger, which slows
+	// emulation (RG353P: 60 -> ~18 fps). When the socket attached it and no client
+	// has been connected for kAutoDetachIdle with no socket breakpoints/watches/
+	// logpoints/traces left, detach it again.
+	bool _socketStartedDebugger = false;
+	std::chrono::steady_clock::time_point _lastClientActivity = std::chrono::steady_clock::now();
+	bool HasActiveSocketDebugState();
+	void MaybeAutoDetachDebugger(size_t clientCount);
 
 	void ServerLoop();
 	bool HandleClient(int clientFd);

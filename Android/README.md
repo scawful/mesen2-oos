@@ -2,6 +2,53 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Controller menu candidate — 0.1.34-menu-pgo (device smoke 2026-09-23)
+
+Local source continuation from `dac34778`, installed on RG353P as
+`0.1.34-menu-pgo` (versionCode 1732). The menu uses charcoal panels,
+neutral text, blue selection highlights, and a fixed Game / States / Cheats /
+Settings / Workshop rail. Game owns Continue, Choose ROM, and Reset. ROM lists,
+checkpoint lists, bug categories, and save/restore confirmations replace the
+root actions instead of expanding the same focus sequence.
+
+D-pad Up/Down stops at the boundaries of the active rail or screen. Right or A
+enters the category; Left returns to the rail. B backs out of a submenu, then to
+the rail, then closes the menu. Selection is remembered per screen and cheat
+group, and focus requests scroll the row into view. L1/R1 selects rail categories,
+or cheat groups while inside Cheats. Selecting a checkpoint still opens a
+separate confirmation, initially focused on Cancel.
+
+Cheats are explicitly one-time grants, not persistent freezes. Current values
+are displayed; A cycles sword levels 0–4 and shield levels 0–3. The starter kit
+sets minimums for sword, shield, lamp, bombs, and arrows without downgrading
+existing inventory. Grants reject title/death/menu/transition modules and only
+write during normal indoor/outdoor gameplay. Raw story-flag controls were
+removed. **Intro skip is not implemented:** it still requires a game-specific
+transition verified through movement, the next story interaction, and normal
+save/reload.
+
+Device smoke (USB, serial `26489f9a104f2273`): APK install succeeded; HUD tap
+opened the rail menu; L1/R1 walked Game → States → Cheats → Settings → Workshop;
+Cheats showed Quick/Items/Gear with live current values; Workshop showed
+checkpoint/bug/voice actions. Full cheat apply, save/reload, and sustained play
+remain manual acceptance. APK SHA256 archived as
+`Android/pgo-data/app-0.1.34-menu-pgo.apk`.
+
+This source uses version code 1730 (ordinary), 1731 (PGO generation), or 1732
+(PGO optimized). These are build identities, not playability claims. Keep the
+same package ID and exact-APK checkpoint compatibility checks.
+
+Focused Java checks can run without a device:
+
+```bash
+menu_test_classes=$(mktemp -d)
+javac -d "$menu_test_classes" \
+  Android/app/src/main/java/ca/mesen/oos/{MesenNative,WorkshopCheats,MenuNavigation}.java \
+  Android/tests/{WorkshopCheatsTest,MenuNavigationTest}.java
+java -cp "$menu_test_classes" ca.mesen.oos.WorkshopCheatsTest
+java -cp "$menu_test_classes" ca.mesen.oos.MenuNavigationTest
+```
+
 ## Installed candidate — 0.1.15-handheld
 
 Version code 16 / APK SHA256 `ed0bf6512e98fe900d6a32f8b59d18042ddc6259147a4dc90a4cc26d82ce5bee` fixes fast-forward audio loops: turbo mute now **stops and

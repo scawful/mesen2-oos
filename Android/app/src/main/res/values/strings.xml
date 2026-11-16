@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Oracle of Secrets</string>
-    <string name="hud_brand">Oracle</string>
-    <string name="hud_waiting">waking the grove…</string>
-    <string name="pause_title">Workshop</string>
+    <string name="app_name">Mesen OOS</string>
+    <string name="hud_brand">Mesen</string>
+    <string name="hud_waiting">No game loaded</string>
+    <string name="pause_title">Mesen</string>
     <string name="pause_continue">Continue</string>
     <string name="pause_reset">Reset console</string>
     <string name="pause_roms">Choose ROM</string>
@@ -13,16 +13,20 @@
     <string name="home_unsupported">This launcher cannot add a Home shortcut. Add Oracle from its app list.</string>
     <string name="home_failed">Could not request a Home shortcut. Try again from Workshop.</string>
     <string name="pause_back">Close list</string>
-    <string name="pause_hint">F / Back · L/R tabs · D-pad moves · A confirms · B back · Hold R2 FF</string>
-    <string name="tab_play">Play</string>
+    <string name="pause_hint">D-pad moves · Right enters · A confirms · B back · L1/R1 categories</string>
+    <string name="tab_play">Game</string>
     <string name="tab_states">States</string>
     <string name="tab_cheats">Cheats</string>
-    <string name="tab_capture">Capture</string>
-    <string name="tab_setup">Setup</string>
-    <string name="cheats_hint">Applies to WRAM save mirror. Save in-game to keep. L1/R1 or D-pad L/R cycles groups.</string>
+    <string name="tab_capture">Workshop</string>
+    <string name="tab_setup">Settings</string>
+    <string name="cheats_hint">One-time grants · A applies or cycles level · L1/R1 changes group · Save in-game to keep</string>
+    <string name="progression_hint">Story checkpoints · A, then A again within 4 s · overwrites save slot %1$d and warps · other items keep current values</string>
+    <string name="progression_confirm">Press A again: load \"%1$s\" into this save slot</string>
+    <string name="progression_running">Applying checkpoint: %1$s</string>
+    <string name="progression_busy">Checkpoint warp in progress…</string>
     <string name="cheats_need_rom">Load a ROM before using cheats.</string>
     <string name="roms_empty">No .sfc files in snes or OracleOfSecrets.</string>
-    <string name="workshop_eyebrow">Grove link</string>
+    <string name="workshop_eyebrow">USB connection</string>
     <string name="chip_hud">Keep HUD</string>
     <string name="chip_fit">Fill screen</string>
     <string name="chip_play">Smooth play</string>
@@ -55,7 +59,7 @@
     <string name="checkpoints">Checkpoints</string>
     <string name="checkpoint_restore">Restore checkpoint</string>
     <string name="artifact_cancel">Cancel</string>
-    <string name="artifact_current_build">Current build: %1$s\nSHA1 %2$s</string>
+    <string name="artifact_current_build">%1$s · SHA1 %2$s</string>
     <string name="artifact_no_rom">No ROM loaded</string>
     <string name="artifact_unknown_hash">unavailable</string>
     <string name="artifact_not_ready">Emulator is starting. Try again in a moment.</string>
