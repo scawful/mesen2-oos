@@ -175,7 +175,7 @@ def enter_gameplay(bridge, timeout: float) -> tuple[int, int]:
         if mod == 0x04 or (mod == 0x01 and presses > 30):
             raise DropError(f"stuck in file select/name entry (module ${mod:02X}); seed a save with --srm")
         # Start skips the attract/title; A picks the highlighted file.
-        bridge.press_button("start" if presses % 2 == 0 else "a", frames=4)
+        bridge.press_button("start" if presses % 2 == 0 else "a", frames=10)
         presses += 1
         time.sleep(0.7)
     mod, sub = game_state(bridge)
