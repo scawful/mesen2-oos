@@ -496,12 +496,15 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			bool handheldFrameSkipping =
 				_settings->CheckFlag(EmulationFlags::HandheldPerformance) &&
 				!_emu->IsDebugging();
-			// Fast-forward aims for ~10-12 visual FPS (≈80-100 ms between
-			// presents) while the core runs as fast as the device allows.
-			// Applies to R2 Turbo and socket SPEED≠1x. Smooth play keeps 10 ms.
+			// Fast-forward (R2 Turbo or socket SPEED≠1x) runs the core as fast
+			// as the device allows and skips renders inside the window below.
 			// Interlaced field gating is bypassed during FF so odd/even fields
 			// cannot force ~half of core frames through the video path.
 			bool fastForwardLike = turbo || emulationSpeed == 0 || emulationSpeed > 150;
+			// Fast-forward presents at display rate (one render per ~16.7 ms
+			// vsync) so held speed-up looks smooth instead of ~10 Hz. 15 ms
+			// leaves margin for timer jitter.
+			constexpr double fastForwardWindowMs = 15.0;
 
 			// Adaptive Smooth play: the frame limiter sleeps before each frame
 			// starts, so frame-start to frame-start time equals the target period
@@ -525,7 +528,7 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 				!_emu->GetVideoRenderer()->IsRecording() &&
 				(
 					((emulationSpeed == 0 || emulationSpeed > 150 || handheldFrameSkipping) &&
-						fastForwardLike && _frameSkipTimer.GetElapsedMS() < 96) ||
+						fastForwardLike && _frameSkipTimer.GetElapsedMS() < fastForwardWindowMs) ||
 					handheldBehind
 				)
 			);

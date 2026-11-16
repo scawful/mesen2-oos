@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <algorithm>
+#include <chrono>
 #include "Shared/Audio/SoundMixer.h"
 #include "Shared/Audio/AudioPlayerHud.h"
 #include "Shared/Emulator.h"
@@ -129,7 +131,8 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	_audioStoppedForMute = false;
 
 	int16_t *out = _sampleBuffer;
-	uint32_t count = _resampler->Resample(samples, sampleCount, sourceRate, cfg.SampleRate, out, 0x10000);
+	double resampleSourceRate = GetTurboSourceRate(sampleCount, sourceRate);
+	uint32_t count = _resampler->Resample(samples, sampleCount, (uint32_t)resampleSourceRate, cfg.SampleRate, out, 0x10000);
 
 	uint32_t targetRate = (uint32_t)(cfg.SampleRate * _resampler->GetRateAdjustment());
 	for(IAudioProvider* provider : _audioProviders) {
@@ -186,6 +189,47 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 			}
 		}
 	}
+}
+
+double SoundMixer::GetTurboSourceRate(uint32_t sampleCount, uint32_t sourceRate)
+{
+	EmuSettings* settings = _emu->GetSettings();
+	bool turbo = settings->CheckFlag(EmulationFlags::Turbo) && !_waveRecorder && !_emu->GetVideoRenderer()->IsRecording();
+	auto now = std::chrono::steady_clock::now();
+	if(!turbo) {
+		_turboAudioActive = false;
+		return sourceRate;
+	}
+	if(!_turboAudioActive) {
+		_turboAudioActive = true;
+		_turboWindowStart = now;
+		_turboWindowSamples = 0;
+		// Keep the last measured speed as the first guess (RG353P max is ~1.5x).
+		_turboSpeedRatio = std::clamp(_turboSpeedRatio, 1.0, 8.0);
+		if(_turboSpeedRatio <= 1.0) {
+			_turboSpeedRatio = 1.5;
+		}
+	}
+
+	_turboWindowSamples += sampleCount;
+	double elapsed = std::chrono::duration<double>(now - _turboWindowStart).count();
+	if(elapsed >= 0.1) {
+		double measured = (double)_turboWindowSamples / ((double)sourceRate * elapsed);
+		measured = std::clamp(measured, 1.0, 8.0);
+		_turboSpeedRatio = _turboSpeedRatio * 0.7 + measured * 0.3;
+		_turboWindowStart = now;
+		_turboWindowSamples = 0;
+	}
+
+	// Steer the device buffer toward the configured latency: more queued audio
+	// than requested means we are producing too much, so compress harder.
+	double ratio = _turboSpeedRatio;
+	AudioStatistics stats = GetStatistics();
+	if(stats.AverageLatency > 0) {
+		double gapMs = stats.AverageLatency - (double)settings->GetAudioConfig().AudioLatency;
+		ratio *= std::clamp(1.0 + gapMs / 500.0, 0.9, 1.15);
+	}
+	return sourceRate * ratio;
 }
 
 void SoundMixer::ProcessEqualizer(int16_t* samples, uint32_t sampleCount, uint32_t targetRate)

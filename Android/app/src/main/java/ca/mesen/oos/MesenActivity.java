@@ -2211,6 +2211,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (intent.hasExtra("gpu_blit")) {
             setPreferGpu(intent.getBooleanExtra("gpu_blit", true));
         }
+        if (intent.hasExtra("fast_forward")) {
+            // Test hook: `--ez fast_forward true|false` = sticky fast-forward.
+            setStickyFastForward(intent.getBooleanExtra("fast_forward", false));
+            updateFastForward();
+        }
     }
 
     // Playtest note: `am start ... --es note "Test: ..." --ei note_secs 20`.

@@ -472,13 +472,14 @@ extern "C" {
 		_emu->GetSettings()->SetPreferences(preferences);
 
 		AudioConfig audio = _emu->GetSettings()->GetAudioConfig();
-		audio.ReduceSoundInFastForward = true;
-		audio.VolumeReduction = 100;
+		// Fast-forward keeps audio: SoundMixer resamples turbo output by the
+		// measured speed (pitched up) instead of muting it.
+		audio.ReduceSoundInFastForward = false;
 		_emu->GetSettings()->SetAudioConfig(audio);
 
 		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
-		// Unlimited turbo while R2 is held. Visual cadence is capped by the
-		// PPU skip window (~96 ms). Audio stays muted via EmulationFlags::Turbo.
+		// Unlimited turbo while R2 is held. The PPU presents at display rate
+		// (~15 ms skip window); audio plays sped up (see SoundMixer).
 		emulation.TurboSpeed = 0;
 		_emu->GetSettings()->SetEmulationConfig(emulation);
 
@@ -529,10 +530,6 @@ extern "C" {
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
 		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, enabled);
-		if(enabled) {
-			// Immediate clean mute: clear the SDL ring so leftover PCM cannot loop.
-			_emu->GetSoundMixer()->StopAudio(true);
-		}
 	}
 
 	DllExport bool __stdcall HandheldIsFastForward()
