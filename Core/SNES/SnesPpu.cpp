@@ -502,20 +502,38 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 			// Interlaced field gating is bypassed during FF so odd/even fields
 			// cannot force ~half of core frames through the video path.
 			bool fastForwardLike = turbo || emulationSpeed == 0 || emulationSpeed > 150;
-			uint32_t skipWindowMs = fastForwardLike ? 96 : 10;
+
+			// Adaptive Smooth play: the frame limiter sleeps before each frame
+			// starts, so frame-start to frame-start time equals the target period
+			// while the core keeps up. Only a longer interval means the core fell
+			// behind; then skip one render to catch up. The old fixed 10 ms window
+			// skipped every other frame even with headroom (30 Hz on RG353P).
+			double frameIntervalMs = _frameStartTimer.GetElapsedMS();
+			_frameStartTimer.Reset();
+			bool handheldBehind = false;
+			if(handheldFrameSkipping && !fastForwardLike) {
+				double speed = emulationSpeed > 0 ? (double)emulationSpeed : 100.0;
+				double targetMs = (1000.0 / _console->GetFps()) * 100.0 / speed;
+				handheldBehind = frameIntervalMs > targetMs + 2.5 && !_lastFrameSkipped;
+			}
+
 			bool allowSkipThisFrame = !_interlacedFrame || (_frameCount & 0x02) || fastForwardLike;
 			_skipRender = (
 				!_settings->GetSnesConfig().DisableFrameSkipping &&
 				allowSkipThisFrame &&
 				!_emu->GetRewindManager()->IsRewinding() &&
 				!_emu->GetVideoRenderer()->IsRecording() &&
-				(emulationSpeed == 0 || emulationSpeed > 150 || handheldFrameSkipping) &&
-				_frameSkipTimer.GetElapsedMS() < skipWindowMs
+				(
+					((emulationSpeed == 0 || emulationSpeed > 150 || handheldFrameSkipping) &&
+						fastForwardLike && _frameSkipTimer.GetElapsedMS() < 96) ||
+					handheldBehind
+				)
 			);
 			
 			if(_emu->IsRunAheadFrame()) {
 				_skipRender = true;
 			}
+			_lastFrameSkipped = _skipRender;
 
 			//Ensure the SPC is re-enabled for the next frame
 			_spc->SetSpcState(true);
