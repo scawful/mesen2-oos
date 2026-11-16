@@ -2,6 +2,41 @@
 
 The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
 
+## Playtest drop — 0.1.43-playtest-note (device run 2026-11-15)
+
+`Android/tools/playtest_drop.py` sets up a scene on the RG353P over Wi-Fi adb
+and hands the device to the player. Every ROM push and APK install needs
+scawful's OK in chat; run `--dry-run` first to show the plan.
+
+```bash
+python3 Android/tools/playtest_drop.py \
+  --rom <build>.sfc --srm "rg353p-staging/roms/Oracle - Horse Epona c1f3.srm" \
+  --name "OoS integ l2" --checkpoint garo-desert --set 7EF3D8=17 \
+  --note 'Test: Epona desert jump at $36 - jump west' \
+  --shot rg353p-staging/drops/l2-epona-36.png
+```
+
+Steps, in order:
+1. Park: save the running game to the first slot in `--park-slots` (9,8,7,6)
+   that has no `.mss` yet; never overwrites. Load that slot to resume.
+2. Push: ROM and optional seed `.srm` (used on first launch only) via
+   `/data/local/tmp` + `cp`, sha256 checked. A same name with a different
+   sha is refused; use a new `--name`.
+3. Launch: `am start --es rom <path>`; waits for ROMINFO on the socket.
+4. Scene: `--state <file.mss>` (pushed to `files/drops/`), or Start/A presses
+   into file 1 then `--checkpoint <id>` (Oracle `Data/debug/checkpoints.json`),
+   then `--set ADDR=VAL` hex RAM writes.
+5. Note: `am start --es note <text> --ei note_secs N` shows a bottom banner
+   (0.1.43+; `note_secs 0` keeps it, an empty note hides it). Socket `OSD`
+   text is not drawn on Android.
+6. Proof: `adb exec-out screencap -p` to `--shot`.
+
+Serial: `--serial`, else `ANDROID_SERIAL`, else the first IP:port device, else
+`adb mdns services` + `adb connect` (the port changes after reboot).
+Back up app files first:
+`adb -s <serial> shell "run-as ca.mesen.oos tar cf - files 2>/dev/null > /data/local/tmp/oos-backup.tar"`, then `adb pull` it.
+(`exec-out run-as ... tar` mixes stderr into the archive.)
+
 ## Controller menu candidate — 0.1.34-menu-pgo (device smoke 2026-09-23)
 
 Local source continuation from `dac34778`, installed on RG353P as
