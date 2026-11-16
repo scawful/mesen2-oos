@@ -11,7 +11,7 @@ scawful's OK in chat; run `--dry-run` first to show the plan.
 ```bash
 python3 Android/tools/playtest_drop.py \
   --rom <build>.sfc --srm "rg353p-staging/roms/Oracle - Horse Epona c1f3.srm" \
-  --name "OoS integ l2" --checkpoint garo-desert --set 7EF3D8=17 \
+  --name "OoS integ l2" --checkpoint garo-desert --set 7EF3D8=17 --set 7EF2B6=20 --set 7EF38F=05 \
   --note 'Test: Epona desert jump at $36 - jump west' \
   --shot rg353p-staging/drops/l2-epona-36.png
 ```
@@ -25,7 +25,10 @@ Steps, in order:
 3. Launch: `am start --es rom <path>`; waits for ROMINFO on the socket.
 4. Scene: `--state <file.mss>` (pushed to `files/drops/`), or Start/A presses
    into file 1 then `--checkpoint <id>` (Oracle `Data/debug/checkpoints.json`),
-   then `--set ADDR=VAL` hex RAM writes.
+   then `--set ADDR=VAL` hex RAM writes. With a checkpoint, the tool re-warps to
+   the outdoor area after the writes so overlay flags draw (`$7EF280+area`
+   bit `$20`: e.g. `7EF2B6=20` = Goron rocks opened at $36), then syncs SRAM.
+   Garo Desert recipe: `7EF3D8=17` Epona's Song, `7EF2B6=20` rocks, `7EF38F=05` Rock Meat.
 5. Note: `am start --es note <text> --ei note_secs N` shows a bottom banner
    (0.1.43+; `note_secs 0` keeps it, an empty note hides it). Socket `OSD`
    text is not drawn on Android.

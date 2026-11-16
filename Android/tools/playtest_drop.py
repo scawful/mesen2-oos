@@ -263,7 +263,8 @@ def main() -> int:
         if args.checkpoint:
             sys.path.insert(0, str(args.client_root.expanduser()))
             from mesen2_client_lib.oracle_cheats import OracleCheats  # type: ignore
-            res = OracleCheats(bridge, root=args.oracle_root.expanduser()).apply_checkpoint(args.checkpoint)
+            cheats = OracleCheats(bridge, root=args.oracle_root.expanduser())
+            res = cheats.apply_checkpoint(args.checkpoint)
             summary["checkpoint"] = {k: res.get(k) for k in ("ok", "checkpoint", "chain", "error", "state")}
             if not res.get("ok"):
                 raise DropError(f"checkpoint {args.checkpoint} failed: {res.get('error')}")
@@ -272,6 +273,16 @@ def main() -> int:
             bridge.write_memory(addr, val)
             log(f"wrote ${addr:06X} = ${val:02X}")
         summary["writes"] = args.set
+        if args.checkpoint and args.set:
+            # Overworld overlay flags ($7EF280+area, e.g. opened rocks) only draw on
+            # a screen load: re-warp to the same area, then save the writes to SRAM.
+            area = (res.get("state") or {}).get("area")
+            if area is not None and not (res.get("state") or {}).get("indoors"):
+                rw = cheats.warp_area(hex(area))
+                if not rw.get("ok"):
+                    raise DropError(f"re-warp to area ${area:02X} failed: {rw.get('error')}")
+                log(f"re-warped to area ${area:02X} so overlay writes draw")
+            cheats.sync_sram()
         mod, sub = game_state(bridge)
         summary["module"] = f"${mod:02X}/{sub:02X}"
     elif dry and (args.state or args.checkpoint or args.set):
