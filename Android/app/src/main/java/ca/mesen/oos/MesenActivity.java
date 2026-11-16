@@ -2196,6 +2196,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (intent == null) {
             return;
         }
+        if (intent.hasExtra("note")) {
+            showPlaytestNote(intent.getStringExtra("note"), intent.getIntExtra("note_secs", 20));
+        }
         if (intent.hasExtra("keep_hud")) {
             setKeepHud(intent.getBooleanExtra("keep_hud", false));
         }
@@ -2207,6 +2210,50 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         if (intent.hasExtra("gpu_blit")) {
             setPreferGpu(intent.getBooleanExtra("gpu_blit", true));
+        }
+    }
+
+    // Playtest note: `am start ... --es note "Test: ..." --ei note_secs 20`.
+    // A bottom banner over the game; an empty note hides it, note_secs <= 0 keeps it up.
+    private TextView mNoteView;
+    private final Runnable mHideNote = () -> {
+        if (mNoteView != null) {
+            mNoteView.setVisibility(View.GONE);
+        }
+    };
+
+    private void showPlaytestNote(String text, int seconds) {
+        if (mLayout == null) {
+            return;
+        }
+        mHandler.removeCallbacks(mHideNote);
+        if (text == null || text.trim().isEmpty()) {
+            mHideNote.run();
+            return;
+        }
+        if (mNoteView == null) {
+            float dp = getResources().getDisplayMetrics().density;
+            mNoteView = new TextView(this);
+            mNoteView.setTextColor(TEXT_PRIMARY);
+            mNoteView.setTextSize(17);
+            mNoteView.setBackgroundColor(Color.parseColor("#E6141A22"));
+            int pad = Math.round(10 * dp);
+            mNoteView.setPadding(pad, pad, pad, pad);
+            mNoteView.setGravity(Gravity.CENTER);
+            mNoteView.setFocusable(false);
+            RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+            int margin = Math.round(8 * dp);
+            lp.setMargins(margin, margin, margin, margin);
+            mLayout.addView(mNoteView, lp);
+        }
+        mNoteView.setText(text);
+        mNoteView.setVisibility(View.VISIBLE);
+        mNoteView.bringToFront();
+        Log.i(TAG, "playtest note: " + text);
+        if (seconds > 0) {
+            mHandler.postDelayed(mHideNote, seconds * 1000L);
         }
     }
 
