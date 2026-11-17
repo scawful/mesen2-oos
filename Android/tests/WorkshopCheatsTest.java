@@ -90,6 +90,9 @@ final class WorkshopCheatsTest {
         check(g.readByte(WorkshopCheats.BOMBCHU_OWNED) == 1 && g.readByte(WorkshopCheats.BOMBCHU_AMMO) == 20, "bombchus");
         WorkshopCheats.apply(action("Deku Sticks x10"), g);
         check(g.readByte(WorkshopCheats.DEKU_STICKS) == 10, "deku sticks");
+        g.data.put(WorkshopCheats.SWORD_SLOT_FLAGS, 0x02);
+        WorkshopCheats.apply(action("Heavy sword (broken)"), g);
+        check(g.readByte(WorkshopCheats.SWORD_SLOT_FLAGS) == 0x83, "heavy sword ORs owned+init, keeps equipped bit");
         Ram info = new Ram();
         String r = WorkshopCheats.apply(action("Epona ready (ranch cured)"), info);
         check(r.startsWith("Read-only") && info.writes.isEmpty(), "epona row never writes");

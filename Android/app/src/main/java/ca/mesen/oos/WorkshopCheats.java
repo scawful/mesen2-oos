@@ -98,6 +98,11 @@ final class WorkshopCheats {
     static final int BINDING_Y = 0x7EF3BA;
     static final int BINDING_X = 0x7EF3BB;
     static final int SIDE_QUEST_2 = 0x7EF3D8;
+    // b59 two sword slots (Core/sram.asm): bit0 heavy owned, bit7 slots initialized.
+    // Setting bit7 skips the old-save migration that would clear bit0; the
+    // menu sync still copies Sword into SwordStoryBlade.
+    static final int SWORD_SLOT_FLAGS = 0x7EF3BD;
+    static final int HEAVY_SWORD_GRANT = 0x81;
     static final int RANCH_GIRL_CURED = 0x01;
 
     static final String GROUP_QUICK = "Quick";
@@ -208,6 +213,7 @@ final class WorkshopCheats {
         actions.add(new Action(GROUP_FEATURES, "Bombchus x20", BOMBCHU_AMMO, 20, Kind.BYTE));
         actions.add(new Action(GROUP_FEATURES, "Cane of Byrna", BYRNA_OWNED, 1, Kind.BYTE));
         actions.add(new Action(GROUP_FEATURES, "Garo mask", GARO_MASK_OWNED, 1, Kind.BYTE));
+        actions.add(new Action(GROUP_FEATURES, "Heavy sword (broken)", SWORD_SLOT_FLAGS, HEAVY_SWORD_GRANT, Kind.OR_BITS));
         actions.add(new Action(GROUP_FEATURES, "HUD Y/X binding", BINDING_Y, 0, Kind.INFO));
         // Items
         actions.add(new Action(GROUP_ITEMS, "Bow (silver+arrows)", BOW, 4, Kind.BYTE));

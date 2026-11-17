@@ -86,8 +86,16 @@ def main() -> None:
         return areas[0x40 if abyss else 0x33]
 
     by_id = {c["id"]: c for c in cps["checkpoints"]}
-    rows = []
+    rows, skipped = [], []
     for c in cps["checkpoints"]:
+        loc = c["location"]
+        if "entrance" not in loc and hexint(loc["area"]) not in areas:
+            # warps.json has no landing for this area (e.g. $50 was dropped:
+            # no exit row reaches it). Later checkpoints still apply its writes
+            # through their 'after' chain; only its own row is left out.
+            skipped.append(c["id"])
+            print(f"skip {c['id']}: warps.json has no area {loc['area']}", file=sys.stderr)
+            continue
         chain = resolve(by_id, c["id"])
         writes = [write_op(w) for link in chain for w in link.get("writes", [])]
         loc = c["location"]
@@ -149,7 +157,7 @@ def main() -> None:
         ]
     lines += ["    };", "}", ""]
     out.write_text("\n".join(lines))
-    print(f"wrote {out} ({len(rows)} checkpoints, sha {digest})")
+    print(f"wrote {out} ({len(rows)} checkpoints, {len(skipped)} skipped, sha {digest})")
 
 
 if __name__ == "__main__":

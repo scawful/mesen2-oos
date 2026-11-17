@@ -78,7 +78,10 @@ final class ProgressionTest {
 
     static void testGeneratedData() {
         List<Progression.Checkpoint> all = Progression.checkpoints();
-        check(all.size() == 24, "24 checkpoints, got " + all.size());
+        check(all.size() == 25, "25 checkpoints, got " + all.size());
+        for (Progression.Checkpoint cp : all) {
+            check(!cp.id.equals("abyss-owl"), "abyss-owl has no warps.json area, so it is skipped");
+        }
         for (Progression.Checkpoint cp : all) {
             check(cp.chain[0].equals("intro-bed"), cp.id + " chain starts at intro-bed");
             check(cp.chain[cp.chain.length - 1].equals(cp.id), cp.id + " chain ends at itself");
@@ -151,12 +154,14 @@ final class ProgressionTest {
     }
 
     static void testAreaCheckpointEndToEnd() {
-        Progression.Checkpoint cp = find("abyss-owl");
+        // kalyxo-return is after the skipped abyss-owl row; its chain still applies the Moon Pearl.
+        Progression.Checkpoint cp = find("kalyxo-return");
+        check(java.util.Arrays.asList(cp.chain).contains("abyss-owl"), "chain keeps abyss-owl writes");
         Emu emu = new Emu(0x07, 1);
         emu.landArea = cp.target;
         emu.landRoom = 0x0012;
         String result = Progression.apply(cp, emu);
-        check(result.startsWith("Checkpoint abyss-owl") && !result.contains("failed") && !result.contains("CHECK"),
+        check(result.startsWith("Checkpoint kalyxo-return") && !result.contains("failed") && !result.contains("CHECK"),
                 "area checkpoint succeeds: " + result);
         check(emu.log.size() == 2, "two warps: " + emu.log);
         check(emu.log.get(0).startsWith("module 05"), "first a reload");
