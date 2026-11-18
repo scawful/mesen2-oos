@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using Mesen.Config;
 using Mesen.Interop;
 using Mesen.Utilities;
@@ -70,6 +71,8 @@ namespace Mesen.ViewModels
 		private OracleDebugPanelVisibility _visibilityMode;
 		private bool _isTextInputFocused;
 		private bool _refreshInFlight;
+		private bool _pendingForcedRefresh;
+		private bool _wasRunning;
 		private bool _commandInFlight;
 		private bool _canFallToRoom;
 		private bool _hasMacroError;
@@ -274,11 +277,22 @@ namespace Mesen.ViewModels
 
 		public void RequestRefresh(bool force = false)
 		{
-			//Reading RAM attaches Mesen's debugger, so a hidden strip does no work at all.
-			if(IsHidden || (_refreshInFlight && !force)) {
+			if(!Dispatcher.UIThread.CheckAccess()) {
+				Dispatcher.UIThread.Post(() => RequestRefresh(force));
 				return;
 			}
-			Refresh();
+
+			// A hidden strip stays idle; visible refreshes run off the UI thread without attaching the debugger.
+			if(IsHidden) {
+				return;
+			}
+			if(_refreshInFlight) {
+				if(force) {
+					_pendingForcedRefresh = true;
+				}
+				return;
+			}
+			_ = RefreshAsync();
 		}
 
 		public Task ExecuteWarpAsync()
@@ -447,56 +461,20 @@ namespace Mesen.ViewModels
 			SelectedPreset = Presets.FirstOrDefault();
 		}
 
-		private void Refresh()
+		private async Task RefreshAsync()
 		{
 			_refreshInFlight = true;
 			try {
-				bool isRunning = EmuApi.IsRunning();
-				RomInfo rom = EmuApi.GetRomInfo();
-				string romName = rom.GetRomName();
-				RomText = string.IsNullOrWhiteSpace(romName) ? "-" : romName;
-				if(rom.RomPath != _buildFlagsRomPath) {
-					_buildFlagsRomPath = rom.RomPath;
-					(BuildFlagsText, BuildFlagsDetail) = OracleDebugActions.DescribeBuildFlags(rom.RomPath);
-				}
+				do {
+					_pendingForcedRefresh = false;
+					if(IsHidden) {
+						break;
+					}
 
-				if(!isRunning) {
-					LocationText = "No game";
-					LinkText = HealthText = FormText = FrameText = "";
-					ModeText = WhereText = LinkDetailText = StatsText = StoryText = "-";
-					CanFallToRoom = false;
-					PauseButtonText = "Pause";
-					return;
-				}
-
-				bool isPaused = EmuApi.IsPaused();
-				TimingInfo timing = EmuApi.GetTimingInfo(rom.ConsoleType.GetMainCpuType());
-				FrameText = $"F {timing.FrameCount:N0}{(isPaused ? " ‖" : "")}";
-				PauseButtonText = isPaused ? "Resume" : "Pause";
-
-				OraclePanelRuntimeSummary? s = OraclePanelBridge.FetchRuntimeSummaryAsync().Result;
-				if(s == null) {
-					LocationText = "State unavailable";
-					return;
-				}
-
-				string arrow = s.LinkDirection switch { "Up" => "↑", "Down" => "↓", "Left" => "←", "Right" => "→", _ => "?" };
-				LocationText = s.Indoors ? $"Room ${s.DungeonRoom:X3}" : $"OW ${s.AreaId:X2} {s.AreaName}";
-				LinkText = $"{s.LinkX},{s.LinkY} {arrow}";
-				HealthText = $"♥ {s.Health / 8.0:0.#}/{s.MaxHealth / 8.0:0.#}";
-				FormText = s.LinkFormName;
-
-				ModeText = $"{s.ModeName} · sub ${s.Submode:X2}";
-				WhereText = s.Indoors
-					? $"Room ${s.DungeonRoom:X3} (layout ${s.RoomLayout:X2})"
-					: $"{s.AreaName} (area ${s.AreaId:X2})";
-				LinkDetailText = $"{s.LinkX},{s.LinkY} {arrow} · state ${s.LinkState:X2} · {s.LinkFormName}";
-				StatsText = $"HP {s.Health}/{s.MaxHealth} · MP {s.Magic} · Rupees {s.Rupees}";
-				StoryText = $"GS {s.GameState} · Crys ${s.Crystals:X2} · Pend ${s.Pendants:X2}";
-				CanFallToRoom = s.Indoors;
-				if(IsExpanded) {
-					Cheats.RefreshValues();
-				}
+					string? cachedFlagsPath = _wasRunning ? _buildFlagsRomPath : null;
+					PanelRefreshSnapshot snapshot = await Task.Run(() => ReadRefreshSnapshot(cachedFlagsPath));
+					ApplyRefreshSnapshot(snapshot);
+				} while(_pendingForcedRefresh && !IsHidden);
 			} catch(Exception ex) {
 				LocationText = "Refresh failed";
 				StatusLine = ex.Message;
@@ -504,6 +482,92 @@ namespace Mesen.ViewModels
 				_refreshInFlight = false;
 			}
 		}
+
+		private static PanelRefreshSnapshot ReadRefreshSnapshot(string? cachedFlagsPath)
+		{
+			bool isRunning = EmuApi.IsRunning();
+			RomInfo rom = EmuApi.GetRomInfo();
+			string romPath = rom.RomPath ?? "";
+			string romName = rom.GetRomName();
+
+			bool updateBuildFlags = false;
+			string buildFlagsText = "-";
+			string buildFlagsDetail = "";
+			if(!string.Equals(romPath, cachedFlagsPath, StringComparison.Ordinal)) {
+				updateBuildFlags = true;
+				(buildFlagsText, buildFlagsDetail) = OracleDebugActions.DescribeBuildFlags(romPath);
+			}
+
+			if(!isRunning) {
+				return new PanelRefreshSnapshot(false, romPath, romName, updateBuildFlags, buildFlagsText, buildFlagsDetail, false, "", null);
+			}
+
+			bool isPaused = EmuApi.IsPaused();
+			TimingInfo timing = EmuApi.GetTimingInfo(rom.ConsoleType.GetMainCpuType());
+			string frameText = $"F {timing.FrameCount:N0}{(isPaused ? " ‖" : "")}";
+			OraclePanelRuntimeSummary? summary = OraclePanelBridge.ReadRuntimeSummary();
+			return new PanelRefreshSnapshot(true, romPath, romName, updateBuildFlags, buildFlagsText, buildFlagsDetail, isPaused, frameText, summary);
+		}
+
+		private void ApplyRefreshSnapshot(PanelRefreshSnapshot snapshot)
+		{
+			_wasRunning = snapshot.IsRunning;
+			RomText = string.IsNullOrWhiteSpace(snapshot.RomName) ? "-" : snapshot.RomName;
+			if(snapshot.UpdateBuildFlags) {
+				_buildFlagsRomPath = snapshot.RomPath;
+				BuildFlagsText = snapshot.BuildFlagsText;
+				BuildFlagsDetail = snapshot.BuildFlagsDetail;
+			}
+
+			if(!snapshot.IsRunning) {
+				_buildFlagsRomPath = null;
+				LocationText = "No game";
+				LinkText = HealthText = FormText = FrameText = "";
+				ModeText = WhereText = LinkDetailText = StatsText = StoryText = "-";
+				CanFallToRoom = false;
+				PauseButtonText = "Pause";
+				return;
+			}
+
+			FrameText = snapshot.FrameText;
+			PauseButtonText = snapshot.IsPaused ? "Resume" : "Pause";
+
+			OraclePanelRuntimeSummary? s = snapshot.Summary;
+			if(s == null) {
+				LocationText = "State unavailable";
+				return;
+			}
+
+			string arrow = s.LinkDirection switch { "Up" => "↑", "Down" => "↓", "Left" => "←", "Right" => "→", _ => "?" };
+			LocationText = s.Indoors ? $"Room ${s.DungeonRoom:X3}" : $"OW ${s.AreaId:X2} {s.AreaName}";
+			LinkText = $"{s.LinkX},{s.LinkY} {arrow}";
+			HealthText = $"♥ {s.Health / 8.0:0.#}/{s.MaxHealth / 8.0:0.#}";
+			FormText = s.LinkFormName;
+
+			ModeText = $"{s.ModeName} · sub ${s.Submode:X2}";
+			WhereText = s.Indoors
+				? $"Room ${s.DungeonRoom:X3} (layout ${s.RoomLayout:X2})"
+				: $"{s.AreaName} (area ${s.AreaId:X2})";
+			LinkDetailText = $"{s.LinkX},{s.LinkY} {arrow} · state ${s.LinkState:X2} · {s.LinkFormName}";
+			StatsText = $"HP {s.Health}/{s.MaxHealth} · MP {s.Magic} · Rupees {s.Rupees}";
+			StoryText = $"GS {s.GameState} · Crys ${s.Crystals:X2} · Pend ${s.Pendants:X2}";
+			CanFallToRoom = s.Indoors;
+			if(IsExpanded) {
+				Cheats.RefreshValues();
+			}
+		}
+
+		private sealed record PanelRefreshSnapshot(
+			bool IsRunning,
+			string RomPath,
+			string RomName,
+			bool UpdateBuildFlags,
+			string BuildFlagsText,
+			string BuildFlagsDetail,
+			bool IsPaused,
+			string FrameText,
+			OraclePanelRuntimeSummary? Summary
+		);
 
 		private async Task<bool> RunActionAsync(string source, Func<OracleActionResult> action)
 		{

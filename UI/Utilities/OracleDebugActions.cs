@@ -304,9 +304,9 @@ namespace Mesen.Utilities
 				int flags;
 				int writes = 0;
 				if(profile.FilePath == null) {
-					OraclePanelApplyResult? result = OraclePanelBridge.ApplySaveDataChangesAsync(
+					OraclePanelApplyResult? result = OraclePanelBridge.ApplySaveDataChanges(
 						Array.Empty<OraclePanelValueUpdate>(), Array.Empty<OraclePanelValueUpdate>(), false, profile.Id
-					).Result;
+					);
 					if(result == null) {
 						return OracleActionResult.Fail("No game running.");
 					}
@@ -359,6 +359,7 @@ namespace Mesen.Utilities
 			if(!OraclePanelBridge.CanReadState()) {
 				return OracleActionResult.Fail("No game running.");
 			}
+			OraclePanelBridge.EnsureDebuggerInitialized();
 			DebugApi.Step(CpuType.Snes, frames, StepType.PpuFrame);
 			return OracleActionResult.Ok($"Stepped {frames} frame{(frames == 1 ? "" : "s")}; paused.");
 		}
@@ -379,7 +380,7 @@ namespace Mesen.Utilities
 			if(projectRoot == null) {
 				return OracleActionResult.Fail("Oracle project root not found. Set ORACLE_OF_SECRETS_ROOT.");
 			}
-			OraclePanelRuntimeSummary? state = OraclePanelBridge.FetchRuntimeSummaryAsync().Result;
+			OraclePanelRuntimeSummary? state = OraclePanelBridge.ReadRuntimeSummary();
 			if(state == null) {
 				return OracleActionResult.Fail("No game running.");
 			}
@@ -474,23 +475,23 @@ namespace Mesen.Utilities
 			}
 
 			StringBuilder sb = new StringBuilder();
-			int romSize = DebugApi.GetMemorySize(MemoryType.SnesPrgRom);
+			int romSize = EmuApi.GetGameMemorySize(MemoryType.SnesPrgRom);
 			if(romSize <= 0x14014A) {
 				sb.AppendLine($"ROM PRG size ({romSize:N0} bytes) is smaller than $14014A; ZSCustomOverworld EnableTable not present.");
 				return sb.ToString().TrimEnd();
 			}
 
-			byte enableBgColor = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140140);
-			byte enableMainPal = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140141);
-			byte enableMosaic = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140142);
-			byte enableAnimated = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140143);
-			byte enableSubOverlay = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140144);
-			byte zsowVersion = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140145);
-			byte enableIntroRain = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140146);
-			byte enableMireRain = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140147);
-			byte enableTransGfx = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140148);
-			int bridgeColor = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140149)
-				| (DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x14014A) << 8);
+			byte enableBgColor = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140140);
+			byte enableMainPal = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140141);
+			byte enableMosaic = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140142);
+			byte enableAnimated = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140143);
+			byte enableSubOverlay = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140144);
+			byte zsowVersion = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140145);
+			byte enableIntroRain = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140146);
+			byte enableMireRain = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140147);
+			byte enableTransGfx = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140148);
+			int bridgeColor = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x140149)
+				| (OraclePanelBridge.ReadMemoryByte(MemoryType.SnesPrgRom, 0x14014A) << 8);
 
 			int module = OraclePanelBridge.ReadByte(ModuleAddr);
 			int submodule = OraclePanelBridge.ReadByte(SubmoduleAddr);
@@ -618,6 +619,7 @@ namespace Mesen.Utilities
 			if(!OraclePanelBridge.CanReadState()) {
 				return OracleActionResult.Fail("No game running.");
 			}
+			OraclePanelBridge.EnsureDebuggerInitialized();
 
 			bool wasPaused = EmuApi.IsPaused();
 			if(!wasPaused) {

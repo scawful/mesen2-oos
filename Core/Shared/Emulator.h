@@ -255,6 +255,7 @@ public:
 
 	void RegisterMemory(MemoryType type, void* memory, uint32_t size);
 	ConsoleMemoryInfo GetMemory(MemoryType type);
+	bool TryReadMemory(MemoryType type, uint32_t offset, uint32_t length, uint8_t* output);
 
 	AudioTrackInfo GetAudioTrackInfo();
 	void ProcessAudioPlayerAction(AudioPlayerActionParams p);

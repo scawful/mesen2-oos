@@ -125,7 +125,6 @@ namespace Mesen.Utilities
 		private const int WramSaveSize = 0x0500;
 		private const uint ActiveSaveSlotAddr = 0x701FFE;
 
-		private static bool _debuggerInitialized;
 		private static readonly object _debuggerLock = new object();
 
 		private sealed class ToggleDef
@@ -374,7 +373,7 @@ namespace Mesen.Utilities
 
 		public static Task<OraclePanelRuntimeSummary?> FetchRuntimeSummaryAsync()
 		{
-			return Task.FromResult(ReadRuntimeSummary());
+			return Task.Run(ReadRuntimeSummary);
 		}
 
 		public static IReadOnlyList<OraclePanelPreset> GetPresets()
@@ -398,13 +397,18 @@ namespace Mesen.Utilities
 
 		public static Task<OraclePanelEditorData?> FetchEditorDataAsync()
 		{
+			return Task.Run(ReadEditorData);
+		}
+
+		internal static OraclePanelEditorData? ReadEditorData()
+		{
 			if(!CanReadState()) {
-				return Task.FromResult<OraclePanelEditorData?>(null);
+				return null;
 			}
 
 			OraclePanelRuntimeSummary? summary = ReadRuntimeSummary();
 			if(summary == null) {
-				return Task.FromResult<OraclePanelEditorData?>(null);
+				return null;
 			}
 
 			OraclePanelEditorData data = new OraclePanelEditorData() {
@@ -451,21 +455,27 @@ namespace Mesen.Utilities
 				}).ToList()
 			};
 
-			return Task.FromResult<OraclePanelEditorData?>(data);
+			return data;
 		}
 
 		public static Task<OraclePanelApplyResult?> ApplySaveDataChangesAsync(IReadOnlyList<OraclePanelValueUpdate> items, IReadOnlyList<OraclePanelValueUpdate> flags, bool syncToSram, string? presetId = null)
 		{
+			return Task.Run(() => ApplySaveDataChanges(items, flags, syncToSram, presetId));
+		}
+
+		public static OraclePanelApplyResult? ApplySaveDataChanges(IReadOnlyList<OraclePanelValueUpdate> items, IReadOnlyList<OraclePanelValueUpdate> flags, bool syncToSram, string? presetId = null)
+		{
 			if(!CanReadState()) {
-				return Task.FromResult<OraclePanelApplyResult?>(null);
+				return null;
 			}
+			EnsureDebuggerInitialized();
 
 			int changedItems = 0;
 			int changedFlags = 0;
 			if(!string.IsNullOrWhiteSpace(presetId)) {
 				PresetDef? preset = Presets.FirstOrDefault(p => p.Id == presetId);
 				if(preset == null) {
-					return Task.FromResult<OraclePanelApplyResult?>(null);
+					return null;
 				}
 				changedItems += ApplyItemValues(preset.Items.Select(entry => new OraclePanelValueUpdate() { Key = entry.Key, Value = entry.Value }).ToList(), preserveInventory: preset.Id == "all_items");
 				changedFlags += ApplyFlagValues(preset.Flags.Select(entry => new OraclePanelValueUpdate() { Key = entry.Key, Value = entry.Value }).ToList());
@@ -476,54 +486,46 @@ namespace Mesen.Utilities
 
 			int? syncedSlot = syncToSram ? SyncWramSaveToSram() : null;
 			OraclePanelRuntimeSummary summary = ReadRuntimeSummary() ?? new OraclePanelRuntimeSummary();
-			OraclePanelApplyResult result = new OraclePanelApplyResult() {
+			return new OraclePanelApplyResult() {
 				ChangedItems = changedItems,
 				ChangedFlags = changedFlags,
 				Synced = syncedSlot.HasValue,
 				SyncSlot = syncedSlot,
 				State = summary
 			};
-
-			return Task.FromResult<OraclePanelApplyResult?>(result);
 		}
 
 		internal static bool CanReadState()
 		{
-			if(!EmuApi.IsRunning()) {
-				return false;
-			}
-			EnsureDebuggerInitialized();
-			return true;
+			return EmuApi.IsRunning();
 		}
 
-		private static void EnsureDebuggerInitialized()
+		internal static void EnsureDebuggerInitialized()
 		{
-			if(_debuggerInitialized) {
+			if(!EmuApi.IsRunning() || DebugApi.IsDebuggerRunning()) {
 				return;
 			}
 
 			lock(_debuggerLock) {
-				if(_debuggerInitialized) {
+				if(!EmuApi.IsRunning() || DebugApi.IsDebuggerRunning()) {
 					return;
 				}
 
 				DebugApi.InitializeDebugger();
-				_debuggerInitialized = true;
 			}
 		}
 
-		private static OraclePanelRuntimeSummary? ReadRuntimeSummary()
+		internal static OraclePanelRuntimeSummary? ReadRuntimeSummary()
 		{
-			if(!CanReadState()) {
+			if(!CanReadState() || !TryReadPassiveByte(ModeAddr, out byte mode)) {
 				return null;
 			}
 
-			int mode = ReadByte(ModeAddr);
-			int submode = ReadByte(SubmodeAddr);
-			bool indoors = ReadByte(IndoorsAddr) != 0;
-			int areaId = ReadByte(AreaIdAddr);
-			int roomLayout = ReadByte(RoomLayoutAddr);
-			int dungeonRoom = ReadWord(DungeonRoomAddr);
+			int submode = ReadPassiveByte(SubmodeAddr);
+			bool indoors = ReadPassiveByte(IndoorsAddr) != 0;
+			int areaId = ReadPassiveByte(AreaIdAddr);
+			int roomLayout = ReadPassiveByte(RoomLayoutAddr);
+			int dungeonRoom = ReadPassiveWord(DungeonRoomAddr);
 			int roomValue = indoors ? dungeonRoom : roomLayout;
 
 			string areaName = OverworldAreas.TryGetValue(areaId, out string? namedArea)
@@ -531,6 +533,8 @@ namespace Mesen.Utilities
 				: $"Area 0x{areaId:X2}";
 			string roomLabel = indoors ? $"0x{roomValue:X4}" : $"0x{roomValue:X2}";
 			string roomName = indoors ? ("Room " + roomLabel) : areaName;
+			byte linkDirection = ReadPassiveByte(LinkDirectionAddr);
+			byte linkForm = ReadPassiveByte(LinkFormAddr);
 
 			return new OraclePanelRuntimeSummary() {
 				ModeName = ModeNames.TryGetValue(mode, out string? modeName) ? modeName : $"0x{mode:X2}",
@@ -544,18 +548,18 @@ namespace Mesen.Utilities
 				RoomValue = roomValue,
 				RoomLabel = roomLabel,
 				DungeonRoom = dungeonRoom,
-				LinkX = ReadWord(LinkXAddr),
-				LinkY = ReadWord(LinkYAddr),
-				LinkDirection = DirectionNames.TryGetValue(ReadByte(LinkDirectionAddr), out string? directionName) ? directionName : "?",
-				LinkState = ReadByte(LinkStateAddr),
-				LinkFormName = FormNames.TryGetValue(ReadByte(LinkFormAddr), out string? formName) ? formName : $"0x{ReadByte(LinkFormAddr):X2}",
-				Health = ReadByte(HealthCurrentAddr),
-				MaxHealth = ReadByte(HealthMaxAddr),
-				Magic = ReadByte(MagicAddr),
-				Rupees = ReadWord(RupeesAddr),
-				GameState = ReadByte(GameStateAddr),
-				Crystals = ReadByte(CrystalsAddr),
-				Pendants = ReadByte(PendantsAddr)
+				LinkX = ReadPassiveWord(LinkXAddr),
+				LinkY = ReadPassiveWord(LinkYAddr),
+				LinkDirection = DirectionNames.TryGetValue(linkDirection, out string? directionName) ? directionName : "?",
+				LinkState = ReadPassiveByte(LinkStateAddr),
+				LinkFormName = FormNames.TryGetValue(linkForm, out string? formName) ? formName : $"0x{linkForm:X2}",
+				Health = ReadPassiveByte(HealthCurrentAddr),
+				MaxHealth = ReadPassiveByte(HealthMaxAddr),
+				Magic = ReadPassiveByte(MagicAddr),
+				Rupees = ReadPassiveWord(RupeesAddr),
+				GameState = ReadPassiveByte(GameStateAddr),
+				Crystals = ReadPassiveByte(CrystalsAddr),
+				Pendants = ReadPassiveByte(PendantsAddr)
 			};
 		}
 
@@ -735,8 +739,54 @@ namespace Mesen.Utilities
 			return address == RupeesAddr ? ReadWord(address) : ReadByte(address);
 		}
 
+		internal static bool TryReadPassiveByte(uint address, out byte value)
+		{
+			if(TryReadPassiveWramByte(address, out value)) {
+				return true;
+			}
+			if(DebugApi.IsDebuggerRunning()) {
+				value = DebugApi.GetMemoryValue(MemoryType.SnesMemory, address);
+				return true;
+			}
+			value = 0;
+			return false;
+		}
+
+		private static bool TryReadPassiveWramByte(uint address, out byte value)
+		{
+			if(address >= 0x7E0000 && address <= 0x7FFFFF) {
+				return EmuApi.TryReadGameMemoryByte(MemoryType.SnesWorkRam, address - 0x7E0000, out value);
+			}
+			if((address <= 0x3FFFFF || (address >= 0x800000 && address <= 0xBFFFFF)) && (address & 0xFFFF) < 0x2000) {
+				return EmuApi.TryReadGameMemoryByte(MemoryType.SnesWorkRam, address & 0x1FFF, out value);
+			}
+			value = 0;
+			return false;
+		}
+
+		private static byte ReadPassiveByte(uint address)
+		{
+			return TryReadPassiveByte(address, out byte value) ? value : (byte)0;
+		}
+
+		private static int ReadPassiveWord(uint address)
+		{
+			return ReadPassiveByte(address) | (ReadPassiveByte(address + 1) << 8);
+		}
+
+		internal static byte ReadMemoryByte(MemoryType type, uint offset)
+		{
+			if(EmuApi.TryReadGameMemoryByte(type, offset, out byte value)) {
+				return value;
+			}
+			return DebugApi.GetMemoryValue(type, offset);
+		}
+
 		internal static byte ReadByte(uint address)
 		{
+			if(TryReadPassiveWramByte(address, out byte value)) {
+				return value;
+			}
 			return DebugApi.GetMemoryValue(MemoryType.SnesMemory, address);
 		}
 

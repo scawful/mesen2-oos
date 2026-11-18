@@ -547,6 +547,12 @@ extern "C" {
 		return _emu->GetMemory(type).Size;
 	}
 
+	DllExport bool __stdcall TryReadGameMemoryByte(MemoryType type, uint32_t offset, uint8_t* outValue)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->TryReadMemory(type, offset, 1, outValue);
+	}
+
 	DllExport void __stdcall ClearCheats() { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetCheatManager()->ClearCheats(); }
 	DllExport void __stdcall SetCheats(CheatCode codes[], uint32_t length) { INTEROP_EMU_LEASE_OR_RETURN(); _emu->GetCheatManager()->SetCheats(codes, length); }
 	DllExport bool __stdcall GetConvertedCheat(CheatCode input, InternalCheatCode& output) { INTEROP_EMU_LEASE_OR_RETURN_VALUE(false); return _emu->GetCheatManager()->GetConvertedCheat(input, output); }

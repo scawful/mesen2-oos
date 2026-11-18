@@ -1378,6 +1378,27 @@ ConsoleMemoryInfo Emulator::GetMemory(MemoryType type)
 	return _consoleMemory[(int)type];
 }
 
+bool Emulator::TryReadMemory(MemoryType type, uint32_t offset, uint32_t length, uint8_t* output)
+{
+	if(!output || length == 0) {
+		return false;
+	}
+	auto lock = _loadLock.AcquireSafe();
+	if(!IsRunning()) {
+		return false;
+	}
+	shared_ptr<IConsole> console = _console.lock();
+	if(!console) {
+		return false;
+	}
+	ConsoleMemoryInfo mem = GetMemory(type);
+	if(!mem.Memory || offset >= mem.Size || length > mem.Size - offset) {
+		return false;
+	}
+	memcpy(output, static_cast<const uint8_t*>(mem.Memory) + offset, length);
+	return true;
+}
+
 AudioTrackInfo Emulator::GetAudioTrackInfo()
 {
 	shared_ptr<IConsole> console = GetConsole();

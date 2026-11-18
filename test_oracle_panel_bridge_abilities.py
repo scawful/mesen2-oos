@@ -47,11 +47,25 @@ namespace Mesen.Interop
 
 	public static class EmuApi
 	{
+		public static bool PassiveReadEnabled;
+		public static readonly Dictionary<(MemoryType, uint), byte> PassiveMemory = new();
 		public static bool IsRunning() => true;
+
+		public static bool TryReadGameMemoryByte(MemoryType type, uint offset, out byte value)
+		{
+			if(PassiveReadEnabled && type == MemoryType.SnesWorkRam && offset < 0x20000) {
+				PassiveMemory.TryGetValue((type, offset), out value);
+				return true;
+			}
+			value = 0;
+			return false;
+		}
 	}
 
 	public static class DebugApi
 	{
+		public static int InitializeDebuggerCalls;
+		public static bool DebuggerRunning;
 		public static readonly Dictionary<(MemoryType, uint), byte> Memory = new();
 		public static readonly List<(MemoryType Type, uint Address)> Accesses = new();
 		public static readonly List<(MemoryType Type, uint Address, int Length)> BlockWrites = new();
@@ -66,7 +80,13 @@ namespace Mesen.Interop
 
 		public static byte Peek(MemoryType type, uint address) => Memory.TryGetValue(Resolve(type, address), out byte v) ? v : (byte)0;
 
-		public static void InitializeDebugger() { }
+		public static void InitializeDebugger()
+		{
+			InitializeDebuggerCalls++;
+			DebuggerRunning = true;
+		}
+
+		public static bool IsDebuggerRunning() => DebuggerRunning;
 
 		public static byte GetMemoryValue(MemoryType type, uint address)
 		{
@@ -115,6 +135,9 @@ static class Driver
 		var scenarios = JsonSerializer.Deserialize<List<Scenario>>(Console.In.ReadToEnd())!;
 		var results = new List<object>();
 		foreach(Scenario s in scenarios) {
+			EmuApi.PassiveReadEnabled = false;
+			DebugApi.InitializeDebuggerCalls = 0;
+			DebugApi.DebuggerRunning = false;
 			DebugApi.Memory.Clear();
 			DebugApi.Accesses.Clear();
 			DebugApi.BlockWrites.Clear();
@@ -132,9 +155,37 @@ static class Driver
 				AbilityDomains = DebugApi.Accesses.Where(a => a.Address == 0x7EF379).Select(a => a.Type.ToString()).Distinct().ToList(),
 				BlockWrites = DebugApi.BlockWrites.Select(w => new object[] { w.Type.ToString(), w.Address, w.Length }).ToList(),
 				Wram = Block(MemoryType.SnesWorkRam, 0xF000),
-				Sram = Block(MemoryType.SnesSaveRam, 0x0000, 0x2000)
+				Sram = Block(MemoryType.SnesSaveRam, 0x0000, 0x2000),
+				AreaId = 0,
+				Health = 0,
+				PassiveInitCalls = 0,
+				PassiveDebugAccesses = 0
 			});
 		}
+		EmuApi.PassiveReadEnabled = true;
+		EmuApi.PassiveMemory[(MemoryType.SnesWorkRam, 0x0010)] = 0x09;
+		EmuApi.PassiveMemory[(MemoryType.SnesWorkRam, 0x008A)] = 0x20;
+		EmuApi.PassiveMemory[(MemoryType.SnesWorkRam, 0xF36D)] = 24;
+		DebugApi.InitializeDebuggerCalls = 0;
+		DebugApi.DebuggerRunning = false;
+		DebugApi.Accesses.Clear();
+		bool passiveCanRead = OraclePanelBridge.CanReadState();
+		OraclePanelRuntimeSummary? passiveSummary = OraclePanelBridge.FetchRuntimeSummaryAsync().Result;
+		results.Add(new {
+			Name = "__passive_runtime_summary__",
+			Synced = passiveCanRead && passiveSummary != null,
+			SyncSlot = (int?)null,
+			Boots = 0,
+			Ability = 0,
+			AbilityDomains = new List<string>(),
+			BlockWrites = new List<object[]>(),
+			Wram = Array.Empty<int>(),
+			Sram = Array.Empty<int>(),
+			AreaId = passiveSummary?.AreaId ?? -1,
+			Health = passiveSummary?.Health ?? -1,
+			PassiveInitCalls = DebugApi.InitializeDebuggerCalls,
+			PassiveDebugAccesses = DebugApi.Accesses.Count
+		});
 		Console.WriteLine(JsonSerializer.Serialize(results));
 	}
 
@@ -300,6 +351,13 @@ class OraclePanelBridgeBootsAbilityTest(unittest.TestCase):
 
     def test_sync_writes_cleared_run_to_primary_and_mirror_with_valid_checksum(self):
         self.assertSynced("sync_clear_progress_slot1", 1, 0, 0xF8)
+
+    def test_passive_runtime_summary_does_not_initialize_debugger(self):
+        r = self.results["__passive_runtime_summary__"]
+        self.assertTrue(r["Synced"])
+        self.assertEqual((r["AreaId"], r["Health"]), (0x20, 24))
+        self.assertEqual(r["PassiveInitCalls"], 0)
+        self.assertEqual(r["PassiveDebugAccesses"], 0)
 
 
 if __name__ == "__main__":

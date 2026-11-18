@@ -200,6 +200,7 @@ namespace Mesen.Utilities
 			if(!OraclePanelBridge.CanReadState()) {
 				return;
 			}
+			OraclePanelBridge.EnsureDebuggerInitialized();
 			if(field.IsHearts) {
 				OraclePanelBridge.WriteByte(0x7EF36C, value * 8);
 				OraclePanelBridge.WriteByte(0x7EF36D, value * 8);
@@ -549,7 +550,8 @@ namespace Mesen.Utilities
 
 		public static int GetActiveSaveSlot()
 		{
-			int raw = DebugApi.GetMemoryValue(MemoryType.SnesSaveRam, 0x1FFE) | (DebugApi.GetMemoryValue(MemoryType.SnesSaveRam, 0x1FFF) << 8);
+			int raw = OraclePanelBridge.ReadMemoryByte(MemoryType.SnesSaveRam, 0x1FFE)
+				| (OraclePanelBridge.ReadMemoryByte(MemoryType.SnesSaveRam, 0x1FFF) << 8);
 			return raw == 2 || raw == 4 || raw == 6 ? raw / 2 : 1;
 		}
 
@@ -771,6 +773,7 @@ namespace Mesen.Utilities
 			if(!OraclePanelBridge.CanReadState()) {
 				return OracleActionResult.Fail("No game running.");
 			}
+			OraclePanelBridge.EnsureDebuggerInitialized();
 			bool wasPaused = EmuApi.IsPaused();
 			if(wasPaused) {
 				EmuApi.Resume();

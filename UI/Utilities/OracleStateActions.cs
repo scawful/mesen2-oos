@@ -25,7 +25,7 @@ namespace Mesen.Utilities
 			string? label = await TextInputWindow.ShowDialog(parentWindow, "Enter a label for this save state:", "Quick Save");
 			if(!string.IsNullOrWhiteSpace(label)) {
 				try {
-					string id = OracleStateLibrary.SaveLabeledState(label);
+					string id = await Task.Run(() => OracleStateLibrary.SaveLabeledState(label));
 					await MesenMsgBox.Show(parentWindow, $"Saved state '{label}' (ID: {id})", MessageBoxButtons.OK, MessageBoxIcon.Info);
 				} catch(Exception ex) {
 					await MesenMsgBox.Show(parentWindow, "Failed to save state: " + ex.Message, MessageBoxButtons.OK, MessageBoxIcon.Error);

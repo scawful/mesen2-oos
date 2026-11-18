@@ -272,6 +272,7 @@ namespace Mesen.ViewModels
 				if(!OraclePanelBridge.CanReadState()) {
 					return OracleActionResult.Fail("No game running.");
 				}
+				OraclePanelBridge.EnsureDebuggerInitialized();
 				OraclePanelBridge.WriteByte(0x7EF36D, OraclePanelBridge.ReadByte(0x7EF36C));
 				OraclePanelBridge.WriteByte(0x7EF36E, 0x80);
 				return OracleActionResult.Ok("Health and magic refilled.");

@@ -19,6 +19,7 @@ namespace Mesen.Interop
 		private const string DllPath = EmuApi.DllName;
 		[DllImport(DllPath)] public static extern void InitializeDebugger();
 		[DllImport(DllPath)] public static extern void ReleaseDebugger();
+		[DllImport(DllPath)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool IsDebuggerRunning();
 
 		[DllImport(DllPath)] public static extern void ResumeExecution();
 		[DllImport(DllPath)] public static extern void Step(CpuType cpuType, Int32 instructionCount, StepType type = StepType.Step);
