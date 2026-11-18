@@ -12,6 +12,10 @@
 #include "Utilities/Video/IVideoRecorder.h"
 #include "Utilities/Video/AviRecorder.h"
 #include "Utilities/Video/GifRecorder.h"
+#include "Utilities/FolderUtilities.h"
+#ifdef __ANDROID__
+#include "Android/app/src/main/cpp/Mp4VideoRecorder.h"
+#endif
 
 VideoRenderer::VideoRenderer(Emulator* emu)
 {
@@ -245,7 +249,10 @@ void VideoRenderer::ProcessAviRecording(RenderedFrame& frame)
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
 	if(recorder) {
 		if(!recorder->IsRecording()) {
-			recorder->StartRecording(frame.Width, frame.Height, 4, _emu->GetSettings()->GetAudioConfig().SampleRate, _emu->GetFps());
+			if(!recorder->StartRecording(frame.Width, frame.Height, 4, _emu->GetSettings()->GetAudioConfig().SampleRate, _emu->GetFps())) {
+				StopRecording();
+				return;
+			}
 		}
 
 		if(_recorderOptions.RecordInputHud || _recorderOptions.RecordSystemHud) {
@@ -286,12 +293,21 @@ void VideoRenderer::ProcessAviRecording(RenderedFrame& frame)
 	}
 }
 
-void VideoRenderer::StartRecording(string filename, RecordAviOptions options)
+bool VideoRenderer::StartRecording(string filename, RecordAviOptions options)
 {
 	_recorderOptions = options;
 
 	shared_ptr<IVideoRecorder> recorder;
-	if(options.Codec == VideoCodec::GIF) {
+	string ext = FolderUtilities::GetExtension(filename);
+	for(char& c : ext) {
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	}
+#ifdef __ANDROID__
+	if(ext == ".mp4") {
+		recorder.reset(new Mp4VideoRecorder());
+	} else
+#endif
+	if(options.Codec == VideoCodec::GIF || ext == ".gif") {
 		recorder.reset(new GifRecorder());
 	} else {
 		recorder.reset(new AviRecorder(options.Codec, options.CompressionLevel));
@@ -304,8 +320,10 @@ void VideoRenderer::StartRecording(string filename, RecordAviOptions options)
 			//Only display message if not recording the system HUD (otherwise the message is always visible on the recording, which isn't ideal)
 			MessageManager::DisplayMessage("VideoRecorder", "VideoRecorderStarted", filename);
 		}
+		return true;
 	} else {
 		MessageManager::DisplayMessage("VideoRecorder", "CouldNotWriteToFile", filename);
+		return false;
 	}
 }
 
@@ -322,14 +340,21 @@ void VideoRenderer::AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount
 void VideoRenderer::StopRecording()
 {
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+	_recorder.reset();
+	_aviRecorderSurface.UpdateSize(0, 0);
 	if(recorder) {
+		recorder->StopRecording();
 		MessageManager::DisplayMessage("VideoRecorder", "VideoRecorderStopped", recorder->GetOutputFile());
 	}
-	_aviRecorderSurface.UpdateSize(0, 0);
-	_recorder.reset();
 }
 
 bool VideoRenderer::IsRecording()
 {
 	return _recorder != nullptr;
+}
+
+string VideoRenderer::GetRecordingFile()
+{
+	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+	return recorder ? recorder->GetOutputFile() : "";
 }

@@ -65,6 +65,7 @@ private object Pal {
     val LINE = Color(0xFF344258)
     val GOLD = Color(0xFFE8C35A)
     val TEAL = Color(0xFF4FB3A9)
+    val RED = Color(0xFFE05252)
     val TEXT = Color(0xFFE9EEF5)
     val DIM = Color(0xFF8C98AA)
     val INK = Color(0xFF1A1405)
@@ -97,6 +98,7 @@ enum class RailItem(val label: String) {
     RESUME("Resume"),
     SAVE("Save state"),
     LOAD("Load state"),
+    CAPTURE("Capture"),
     ITEMS("Items & progress"),
     FAST("Fast forward"),
     SETTINGS("Settings"),
@@ -142,12 +144,30 @@ class OracleUi internal constructor(
         fun startCheckpoint(id: String)
         fun startPreset(id: String)
         fun toast(message: String)
+        fun capturesDir(): File?
+        fun recentCaptures(): List<MediaCapture.CaptureItem>
+        fun takeScreenshot(): String
+        fun isVideoRecording(): Boolean
+        fun videoRecordingElapsedSeconds(): Long
+        fun toggleVideoRecording(): String
+        fun captureBugSnapshot(category: String): String
+        fun testingTools(): TestingTools
+        fun activeSaveSlot(): Int
+        fun saveStatePath(slot: Int): String?
+        fun toggleCheat(cheat: TestingTools.Cheat): String
+        fun clearCheats(): String
+        fun runLiveAction(action: TestingTools.LiveAction): String
+        fun loadCaptureState(stateFile: File): Boolean
+        fun stepFrames(frames: Int): Boolean
+        fun startWarp(target: Progression.Checkpoint)
+        fun fallToDungeonRoom(roomId: Int)
     }
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "oracle-ui").apply { isDaemon = true } }
     private val mismatchWarnings = SaveStateSlots.MismatchWarnings()
     private val cardsGen = AtomicLong(0)
     private val statesGen = AtomicLong(0)
+    private val capturesGen = AtomicLong(0)
     private val itemsGen = AtomicLong(0)
     private val metaGen = AtomicLong(0)
     private var libNavTick = 0L
@@ -172,6 +192,12 @@ class OracleUi internal constructor(
     private var inPanel by mutableStateOf(false)
     private var states by mutableStateOf(listOf<SaveStateSlots.Entry>())
     private var loadingStates by mutableStateOf(false)
+    private var captures by mutableStateOf(listOf<MediaCapture.CaptureItem>())
+    private var loadingCaptures by mutableStateOf(false)
+    private var bugCategoryIndex by mutableIntStateOf(0)
+    private var fallRoomId by mutableIntStateOf(0)
+    private var captureTick by mutableIntStateOf(0)
+    private var cheatsTick by mutableIntStateOf(0)
     private var slotPage by mutableIntStateOf(0)
     private var slotIndex by mutableIntStateOf(0)
     private var listIndex by mutableIntStateOf(0)
@@ -187,12 +213,13 @@ class OracleUi internal constructor(
     private var fastOn by mutableStateOf(false)
     private var settingsTick by mutableIntStateOf(0)
 
-    private val itemTabs = listOf(TAB_PRESETS) + Inventory.tabs()
+    private val itemTabs = listOf(TAB_PRESETS, TAB_WARPS, TAB_TEST_CHEATS) + Inventory.tabs()
     private val settingsRows = listOf(
         SettingRow.Toggle("hud", "Keep status bar visible"),
         SettingRow.Toggle("fit", "Fill screen"),
         SettingRow.Toggle("play", "Smooth play"),
         SettingRow.Toggle("gpu", "GPU blit"),
+        SettingRow.Toggle("hotkeys", "Capture hotkeys (L2 / L3 / R3)"),
         SettingRow.Action("reset", "Reset console", "Restart the emulated console"),
         SettingRow.Action("home", "Add to Home", "Pin launcher shortcut"),
     )
@@ -206,6 +233,7 @@ class OracleUi internal constructor(
     internal val isBusy: Boolean get() = busy
     internal val isLoadingLibrary: Boolean get() = loadingLibrary
     internal val isLoadingStates: Boolean get() = loadingStates
+    internal val isLoadingCaptures: Boolean get() = loadingCaptures
     internal val isLoadingItems: Boolean get() = loadingItems
     internal val currentStatus: String get() = status
     internal val currentMenuTitle: String get() = menuTitle
@@ -213,6 +241,8 @@ class OracleUi internal constructor(
     internal val currentActiveSaveSlot: Int get() = activeSaveSlot
     internal val cardChannels: List<String> get() = cards.map { it.entry.channel }
     internal val stateSlotsCount: Int get() = states.size
+    internal val currentCaptures: List<MediaCapture.CaptureItem> get() = captures
+    internal val currentItemTabName: String get() = activeItemTabName()
     internal val currentItemRows: List<Inventory.Row> get() = itemRows
     internal val currentItemValues: List<Int> get() = itemValues
 
@@ -250,6 +280,7 @@ class OracleUi internal constructor(
         if (wasClosed) host.uiOpened()
         refreshMenuMeta()
         refreshStates()
+        refreshCaptures()
         refreshItems()
     }
 
@@ -564,7 +595,7 @@ class OracleUi internal constructor(
             val title = computeTitle(path)
             val canon = canonical(path)
             val summary = host.socketSummary()
-            val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else 1
+            val slot = if (host.nativeReady()) host.activeSaveSlot() else 1
             postMain(Runnable {
                 if (gen != metaGen.get()) return@Runnable
                 menuTitle = title
@@ -584,9 +615,9 @@ class OracleUi internal constructor(
         // auto-save path is derived from slot 1's ("<rom>_1.mss" -> "<rom>_11.mss").
         return slotList { slot ->
             if (slot == SaveStateSlots.AUTO_SLOT) {
-                MesenNative.saveStatePath(1)?.replace(Regex("_1\\.mss$"), "_${SaveStateSlots.AUTO_SLOT}.mss")
+                host.saveStatePath(1)?.replace(Regex("_1\\.mss$"), "_${SaveStateSlots.AUTO_SLOT}.mss")
             } else {
-                MesenNative.saveStatePath(slot)
+                host.saveStatePath(slot)
             }
         }
     }
@@ -608,16 +639,35 @@ class OracleUi internal constructor(
 
     private fun activeItemTabName(): String = itemTabs.getOrElse(itemTab) { TAB_PRESETS }
 
+    private fun refreshCaptures() {
+        val gen = capturesGen.incrementAndGet()
+        if (captures.isEmpty()) {
+            loadingCaptures = true
+        }
+        worker.execute {
+            val loaded = try {
+                host.recentCaptures()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            postMain(Runnable {
+                if (gen != capturesGen.get()) return@Runnable
+                captures = loaded
+                loadingCaptures = false
+            })
+        }
+    }
+
     private fun refreshItems() {
         val tab = activeItemTabName()
         val gen = itemsGen.incrementAndGet()
-        if (tab == TAB_PRESETS) {
+        if (tab == TAB_PRESETS || tab == TAB_WARPS || tab == TAB_TEST_CHEATS) {
             itemRows = emptyList()
             itemValues = emptyList()
-            loadedItemTab = TAB_PRESETS
+            loadedItemTab = tab
             loadingItems = false
             worker.execute {
-                val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else 1
+                val slot = if (host.nativeReady()) host.activeSaveSlot() else 1
                 postMain(Runnable {
                     if (gen != itemsGen.get()) return@Runnable
                     activeSaveSlot = slot
@@ -637,7 +687,7 @@ class OracleUi internal constructor(
             } else {
                 rows.map { if (it.kind == Inventory.Kind.ACTION) 0 else -1 }
             }
-            val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else activeSaveSlot
+            val slot = if (host.nativeReady()) host.activeSaveSlot() else activeSaveSlot
             postMain(Runnable {
                 if (gen != itemsGen.get() || activeItemTabName() != tab) return@Runnable
                 itemRows = rows
@@ -652,7 +702,7 @@ class OracleUi internal constructor(
     private val railItem: RailItem get() = RailItem.values()[rail]
 
     private fun hasPanel(item: RailItem) = when (item) {
-        RailItem.SAVE, RailItem.LOAD, RailItem.ITEMS, RailItem.SETTINGS -> true
+        RailItem.SAVE, RailItem.LOAD, RailItem.CAPTURE, RailItem.ITEMS, RailItem.SETTINGS -> true
         else -> false
     }
 
@@ -660,6 +710,7 @@ class OracleUi internal constructor(
         val item = railItem
         when (item) {
             RailItem.SAVE, RailItem.LOAD -> { refreshStates(); slotIndex = 0 }
+            RailItem.CAPTURE -> { listIndex = 0; refreshCaptures() }
             RailItem.ITEMS -> { listIndex = 0; bitIndex = 0; refreshItems() }
             RailItem.SETTINGS -> { listIndex = 0; refreshMenuMeta() }
             else -> listIndex = 0
@@ -699,6 +750,7 @@ class OracleUi internal constructor(
             if (key == Key.UP || key == Key.DOWN) {
                 status = ""
                 when (railItem) {
+                    RailItem.CAPTURE -> refreshCaptures()
                     RailItem.ITEMS -> refreshItems()
                     RailItem.SAVE, RailItem.LOAD -> refreshStates()
                     RailItem.SETTINGS -> refreshMenuMeta()
@@ -713,9 +765,126 @@ class OracleUi internal constructor(
         }
         when (railItem) {
             RailItem.SAVE, RailItem.LOAD -> slotKey(key)
+            RailItem.CAPTURE -> captureKey(key)
             RailItem.ITEMS -> itemsKey(key)
             RailItem.SETTINGS -> listKey(key, settingsRows.size) {
                 activateSetting(settingsRows[listIndex])
+            }
+            else -> {}
+        }
+    }
+
+    private fun captureKey(key: Key) {
+        val recent = captures
+        val total = CAPTURE_CONTROLS + recent.size
+        when (key) {
+            Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((total - 1).coerceAtLeast(0))
+            Key.LEFT -> {
+                if (listIndex == 2) {
+                    val cats = MediaCapture.BUG_CATEGORIES
+                    bugCategoryIndex = (bugCategoryIndex - 1 + cats.size) % cats.size
+                    captureTick++
+                } else {
+                    inPanel = false
+                }
+            }
+            Key.RIGHT -> {
+                if (listIndex == 2) {
+                    val cats = MediaCapture.BUG_CATEGORIES
+                    bugCategoryIndex = (bugCategoryIndex + 1) % cats.size
+                    captureTick++
+                }
+            }
+            Key.A -> when (listIndex) {
+                0 -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    val gen = capturesGen.incrementAndGet()
+                    var msg = ""
+                    var loaded: List<MediaCapture.CaptureItem>? = null
+                    work("Taking screenshot…", {
+                        msg = host.takeScreenshot()
+                        loaded = host.recentCaptures()
+                        null
+                    }) { problem ->
+                        val items = loaded
+                        if (items != null && gen == capturesGen.get()) {
+                            captures = items
+                            loadingCaptures = false
+                        }
+                        captureTick++
+                        status = problem ?: msg
+                    }
+                }
+                1 -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    val gen = capturesGen.incrementAndGet()
+                    var msg = ""
+                    var loaded: List<MediaCapture.CaptureItem>? = null
+                    work("Updating recording…", {
+                        msg = host.toggleVideoRecording()
+                        loaded = host.recentCaptures()
+                        null
+                    }) { problem ->
+                        val items = loaded
+                        if (items != null && gen == capturesGen.get()) {
+                            captures = items
+                            loadingCaptures = false
+                        }
+                        captureTick++
+                        status = problem ?: msg
+                    }
+                }
+                2 -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    val category = MediaCapture.BUG_CATEGORIES.getOrElse(bugCategoryIndex) { "Bug" }
+                    val gen = capturesGen.incrementAndGet()
+                    var msg = ""
+                    var loaded: List<MediaCapture.CaptureItem>? = null
+                    work("Saving bug snapshot…", {
+                        msg = host.captureBugSnapshot(category)
+                        loaded = host.recentCaptures()
+                        null
+                    }) { problem ->
+                        val items = loaded
+                        if (items != null && gen == capturesGen.get()) {
+                            captures = items
+                            loadingCaptures = false
+                        }
+                        captureTick++
+                        status = problem ?: msg
+                    }
+                }
+                3 -> {
+                    host.setSetting("rec_hud", !host.setting("rec_hud"))
+                    captureTick++
+                }
+                else -> {
+                    val item = recent.getOrNull(listIndex - CAPTURE_CONTROLS) ?: return
+                    if (item.kind == MediaCapture.Kind.BUG_SNAPSHOT && item.stateFile != null) {
+                        if (!host.nativeReady()) {
+                            status = "Emulator is still starting."
+                            return
+                        }
+                        work("Loading snapshot ${item.name}…", {
+                            if (host.loadCaptureState(item.stateFile)) null
+                            else "Failed to load ${item.name}"
+                        }) { problem ->
+                            if (problem == null) close() else status = problem
+                        }
+                    } else {
+                        status = "${item.name} · ${item.detail}"
+                    }
+                }
             }
             else -> {}
         }
@@ -797,7 +966,7 @@ class OracleUi internal constructor(
                 if (!MesenNative.saveState(slot)) {
                     "Slot $slot did not save."
                 } else {
-                    val path = MesenNative.saveStatePath(slot)
+                    val path = host.saveStatePath(slot)
                     if (path != null && build.isNotEmpty()) {
                         SaveStateSlots.writeBuild(File(path), build)
                     }
@@ -950,6 +1119,105 @@ class OracleUi internal constructor(
             }
             return
         }
+        if (tab == TAB_WARPS) {
+            val cpData = host.checkpointData()
+            val areas = cpData.areaWarps
+            val entrances = cpData.entranceWarps
+            val total = 1 + areas.size + entrances.size
+            when (key) {
+                Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+                Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((total - 1).coerceAtLeast(0))
+                Key.LEFT, Key.RIGHT -> {
+                    if (listIndex == 0) {
+                        val n = Progression.MAX_ROOM_ID + 1
+                        fallRoomId = (fallRoomId + (if (key == Key.LEFT) -1 else 1) + n) % n
+                    } else if (key == Key.LEFT) {
+                        inPanel = false
+                    }
+                }
+                Key.A -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    if (listIndex == 0) {
+                        val targetRoom = fallRoomId
+                        close()
+                        host.fallToDungeonRoom(targetRoom)
+                    } else {
+                        val idx = listIndex - 1
+                        val target = if (idx < areas.size) areas[idx] else entrances.getOrNull(idx - areas.size)
+                        if (target != null) {
+                            close()
+                            host.startWarp(target)
+                        }
+                    }
+                }
+                else -> {}
+            }
+            return
+        }
+        if (tab == TAB_TEST_CHEATS) {
+            val cheats = TestingTools.Cheat.values()
+            val actions = TestingTools.LiveAction.values()
+            val clearIdx = cheats.size
+            val total = cheats.size + 1 + actions.size
+            when (key) {
+                Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+                Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((total - 1).coerceAtLeast(0))
+                Key.LEFT, Key.RIGHT -> {
+                    val action = if (listIndex > clearIdx) actions.getOrNull(listIndex - clearIdx - 1) else null
+                    if (action == TestingTools.LiveAction.SPAWN_SPRITE) {
+                        host.testingTools().stepSpawnSpriteId(if (key == Key.LEFT) -1 else 1)
+                        cheatsTick++
+                    } else if (key == Key.LEFT) {
+                        inPanel = false
+                    }
+                }
+                Key.A -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    when {
+                        listIndex < cheats.size -> {
+                            val cheat = cheats[listIndex]
+                            var msg = ""
+                            work("Updating ${cheat.label}…", {
+                                msg = host.toggleCheat(cheat)
+                                null
+                            }) { problem ->
+                                cheatsTick++
+                                status = problem ?: msg
+                            }
+                        }
+                        listIndex == clearIdx -> {
+                            var msg = ""
+                            work("Clearing cheats…", {
+                                msg = host.clearCheats()
+                                null
+                            }) { problem ->
+                                cheatsTick++
+                                status = problem ?: msg
+                            }
+                        }
+                        else -> {
+                            val action = actions.getOrNull(listIndex - clearIdx - 1) ?: return
+                            var msg = ""
+                            work("${action.label}…", {
+                                msg = host.runLiveAction(action)
+                                null
+                            }) { problem ->
+                                cheatsTick++
+                                status = problem ?: msg
+                            }
+                        }
+                    }
+                }
+                else -> {}
+            }
+            return
+        }
         val rows = itemRows
         when (key) {
             Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
@@ -1025,8 +1293,8 @@ class OracleUi internal constructor(
         worker.execute {
             val result = try {
                 task()
-            } catch (e: Exception) {
-                "Failed: ${e.message ?: e.javaClass.simpleName}"
+            } catch (t: Throwable) {
+                "Failed: ${t.message ?: t.javaClass.simpleName}"
             }
             postMain(Runnable {
                 busy = false
@@ -1141,10 +1409,10 @@ class OracleUi internal constructor(
         Column(Modifier.fillMaxSize().background(Pal.SCRIM)) {
             Row(Modifier.weight(1f)) {
                 Column(Modifier.width(206.dp).fillMaxHeight().background(Pal.PANEL).padding(horizontal = 10.dp)) {
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(10.dp))
                     Txt("PAUSED", 11.sp, Pal.GOLD, bold = true, italic = true)
                     Txt(menuTitle, 17.sp, Pal.TEXT, bold = true)
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
                     RailItem.values().forEachIndexed { i, r -> RailRow(r, i == rail) }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -1156,6 +1424,7 @@ class OracleUi internal constructor(
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when (item) {
                             RailItem.SAVE, RailItem.LOAD -> SlotGrid(item == RailItem.SAVE)
+                            RailItem.CAPTURE -> CapturePanel()
                             RailItem.ITEMS -> ItemsPanel()
                             RailItem.SETTINGS -> SettingsPanel()
                             else -> Txt(blurb(item), 13.sp, Pal.DIM)
@@ -1170,18 +1439,89 @@ class OracleUi internal constructor(
     @Composable
     private fun RailRow(item: RailItem, selected: Boolean) {
         val focused = selected && !inPanel
+        @Suppress("UNUSED_VARIABLE") val tick = captureTick + cheatsTick
         Row(
-            Modifier.fillMaxWidth().height(38.dp).clip(RoundedCornerShape(8.dp))
+            Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(8.dp))
                 .background(if (selected) Pal.PANEL2 else Color.Transparent)
                 .border(2.dp, if (focused) Pal.GOLD else Color.Transparent, RoundedCornerShape(8.dp)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(4.dp).height(22.dp).background(if (selected) Pal.GOLD else Color.Transparent))
+            Box(Modifier.width(4.dp).height(20.dp).background(if (selected) Pal.GOLD else Color.Transparent))
             Spacer(Modifier.width(10.dp))
-            Box(Modifier.weight(1f)) { Txt(item.label, 15.sp, Pal.TEXT, bold = true, italic = selected) }
-            if (item == RailItem.FAST) {
-                Badge(if (fastOn) "×3" else "OFF", if (fastOn) Pal.TEAL else Pal.LINE)
-                Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) { Txt(item.label, 14.sp, Pal.TEXT, bold = true, italic = selected) }
+            when (item) {
+                RailItem.CAPTURE -> if (host.isVideoRecording()) {
+                    Badge("REC", Pal.RED)
+                    Spacer(Modifier.width(8.dp))
+                }
+                RailItem.ITEMS -> {
+                    val activeCount = host.testingTools().activeCheatCount()
+                    if (activeCount > 0) {
+                        Badge("$activeCount ON", Pal.TEAL)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                }
+                RailItem.FAST -> {
+                    Badge(if (fastOn) "×3" else "OFF", if (fastOn) Pal.TEAL else Pal.LINE)
+                    Spacer(Modifier.width(8.dp))
+                }
+                else -> {}
+            }
+        }
+    }
+
+    @Composable
+    private fun CapturePanel() {
+        @Suppress("UNUSED_VARIABLE") val tick = captureTick
+        val listState = rememberLazyListState()
+        LaunchedEffect(listIndex, inPanel, captures.size) {
+            if (inPanel) listState.animateScrollToItem((listIndex - 3).coerceAtLeast(0))
+        }
+        val recording = host.isVideoRecording()
+        val elapsed = host.videoRecordingElapsedSeconds()
+        val category = MediaCapture.BUG_CATEGORIES.getOrElse(bugCategoryIndex) { "Bug" }
+        val hudOn = host.setting("rec_hud")
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            item {
+                ListRow("Take screenshot", "PNG", inPanel && listIndex == 0, tagColor = Pal.GOLD)
+            }
+            item {
+                ListRow(
+                    if (recording) "Stop video recording" else "Start video recording",
+                    if (recording) "REC ${MediaCapture.formatDuration(elapsed)}" else "MP4",
+                    inPanel && listIndex == 1,
+                    tagColor = if (recording) Pal.RED else Pal.TEAL,
+                )
+            }
+            item {
+                ListRow("Save bug snapshot", category, inPanel && listIndex == 2, tagColor = Pal.GOLD)
+            }
+            item {
+                ListRow(
+                    "Input HUD overlay in video",
+                    if (hudOn) "ON" else "OFF",
+                    inPanel && listIndex == 3,
+                    tagColor = if (hudOn) Pal.TEAL else Pal.DIM,
+                )
+            }
+            if (loadingCaptures && captures.isEmpty()) {
+                item { Txt("Scanning Captures folder…", 12.sp, Pal.DIM) }
+            } else {
+                itemsIndexed(captures) { i, cap ->
+                    val lead = when (cap.kind) {
+                        MediaCapture.Kind.SCREENSHOT -> "PNG"
+                        MediaCapture.Kind.VIDEO -> "MP4"
+                        MediaCapture.Kind.BUG_SNAPSHOT -> "BUG"
+                    }
+                    val color = if (cap.kind == MediaCapture.Kind.BUG_SNAPSHOT) Pal.GOLD else Pal.TEAL
+                    ListRow(
+                        cap.name,
+                        cap.detail,
+                        inPanel && (CAPTURE_CONTROLS + i) == listIndex,
+                        lead = lead,
+                        tagColor = color,
+                    )
+                }
             }
         }
     }
@@ -1235,13 +1575,17 @@ class OracleUi internal constructor(
     @Composable
     private fun ItemsPanel() {
         val state = rememberLazyListState()
+        val tabRowState = rememberLazyListState()
+        LaunchedEffect(itemTab) {
+            tabRowState.animateScrollToItem((itemTab - 1).coerceAtLeast(0))
+        }
         LaunchedEffect(listIndex, inPanel, itemTab) {
             if (inPanel) state.animateScrollToItem((listIndex - 3).coerceAtLeast(0))
         }
         val tab = activeItemTabName()
         Column {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                itemTabs.forEachIndexed { i, g ->
+            LazyRow(state = tabRowState, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(itemTabs) { i, g ->
                     val on = i == itemTab
                     Box(
                         Modifier.clip(RoundedCornerShape(12.dp)).background(if (on) Pal.GOLD else Pal.PANEL2)
@@ -1250,49 +1594,134 @@ class OracleUi internal constructor(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            if (tab == TAB_PRESETS) {
-                val presetData = host.presetData()
-                val data = host.checkpointData()
-                if (presetData.presets.isEmpty() && data.checkpoints.isEmpty()) {
-                    Txt(presetData.error ?: data.error ?: "No presets available.", 13.sp, Pal.DIM)
-                } else {
-                    val base = presetData.presets.size
+            when (tab) {
+                TAB_PRESETS -> {
+                    val presetData = host.presetData()
+                    val data = host.checkpointData()
+                    if (presetData.presets.isEmpty() && data.checkpoints.isEmpty()) {
+                        Txt(presetData.error ?: data.error ?: "No presets available.", 13.sp, Pal.DIM)
+                    } else {
+                        val base = presetData.presets.size
+                        LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            itemsIndexed(presetData.presets) { i, preset ->
+                                ListRow(
+                                    preset.label,
+                                    preset.displayTag(),
+                                    inPanel && i == listIndex,
+                                    lead = "${preset.beat}",
+                                    tagColor = if (preset.inPlace) Pal.TEAL else Pal.GOLD,
+                                )
+                            }
+                            itemsIndexed(data.checkpoints) { i, cp ->
+                                ListRow(
+                                    cp.label,
+                                    if (cp.kind == Progression.Kind.AREA) "area" else "door",
+                                    inPanel && (base + i) == listIndex,
+                                    lead = "${cp.beat}",
+                                )
+                            }
+                        }
+                    }
+                }
+                TAB_WARPS -> {
+                    val data = host.checkpointData()
+                    val areas = data.areaWarps
+                    val entrances = data.entranceWarps
                     LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        itemsIndexed(presetData.presets) { i, preset ->
+                        item {
                             ListRow(
-                                preset.label,
-                                preset.displayTag(),
-                                inPanel && i == listIndex,
-                                lead = "${preset.beat}",
-                                tagColor = if (preset.inPlace) Pal.TEAL else Pal.GOLD,
+                                "Fall into dungeon room",
+                                String.format(Locale.US, "$%04X", fallRoomId),
+                                inPanel && listIndex == 0,
+                                lead = "FALL",
+                                tagColor = Pal.GOLD,
                             )
                         }
-                        itemsIndexed(data.checkpoints) { i, cp ->
+                        if (areas.isEmpty() && entrances.isEmpty()) {
+                            item { Txt(data.error ?: "No warp targets bundled.", 13.sp, Pal.DIM) }
+                        } else {
+                            itemsIndexed(areas) { i, target ->
+                                ListRow(
+                                    target.label,
+                                    "area",
+                                    inPanel && (1 + i) == listIndex,
+                                    tagColor = Pal.TEAL,
+                                )
+                            }
+                            val base = 1 + areas.size
+                            itemsIndexed(entrances) { i, target ->
+                                ListRow(
+                                    target.label,
+                                    "door",
+                                    inPanel && (base + i) == listIndex,
+                                    tagColor = Pal.GOLD,
+                                )
+                            }
+                        }
+                    }
+                }
+                TAB_TEST_CHEATS -> {
+                    @Suppress("UNUSED_VARIABLE") val tick = cheatsTick
+                    val tools = host.testingTools()
+                    val cheats = TestingTools.Cheat.values()
+                    val actions = TestingTools.LiveAction.values()
+                    val clearIdx = cheats.size
+                    LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(cheats) { i, cheat ->
+                            val active = tools.isCheatActive(cheat)
                             ListRow(
-                                cp.label,
-                                if (cp.kind == Progression.Kind.AREA) "area" else "door",
-                                inPanel && (base + i) == listIndex,
-                                lead = "${cp.beat}",
+                                cheat.label,
+                                if (active) "ON" else "OFF",
+                                inPanel && i == listIndex,
+                                lead = "LOCK",
+                                tagColor = if (active) Pal.TEAL else Pal.DIM,
+                            )
+                        }
+                        item {
+                            ListRow(
+                                "Clear all active cheats",
+                                if (tools.activeCheatCount() > 0) "${tools.activeCheatCount()} active" else "none",
+                                inPanel && clearIdx == listIndex,
+                                lead = "OFF",
+                                tagColor = Pal.DIM,
+                            )
+                        }
+                        itemsIndexed(actions) { i, action ->
+                            val rowIdx = clearIdx + 1 + i
+                            val tag = when (action) {
+                                TestingTools.LiveAction.SPAWN_SPRITE -> tools.spawnSpriteText()
+                                TestingTools.LiveAction.TIME_OF_DAY -> tools.timePhaseText()
+                                TestingTools.LiveAction.STEP_1 -> "+1f"
+                                TestingTools.LiveAction.STEP_10 -> "+10f"
+                                else -> "run"
+                            }
+                            ListRow(
+                                action.label,
+                                tag,
+                                inPanel && rowIdx == listIndex,
+                                lead = "LIVE",
+                                tagColor = Pal.GOLD,
                             )
                         }
                     }
                 }
-            } else {
-                LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    itemsIndexed(itemRows) { i, row ->
-                        val value = itemValues.getOrElse(i) { -1 }
-                        val pending = loadingItems && i >= itemValues.size
-                        val selected = inPanel && i == listIndex
-                        if (row.kind == Inventory.Kind.BITS) {
-                            BitsRow(row, value, selected, bitIndex, pending)
-                        } else {
-                            val tag = when {
-                                row.kind == Inventory.Kind.ACTION -> "apply"
-                                pending -> "…"
-                                else -> Inventory.valueText(row, value)
+                else -> {
+                    LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(itemRows) { i, row ->
+                            val value = itemValues.getOrElse(i) { -1 }
+                            val pending = loadingItems && i >= itemValues.size
+                            val selected = inPanel && i == listIndex
+                            if (row.kind == Inventory.Kind.BITS) {
+                                BitsRow(row, value, selected, bitIndex, pending)
+                            } else {
+                                val tag = when {
+                                    row.kind == Inventory.Kind.ACTION -> "apply"
+                                    pending -> "…"
+                                    else -> Inventory.valueText(row, value)
+                                }
+                                val color = if (row.kind != Inventory.Kind.ACTION && !pending && value > 0) Pal.TEAL else Pal.DIM
+                                ListRow(row.label, tag, selected, tagColor = color)
                             }
-                            val color = if (row.kind != Inventory.Kind.ACTION && !pending && value > 0) Pal.TEAL else Pal.DIM
-                            ListRow(row.label, tag, selected, tagColor = color)
                         }
                     }
                 }
@@ -1471,12 +1900,23 @@ class OracleUi internal constructor(
             val used = states.count { it.occupied }
             "$used saved · page ${slotPage + 1} of $pageCount"
         }
+        RailItem.CAPTURE -> {
+            val rec = if (host.isVideoRecording()) "REC ${MediaCapture.formatDuration(host.videoRecordingElapsedSeconds())} · " else ""
+            "$rec${captures.size} recent"
+        }
         RailItem.ITEMS -> {
             val tab = activeItemTabName()
-            if (tab == TAB_PRESETS) {
-                "Save slot $activeSaveSlot"
-            } else {
-                tab
+            when (tab) {
+                TAB_PRESETS -> "Save slot $activeSaveSlot"
+                TAB_WARPS -> {
+                    val data = host.checkpointData()
+                    "${data.areaWarps.size} areas · ${data.entranceWarps.size} doors"
+                }
+                TAB_TEST_CHEATS -> {
+                    val active = host.testingTools().activeCheatCount()
+                    if (active > 0) "$active frame-locked" else "Frame-locked cheats & live tools"
+                }
+                else -> tab
             }
         }
         RailItem.SETTINGS -> socketMeta.ifEmpty { "tcp://127.0.0.1:${StatusManifest.PORT}" }
@@ -1495,8 +1935,15 @@ class OracleUi internal constructor(
         return when (item) {
             RailItem.SAVE -> listOf("A" to "Save here", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.LOAD -> listOf("A" to "Load", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
+            RailItem.CAPTURE -> when (listIndex) {
+                2 -> listOf("A" to "Save bug bundle", "LEFT RIGHT" to "Category", "B" to "Back")
+                in CAPTURE_CONTROLS..Int.MAX_VALUE -> listOf("A" to "Inspect / load bug state", "B" to "Back")
+                else -> listOf("A" to "Capture / toggle", "B" to "Back")
+            }
             RailItem.ITEMS -> when (activeItemTabName()) {
                 TAB_PRESETS -> listOf("A" to "Apply preset", "L1 R1" to "Tab", "B" to "Back")
+                TAB_WARPS -> listOf("A" to "Warp (keeps SRAM)", "LEFT RIGHT" to "Room ID", "L1 R1" to "Tab", "B" to "Back")
+                TAB_TEST_CHEATS -> listOf("A" to "Toggle / run", "LEFT RIGHT" to "Sprite ID", "L1 R1" to "Tab", "B" to "Back")
                 else -> listOf("A" to "Toggle / apply", "LEFT RIGHT" to "Adjust / bit", "L1 R1" to "Tab", "B" to "Back")
             }
             else -> listOf("A" to "Select", "B" to "Back")
@@ -1543,6 +1990,9 @@ class OracleUi internal constructor(
 
     companion object {
         private const val TAB_PRESETS = "Presets"
+        private const val TAB_WARPS = "Warps"
+        private const val TAB_TEST_CHEATS = "Test cheats"
+        private const val CAPTURE_CONTROLS = 4
 
         private fun mainPoster(): (Runnable) -> Unit {
             val main = Handler(Looper.getMainLooper())

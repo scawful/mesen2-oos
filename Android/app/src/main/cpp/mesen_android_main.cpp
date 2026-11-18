@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <cstdint>
+#include <cstdio>
 #include <atomic>
 #include "HandheldFramePresenter.h"
 #include "HandheldRuntimeSnapshot.h"
@@ -18,6 +19,7 @@
 #include <EGL/egl.h>
 #endif
 #include "Utilities/FolderUtilities.h"
+#include "Utilities/PNGHelper.h"
 #include "Shared/Interfaces/INotificationListener.h"
 #include "Shared/KeyManager.h"
 
@@ -37,6 +39,7 @@ extern "C" {
 	bool HandheldIsPerformanceMode();
 	bool HandheldSaveState(uint32_t stateIndex);
 	bool HandheldLoadState(uint32_t stateIndex);
+	bool HandheldSaveStateFile(const char* path);
 	bool HandheldLoadStateFile(const char* path);
 	void HandheldGetSaveStatePath(uint32_t stateIndex, char* outBuffer, uint32_t maxLength);
 	int32_t GetSaveStatePreview(char* saveStatePath, uint8_t* pngData);
@@ -47,6 +50,13 @@ extern "C" {
 	int HandheldReadSram(uint32_t offset);
 	bool HandheldWriteSram(uint32_t offset, uint8_t value);
 	bool HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot);
+	bool HandheldTakeScreenshot(const char* path);
+	bool HandheldStartVideoRecording(const char* path, bool recordInputHud, bool recordSystemHud);
+	void HandheldStopVideoRecording();
+	bool HandheldIsVideoRecording();
+	void HandheldGetVideoRecordingPath(char* outBuffer, uint32_t maxLength);
+	void HandheldSetRamCheats(const uint32_t* addrs, const uint8_t* values, uint32_t count);
+	bool HandheldStepFrames(uint32_t frames);
 	void Pause();
 	void Resume();
 	void* RegisterNotificationCallback(void (*callback)(int, void*));
@@ -825,6 +835,23 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_saveStatePath
 	return env->NewStringUTF(path);
 }
 
+/** Save a .mss file atomically by explicit path. Returns false when nothing is running. */
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_saveStateFile(
+	JNIEnv* env,
+	jclass,
+	jstring path
+) {
+	if(!env || !path) {
+		return JNI_FALSE;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string statePath = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	return !statePath.empty() && HandheldSaveStateFile(statePath.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
 /** Load a .mss file by path (auto-save slot). Returns false when nothing is running. */
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_loadStateFile(
 	JNIEnv* env,
@@ -942,6 +969,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
 	};
 	HandheldRuntimeSnapshot runtime;
 	HandheldReadRuntimeSnapshot(runtime);
+	const bool isRecording = HandheldIsVideoRecording();
+	char recPath[4096] = {};
+	if(isRecording) {
+		HandheldGetVideoRecordingPath(recPath, sizeof(recPath));
+	}
 	std::string surfaceDiagnostic;
 	{
 		std::lock_guard<std::mutex> lock(g_surfaceDiagnosticMutex);
@@ -956,6 +988,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
 		+ "\",\"paused\":" + (runtime.Paused ? "true" : "false")
 		+ ",\"fastForward\":" + (HandheldIsFastForward() ? "true" : "false")
 		+ ",\"performanceMode\":" + (HandheldIsPerformanceMode() ? "true" : "false")
+		+ ",\"recording\":" + (isRecording ? "true" : "false")
+		+ ",\"recordingPath\":\"" + jsonEscape(recPath) + "\""
 		+ ",\"sha1\":\"" + jsonEscape(runtime.RomSha1)
 		+ "\",\"frames\":" + std::to_string(runtime.FrameCount)
 		+ ",\"mode\":" + std::to_string(runtime.Mode)
@@ -963,6 +997,16 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
 		+ ",\"indoor\":" + std::to_string(runtime.Indoor)
 		+ ",\"area\":" + std::to_string(runtime.Area)
 		+ ",\"room\":" + std::to_string(runtime.Room)
+		+ ",\"linkX\":" + std::to_string(runtime.LinkX)
+		+ ",\"linkY\":" + std::to_string(runtime.LinkY)
+		+ ",\"linkLayer\":" + std::to_string(runtime.LinkLayer)
+		+ ",\"linkDir\":" + std::to_string(runtime.LinkDir)
+		+ ",\"linkState\":" + std::to_string(runtime.LinkState)
+		+ ",\"linkForm\":" + std::to_string(runtime.LinkForm)
+		+ ",\"health\":" + std::to_string(runtime.Health)
+		+ ",\"maxHealth\":" + std::to_string(runtime.MaxHealth)
+		+ ",\"magic\":" + std::to_string(runtime.Magic)
+		+ ",\"rupees\":" + std::to_string(runtime.Rupees)
 		+ ",\"presentMode\":" + std::to_string(g_presentMode.load())
 		+ ",\"renderDriver\":\"" + jsonEscape(GetRenderDriverName()) + "\""
 		+ ",\"renderAccelerated\":" + (g_renderAccelerated.load(std::memory_order_relaxed) ? "true" : "false")
@@ -1005,6 +1049,124 @@ extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isRenderAcce
 	jclass
 ) {
 	return g_renderAccelerated.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_takeScreenshot(
+	JNIEnv* env,
+	jclass,
+	jstring path
+) {
+	if(!env || !path) {
+		return JNI_FALSE;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string target = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	if(target.empty()) {
+		return JNI_FALSE;
+	}
+	if(HandheldTakeScreenshot(target.c_str())) {
+		return JNI_TRUE;
+	}
+	// Fallback to the latest published software mailbox frame (e.g. when paused before filter output).
+	HandheldVideo::Frame frame;
+	g_frames.CopyLatest(frame);
+	if(frame.Pixels.empty() || frame.Width == 0 || frame.Height == 0) {
+		return JNI_FALSE;
+	}
+	std::string tmp = target + ".tmp";
+	if(!PNGHelper::WritePNG(tmp, frame.Pixels.data(), frame.Width, frame.Height, 24)) {
+		std::remove(tmp.c_str());
+		return JNI_FALSE;
+	}
+	if(std::rename(tmp.c_str(), target.c_str()) != 0) {
+		std::remove(tmp.c_str());
+		return JNI_FALSE;
+	}
+	return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_startVideoRecording(
+	JNIEnv* env,
+	jclass,
+	jstring path,
+	jboolean recordInputHud,
+	jboolean recordSystemHud
+) {
+	if(!env || !path) {
+		return JNI_FALSE;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string target = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	return !target.empty()
+		&& HandheldStartVideoRecording(target.c_str(), recordInputHud == JNI_TRUE, recordSystemHud == JNI_TRUE)
+		? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_stopVideoRecording(JNIEnv*, jclass)
+{
+	HandheldStopVideoRecording();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isVideoRecording(JNIEnv*, jclass)
+{
+	return HandheldIsVideoRecording() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_videoRecordingPath(JNIEnv* env, jclass)
+{
+	char path[4096] = {};
+	HandheldGetVideoRecordingPath(path, sizeof(path));
+	return env->NewStringUTF(path);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setRamCheats(
+	JNIEnv* env,
+	jclass,
+	jintArray addrs,
+	jintArray values
+) {
+	if(!env || !addrs || !values) {
+		HandheldSetRamCheats(nullptr, nullptr, 0);
+		return;
+	}
+	jsize n = env->GetArrayLength(addrs);
+	jsize m = env->GetArrayLength(values);
+	jsize count = std::min(n, m);
+	if(count <= 0) {
+		HandheldSetRamCheats(nullptr, nullptr, 0);
+		return;
+	}
+	jint* aPtr = env->GetIntArrayElements(addrs, nullptr);
+	jint* vPtr = env->GetIntArrayElements(values, nullptr);
+	if(aPtr && vPtr) {
+		std::vector<uint32_t> nativeAddrs(static_cast<size_t>(count));
+		std::vector<uint8_t> nativeVals(static_cast<size_t>(count));
+		for(jsize i = 0; i < count; ++i) {
+			nativeAddrs[static_cast<size_t>(i)] = static_cast<uint32_t>(aPtr[i]);
+			nativeVals[static_cast<size_t>(i)] = static_cast<uint8_t>(vPtr[i] & 0xFF);
+		}
+		HandheldSetRamCheats(nativeAddrs.data(), nativeVals.data(), static_cast<uint32_t>(count));
+	}
+	if(aPtr) {
+		env->ReleaseIntArrayElements(addrs, aPtr, JNI_ABORT);
+	}
+	if(vPtr) {
+		env->ReleaseIntArrayElements(values, vPtr, JNI_ABORT);
+	}
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_stepFrames(
+	JNIEnv*,
+	jclass,
+	jint frames
+) {
+	return HandheldStepFrames(static_cast<uint32_t>(std::max(1, frames))) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_dumpPgoProfile(

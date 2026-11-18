@@ -20,16 +20,23 @@ public final class CheckpointData {
     static final String CHECKPOINTS_ASSET = "oracle/checkpoints.json";
     static final String WARPS_ASSET = "oracle/warps.json";
 
-    final List<Progression.Checkpoint> checkpoints;
+    public final List<Progression.Checkpoint> checkpoints;
+    public final List<Progression.Checkpoint> entranceWarps;
+    public final List<Progression.Checkpoint> areaWarps;
     /** WRAM address -> name from the checkpoint writes ("GameState", "OOSPROG", ...). */
     final Map<Integer, String> names;
     final List<String> skipped;
     final String romTested;
     final String error;
 
-    private CheckpointData(List<Progression.Checkpoint> checkpoints, Map<Integer, String> names,
+    private CheckpointData(List<Progression.Checkpoint> checkpoints,
+                           List<Progression.Checkpoint> entranceWarps,
+                           List<Progression.Checkpoint> areaWarps,
+                           Map<Integer, String> names,
                            List<String> skipped, String romTested, String error) {
         this.checkpoints = Collections.unmodifiableList(checkpoints);
+        this.entranceWarps = Collections.unmodifiableList(entranceWarps);
+        this.areaWarps = Collections.unmodifiableList(areaWarps);
         this.names = Collections.unmodifiableMap(names);
         this.skipped = Collections.unmodifiableList(skipped);
         this.romTested = romTested;
@@ -37,7 +44,8 @@ public final class CheckpointData {
     }
 
     static CheckpointData empty(String error) {
-        return new CheckpointData(new ArrayList<>(), new LinkedHashMap<>(), new ArrayList<>(), "", error);
+        return new CheckpointData(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
+                new LinkedHashMap<>(), new ArrayList<>(), "", error);
     }
 
     Progression.Checkpoint find(String id) {
@@ -111,7 +119,9 @@ public final class CheckpointData {
             Map<String, Object> e = entrance(entrances, eid);
             boolean cache = "cache".equals(e.get("exit"));
             Map<String, Object> ca = cache ? cacheArea(e, areas) : null;
-            int area = ca != null ? hex(ca.get("area")) : -1;
+            int area = ca != null
+                    ? hex(ca.get("area"))
+                    : (present(e.get("area")) ? hex(e.get("area")) : -1);
             int via = ca != null ? hex(ca.get("via_room")) : -1;
             int room = present(e.get("room")) ? hex(e.get("room")) : -1;
             return new LocationPlan(Progression.Kind.ENTRANCE, eid, cache, area, via, -1, room);
@@ -180,11 +190,51 @@ public final class CheckpointData {
                     plan.kind, plan.target, plan.cacheExit, plan.area, plan.viaRoom, plan.primeEntrance, plan.room,
                     mods, expRoom, expArea, chainIds, packed));
         }
+        List<Progression.Checkpoint> entranceWarps = new ArrayList<>();
+        for (Object obj : entrances) {
+            Map<String, Object> e = MiniJson.object(obj);
+            if (!present(e.get("id"))) continue;
+            int eid = hex(e.get("id"));
+            String name = MiniJson.string(e.get("label"), MiniJson.string(e.get("name"), ""));
+            boolean cache = "cache".equals(e.get("exit"));
+            Map<String, Object> ca = cache ? cacheArea(e, areas) : null;
+            int area = ca != null
+                    ? hex(ca.get("area"))
+                    : (present(e.get("area")) ? hex(e.get("area")) : -1);
+            int via = ca != null ? hex(ca.get("via_room")) : -1;
+            int room = present(e.get("room")) ? hex(e.get("room")) : -1;
+            String label = room >= 0
+                    ? String.format(java.util.Locale.ROOT, "$%02X · %s ($%04X)", eid, name, room)
+                    : String.format(java.util.Locale.ROOT, "$%02X · %s", eid, name);
+            entranceWarps.add(new Progression.Checkpoint(
+                    String.format(java.util.Locale.ROOT, "entrance:%02x", eid),
+                    label, -1, Progression.Kind.ENTRANCE, eid, cache, area, via, -1, room,
+                    new int[]{Progression.MOD_DUNGEON, Progression.MOD_OVERWORLD, Progression.MOD_SPECIAL},
+                    room, -1, new String[0], new int[0]));
+        }
+
+        List<Progression.Checkpoint> areaWarps = new ArrayList<>();
+        for (Map<String, Object> a : areas.values()) {
+            int aid = hex(a.get("area"));
+            String name = MiniJson.string(a.get("name"), String.format(java.util.Locale.ROOT, "Area $%02X", aid));
+            String world = MiniJson.string(a.get("world"), "");
+            int via = hex(a.get("via_room"));
+            int prime = prime(entrances, a);
+            String label = world.isEmpty()
+                    ? String.format(java.util.Locale.ROOT, "$%02X · %s", aid, name)
+                    : String.format(java.util.Locale.ROOT, "$%02X · %s (%s)", aid, name, world);
+            areaWarps.add(new Progression.Checkpoint(
+                    String.format(java.util.Locale.ROOT, "area:%02x", aid),
+                    label, -1, Progression.Kind.AREA, aid, false, aid, via, prime, -1,
+                    new int[]{Progression.MOD_OVERWORLD, Progression.MOD_SPECIAL},
+                    -1, aid, new String[0], new int[0]));
+        }
+
         Object tested = cps.get("rom_tested");
         String romTested = tested instanceof Map
                 ? new java.io.File(MiniJson.string(MiniJson.object(tested).get("path"), "?")).getName()
                 : MiniJson.string(tested, "?");
-        return new CheckpointData(rows, names, skipped, romTested, null);
+        return new CheckpointData(rows, entranceWarps, areaWarps, names, skipped, romTested, null);
     }
 
     private static List<Map<String, Object>> resolve(Map<String, Map<String, Object>> byId, String id) {

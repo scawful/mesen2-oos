@@ -10,6 +10,16 @@ struct HandheldRuntimeSnapshot
 	int32_t Indoor = -1;
 	int32_t Area = -1;
 	int32_t Room = -1;
+	int32_t LinkX = -1;
+	int32_t LinkY = -1;
+	int32_t LinkLayer = -1;
+	int32_t LinkDir = -1;
+	int32_t LinkState = -1;
+	int32_t LinkForm = -1;
+	int32_t Health = -1;
+	int32_t MaxHealth = -1;
+	int32_t Magic = -1;
+	int32_t Rupees = -1;
 	bool Paused = false;
 	char RomSha1[41] = {};
 };

@@ -19,13 +19,19 @@
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
 #include "Utilities/StringUtilities.h"
+#include "Utilities/Video/AviWriter.h"
 #include "HandheldRuntimeSnapshot.h"
 #include "InteropLifecycle.h"
 #include "InteropNotificationListeners.h"
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <mutex>
+#include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
@@ -579,6 +585,26 @@ extern "C" {
 		return _emu->GetSaveStateManager()->LoadState(stateIndex);
 	}
 
+	/** Save a state file atomically to an explicit path (used by handheld bug snapshots). */
+	DllExport bool __stdcall HandheldSaveStateFile(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning()) {
+			return false;
+		}
+		SaveStateManager* states = _emu->GetSaveStateManager();
+		string target(path);
+		string temporaryPath = target + ".tmp";
+		if(!states->SaveState(temporaryPath, false)) {
+			return false;
+		}
+		if(std::rename(temporaryPath.c_str(), target.c_str()) != 0) {
+			std::remove(temporaryPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
 	/** Load a state file by path (used for the auto-save, which sits one past the slot range). */
 	DllExport bool __stdcall HandheldLoadStateFile(const char* path)
 	{
@@ -725,12 +751,144 @@ extern "C" {
 			}
 			return static_cast<uint8_t*>(mem.Memory)[offset];
 		};
+		auto readWord = [&](uint32_t offset) -> int32_t {
+			if(offset + 1 >= mem.Size) {
+				return -1;
+			}
+			const uint8_t* ptr = static_cast<const uint8_t*>(mem.Memory);
+			return static_cast<int32_t>(ptr[offset]) | (static_cast<int32_t>(ptr[offset + 1]) << 8);
+		};
 		snapshot.Mode = readByte(0x0010);
 		snapshot.Submode = readByte(0x0011);
 		snapshot.Indoor = readByte(0x001B);
 		snapshot.Area = readByte(0x008A);
 		snapshot.Room = readByte(0x00A0);
+		snapshot.LinkX = readWord(0x0022);
+		snapshot.LinkY = readWord(0x0020);
+		snapshot.LinkLayer = readByte(0x00EE);
+		snapshot.LinkDir = readByte(0x002F);
+		snapshot.LinkState = readByte(0x005D);
+		snapshot.LinkForm = readByte(0x02B2);
+		snapshot.Health = readByte(0xF36D);
+		snapshot.MaxHealth = readByte(0xF36C);
+		snapshot.Magic = readByte(0xF36E);
+		snapshot.Rupees = readWord(0xF360);
 		return true;
+	}
+
+	DllExport bool __stdcall HandheldTakeScreenshot(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning() || !_emu->GetVideoDecoder()) {
+			return false;
+		}
+		std::stringstream pngStream;
+		_emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+		string pngData = pngStream.str();
+		if(pngData.empty()) {
+			return false;
+		}
+		string target(path);
+		string tmpPath = target + ".tmp";
+		{
+			std::ofstream out(tmpPath, std::ios::out | std::ios::binary | std::ios::trunc);
+			if(!out.good()) {
+				return false;
+			}
+			out.write(pngData.data(), static_cast<std::streamsize>(pngData.size()));
+			out.flush();
+			if(!out.good()) {
+				out.close();
+				std::remove(tmpPath.c_str());
+				return false;
+			}
+		}
+		if(std::rename(tmpPath.c_str(), target.c_str()) != 0) {
+			std::remove(tmpPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldStartVideoRecording(const char* path, bool recordInputHud, bool recordSystemHud)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning() || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		if(_emu->GetVideoRenderer()->IsRecording()) {
+			return false;
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordInputHud = recordInputHud;
+		options.RecordSystemHud = recordSystemHud;
+		return _emu->GetVideoRenderer()->StartRecording(string(path), options);
+	}
+
+	DllExport void __stdcall HandheldStopVideoRecording()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsRecording()) {
+			_emu->GetVideoRenderer()->StopRecording();
+		}
+	}
+
+	DllExport bool __stdcall HandheldIsVideoRecording()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsRecording();
+	}
+
+	DllExport void __stdcall HandheldGetVideoRecordingPath(char* outBuffer, uint32_t maxLength)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(!_emu->GetVideoRenderer() || !_emu->GetVideoRenderer()->IsRecording()) {
+			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
+			return;
+		}
+		StringUtilities::CopyToBuffer(_emu->GetVideoRenderer()->GetRecordingFile(), outBuffer, maxLength);
+	}
+
+	DllExport void __stdcall HandheldSetRamCheats(const uint32_t* addrs, const uint8_t* values, uint32_t count)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		CheatManager* cheats = _emu->GetCheatManager();
+		if(!cheats) {
+			return;
+		}
+		if(!addrs || !values || count == 0) {
+			cheats->ClearCheats(false);
+			return;
+		}
+		vector<CheatCode> codes;
+		codes.reserve(count);
+		for(uint32_t i = 0; i < count; ++i) {
+			CheatCode code = {};
+			code.Type = CheatType::SnesProActionReplay;
+			snprintf(code.Code, sizeof(code.Code), "%06X%02X", addrs[i] & 0xFFFFFFu, values[i] & 0xFFu);
+			codes.push_back(code);
+		}
+		cheats->SetCheats(codes);
+	}
+
+	DllExport bool __stdcall HandheldStepFrames(uint32_t frames)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || _emu->GetGameClient()->Connected()) {
+			return false;
+		}
+		uint32_t count = std::clamp<uint32_t>(frames, 1, 600);
+		uint32_t target = _emu->GetFrameCount() + count;
+		_emu->Resume();
+		const uint32_t timeoutMs = std::max<uint32_t>(1000, count * 30);
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+		while(_emu->IsRunning() && _emu->GetFrameCount() < target && std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		_emu->Pause();
+		return _emu->GetFrameCount() >= target;
 	}
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)

@@ -17,13 +17,42 @@ class OracleUiAsyncTest {
         private val romDir: File,
         private val statesDirFile: File,
         private val savesDirFile: File,
+        private val capturesDirFile: File = File(romDir.parentFile, "Captures"),
     ) : OracleUi.Host {
         var ready = false
         var currentRom: String? = null
         var uiOpenedCalls = 0
         var uiClosedCalls = 0
+        var recordingActive = false
+        var steppedFrames = 0
+        val toggleValues = HashMap<String, Boolean>()
+        val activeCheatAddrs = HashMap<Int, Int>()
+        val fakeMemory = object : Inventory.Memory {
+            private val wram = hashMapOf(
+                Inventory.MODULE to 0x09,
+                Inventory.SUBMODULE to 0,
+                Inventory.HEALTH_MAX to 0x28,
+            )
+            override fun readByte(address: Int): Int = wram[address] ?: 0
+            override fun writeByte(address: Int, value: Int): Boolean {
+                wram[address] = value and 0xFF
+                return true
+            }
+            override fun writeWord(address: Int, value: Int): Boolean {
+                wram[address] = value and 0xFF
+                wram[address + 1] = (value shr 8) and 0xFF
+                return true
+            }
+        }
+        val tools = TestingTools { addrs, vals ->
+            activeCheatAddrs.clear()
+            for (i in addrs.indices) activeCheatAddrs[addrs[i]] = vals[i]
+        }
         var romRootsHook: () -> Unit = {}
         var socketSummaryHook: () -> String = { "tcp://127.0.0.1:27015 · ready" }
+        var screenshotHook: () -> String = { "Saved screenshot: test.png" }
+        var bugSnapshotHook: (String) -> String = { cat -> "Saved bug_test ($cat)" }
+        var recentCapturesHook: () -> List<MediaCapture.CaptureItem> = { emptyList() }
 
         override fun nativeReady(): Boolean = ready
         override fun romRoots(): Array<File> {
@@ -45,11 +74,35 @@ class OracleUiAsyncTest {
         override fun requestHomeShortcut() {}
         override fun isStickyFastForward(): Boolean = false
         override fun setStickyFastForward(on: Boolean) {}
-        override fun setting(key: String): Boolean = false
-        override fun setSetting(key: String, on: Boolean) {}
+        override fun setting(key: String): Boolean = toggleValues[key] ?: false
+        override fun setSetting(key: String, on: Boolean) { toggleValues[key] = on }
         override fun startCheckpoint(id: String) {}
         override fun startPreset(id: String) {}
         override fun toast(message: String) {}
+        override fun capturesDir(): File = capturesDirFile
+        override fun recentCaptures(): List<MediaCapture.CaptureItem> = recentCapturesHook()
+        override fun takeScreenshot(): String = screenshotHook()
+        override fun isVideoRecording(): Boolean = recordingActive
+        override fun videoRecordingElapsedSeconds(): Long = if (recordingActive) 5L else 0L
+        override fun toggleVideoRecording(): String {
+            recordingActive = !recordingActive
+            return if (recordingActive) "Recording MP4: test.mp4" else "Saved video: test.mp4"
+        }
+        override fun captureBugSnapshot(category: String): String = bugSnapshotHook(category)
+        override fun testingTools(): TestingTools = tools
+        override fun activeSaveSlot(): Int = 1
+        override fun saveStatePath(slot: Int): String? = File(statesDirFile, "test_$slot.mss").absolutePath
+        override fun toggleCheat(cheat: TestingTools.Cheat): String = tools.toggleCheat(cheat, fakeMemory)
+        override fun clearCheats(): String = tools.clearAll(fakeMemory)
+        override fun runLiveAction(action: TestingTools.LiveAction): String =
+            tools.runAction(action, fakeMemory) { frames -> stepFrames(frames) }
+        override fun loadCaptureState(stateFile: File): Boolean = stateFile.isFile
+        override fun stepFrames(frames: Int): Boolean {
+            steppedFrames += frames
+            return true
+        }
+        override fun startWarp(target: Progression.Checkpoint) {}
+        override fun fallToDungeonRoom(roomId: Int) {}
     }
 
     private fun pump(queue: ConcurrentLinkedQueue<Runnable>, timeoutMs: Long = 3000, until: () -> Boolean) {
@@ -135,12 +188,15 @@ class OracleUiAsyncTest {
         assertEquals(1, host.uiOpenedCalls)
         assertFalse(ui.isBusy)
 
-        // Move rail to ITEMS (index 3: RESUME, SAVE, LOAD, ITEMS) and enter panel.
+        // Move rail to ITEMS (index 4: RESUME, SAVE, LOAD, CAPTURE, ITEMS) and enter panel.
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        // Switch from Presets -> Items -> Songs rapidly via R1.
+        // Switch from Presets -> Warps -> Test cheats -> Items -> Songs rapidly via R1.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
 
@@ -153,5 +209,77 @@ class OracleUiAsyncTest {
         }
         assertEquals(Inventory.rows(Inventory.TAB_SONGS, emptyMap()).size, ui.currentItemRows.size)
         assertEquals(ui.currentItemRows.size, ui.currentItemValues.size)
+    }
+
+    @Test
+    fun capturePanelActionsRunOffMainThreadAndRefreshRecents() {
+        val temp = Files.createTempDirectory("oracle-ui-cap").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val capturesDir = File(temp, "Captures").apply { mkdirs() }
+        val host = TestHost(roms, states, saves, capturesDir).apply { ready = true }
+
+        val gate = CountDownLatch(1)
+        val shotFile = File(MediaCapture.screenshotsDir(capturesDir), "oracle_test.png")
+        host.screenshotHook = {
+            assertTrue(gate.await(5, TimeUnit.SECONDS))
+            shotFile.writeBytes(byteArrayOf(1, 2, 3, 4))
+            "Saved screenshot: ${shotFile.name}"
+        }
+        host.recentCapturesHook = { MediaCapture.listRecent(capturesDir, 10) }
+
+        val mainQueue = ConcurrentLinkedQueue<Runnable>()
+        val ui = OracleUi(host) { r -> mainQueue.add(r) }
+        ui.openMenu()
+        // Move to CAPTURE (index 3) and enter panel (cursor at 0: Take screenshot).
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+
+        val t0 = System.nanoTime()
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0)
+        assertTrue("screenshot capture must not block UI thread", elapsedMs < 250)
+        assertTrue(ui.isBusy)
+
+        gate.countDown()
+        pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("oracle_test.png") }
+        assertEquals(1, ui.currentCaptures.size)
+        assertEquals("oracle_test.png", ui.currentCaptures[0].name)
+
+        // Move down twice to Save bug snapshot, cycle category, and fire.
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("Warp / Transition") }
+    }
+
+    @Test
+    fun warpsAndTestCheatsTabsWorkOffMainThread() {
+        val temp = Files.createTempDirectory("oracle-ui-testtools").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val host = TestHost(roms, states, saves).apply { ready = true }
+
+        val mainQueue = ConcurrentLinkedQueue<Runnable>()
+        val ui = OracleUi(host) { r -> mainQueue.add(r) }
+        ui.openMenu()
+        // Enter ITEMS (index 4).
+        repeat(4) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        // R1 once -> Warps, R1 twice -> Test cheats.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals("Warps", ui.currentItemTabName)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals("Test cheats", ui.currentItemTabName)
+
+        // Move to INF_HEALTH (row 0) -> A doesn't need to wait on anything but host.testingTools() runs on worker.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.INF_HEALTH) }
+        assertTrue(host.activeCheatAddrs.containsKey(Inventory.HEALTH_CURRENT))
     }
 }

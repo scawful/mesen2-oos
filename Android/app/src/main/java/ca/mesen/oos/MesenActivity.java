@@ -10,6 +10,7 @@ import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -43,8 +44,10 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -56,6 +59,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String PREF_FIT = "fill_screen";
     private static final String PREF_PLAY = "smooth_play";
     private static final String PREF_GPU = "gpu_blit";
+    private static final String PREF_HOTKEYS = "capture_hotkeys";
+    private static final String PREF_REC_HUD = "record_input_hud";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -89,6 +94,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private TextView mHudRom;
     private TextView mHudSocket;
     private TextView mHudLink;
+    private TextView mRecBadge;
     private TextView mNoteView;
     private final Runnable mHideNote = () -> {
         if (mNoteView != null) {
@@ -126,9 +132,32 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private volatile boolean mFillScreen;
     private volatile boolean mSmoothPlay;
     private volatile boolean mPreferGpu;
+    private volatile boolean mCaptureHotkeys = true;
+    private volatile boolean mRecordInputHud;
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
+
+    private final Object mCaptureLock = new Object();
+    private final TestingTools mTestingTools = new TestingTools((addrs, vals) -> {
+        if (mNativeReady && !mDestroyed) {
+            MesenNative.setRamCheats(addrs, vals);
+        }
+    });
+    private volatile long mVideoStartElapsedMs;
+    private boolean mL2KeyHeld;
+    private boolean mL2TriggerHeld;
+    private boolean mL2Held;
+    private boolean mL2HoldFired;
+    private final Runnable mL2HoldRunnable = () -> {
+        if (mL2Held && !mUiVisible && mCaptureHotkeys && !mDestroyed) {
+            mL2HoldFired = true;
+            triggerToggleVideoFromHotkey();
+        }
+    };
+    private boolean mPendingStartVideo;
+    private boolean mPendingScreenshot;
+    private String mPendingBugSnapshotCategory;
 
     private boolean mHomeReceiverRegistered;
     private boolean mPgoDumpReceiverRegistered;
@@ -209,6 +238,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
         mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
+        mCaptureHotkeys = prefs.getBoolean(PREF_HOTKEYS, true);
+        mRecordInputHud = prefs.getBoolean(PREF_REC_HUD, false);
         attachHud();
         attachOracleUi();
         applyIntentPrefs(getIntent());
@@ -232,6 +263,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (sInstance == this) {
             sInstance = null;
         }
+        clearCaptureHotkeys();
+        stopRecordingIfActive(false);
         mHandler.removeCallbacksAndMessages(null);
         if (mStatusWriter != null) {
             mStatusWriter.shutdown();
@@ -278,6 +311,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     protected void onPause() {
         clearFastForward();
+        clearCaptureHotkeys();
         if (mComposeHost != null) {
             mComposeHost.onPause();
         }
@@ -293,6 +327,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     protected void onStop() {
         clearFastForward();
+        clearCaptureHotkeys();
+        stopRecordingIfActive(true);
         if (mNativeReady) {
             try {
                 MesenNative.dumpPgoProfile();
@@ -357,6 +393,30 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             }
             return true;
         }
+        if (mCaptureHotkeys) {
+            if (code == KeyEvent.KEYCODE_BUTTON_L2) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    mL2KeyHeld = true;
+                    updateL2CaptureHeld();
+                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                    mL2KeyHeld = false;
+                    updateL2CaptureHeld();
+                }
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_BUTTON_THUMBR) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    triggerScreenshotFromHotkey();
+                }
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_BUTTON_THUMBL) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    triggerToggleVideoFromHotkey();
+                }
+                return true;
+            }
+        }
         return super.dispatchKeyEvent(event);
     }
 
@@ -386,6 +446,15 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                     event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
                     event.getAxisValue(MotionEvent.AXIS_GAS));
             setFastForwardTriggerHeld(trigger > 0.55f);
+            float lTrigger = Math.max(
+                    event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+                    event.getAxisValue(MotionEvent.AXIS_BRAKE));
+            if (mCaptureHotkeys) {
+                mL2TriggerHeld = lTrigger > 0.55f;
+                updateL2CaptureHeld();
+            } else {
+                mL2TriggerHeld = false;
+            }
         }
         return super.dispatchGenericMotionEvent(event);
     }
@@ -459,6 +528,29 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         mLayout.addView(mHud, params);
+
+        mRecBadge = new TextView(this);
+        mRecBadge.setTextColor(Color.WHITE);
+        mRecBadge.setTextSize(11);
+        mRecBadge.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        int rPadH = Math.round(8 * dp);
+        int rPadV = Math.round(4 * dp);
+        mRecBadge.setPadding(rPadH, rPadV, rPadH, rPadV);
+        GradientDrawable badgeBg = new GradientDrawable();
+        badgeBg.setColor(Color.argb(204, 158, 27, 27));
+        badgeBg.setCornerRadius(6 * dp);
+        mRecBadge.setBackground(badgeBg);
+        mRecBadge.setFocusable(false);
+        mRecBadge.setClickable(true);
+        mRecBadge.setOnClickListener(v -> openQuickMenu());
+        mRecBadge.setVisibility(View.GONE);
+        RelativeLayout.LayoutParams recLp = new RelativeLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        recLp.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+        recLp.addRule(RelativeLayout.ALIGN_PARENT_END);
+        int rMargin = Math.round(8 * dp);
+        recLp.setMargins(rMargin, rMargin, rMargin, rMargin);
+        mLayout.addView(mRecBadge, recLp);
     }
 
     private void attachOracleUi() {
@@ -555,6 +647,157 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
+    public File capturesDir() {
+        return MediaCapture.capturesRoot(getExternalFilesDir(null), getFilesDir());
+    }
+
+    @Override
+    public List<MediaCapture.CaptureItem> recentCaptures() {
+        return MediaCapture.listRecent(capturesDir(), 24);
+    }
+
+    @Override
+    public String takeScreenshot() {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            File dir = MediaCapture.screenshotsDir(capturesDir());
+            File out = MediaCapture.nextMediaFile(dir, romDisplayName(), "png", System.currentTimeMillis());
+            if (out == null || !MesenNative.takeScreenshot(out.getAbsolutePath()) || !out.isFile() || out.length() == 0) {
+                return "Screenshot failed (no frame ready)";
+            }
+            MediaGallery.publish(this, out, false);
+            return "Saved screenshot: " + out.getName();
+        }
+    }
+
+    @Override
+    public boolean isVideoRecording() {
+        return mNativeReady && !mDestroyed && MesenNative.isVideoRecording();
+    }
+
+    @Override
+    public long videoRecordingElapsedSeconds() {
+        if (!isVideoRecording()) {
+            return 0L;
+        }
+        long start = mVideoStartElapsedMs;
+        if (start <= 0L) {
+            return 0L;
+        }
+        return Math.max(0L, (SystemClock.elapsedRealtime() - start) / 1000L);
+    }
+
+    @Override
+    public String toggleVideoRecording() {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            if (MesenNative.isVideoRecording()) {
+                return stopRecordingLocked(true);
+            }
+            File dir = MediaCapture.videosDir(capturesDir());
+            File out = MediaCapture.nextMediaFile(dir, romDisplayName(), "mp4", System.currentTimeMillis());
+            if (out == null || !MesenNative.startVideoRecording(out.getAbsolutePath(), mRecordInputHud, false)) {
+                return "Failed to start MP4 video recorder";
+            }
+            mVideoStartElapsedMs = SystemClock.elapsedRealtime();
+            mHandler.post(() -> {
+                if (!mDestroyed) {
+                    updateRecBadgeUi(true);
+                }
+            });
+            return "Recording MP4: " + out.getName();
+        }
+    }
+
+    @Override
+    public String captureBugSnapshot(String category) {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            File reports = MediaCapture.reportsDir(capturesDir());
+            MediaCapture.BugSnapshotResult res = MediaCapture.writeBugSnapshot(
+                    reports,
+                    romDisplayName(),
+                    category,
+                    "",
+                    new MediaCapture.SnapshotHooks() {
+                        @Override
+                        public boolean saveScreenshot(File pngFile) {
+                            return MesenNative.takeScreenshot(pngFile.getAbsolutePath());
+                        }
+
+                        @Override
+                        public boolean saveState(File stateFile) {
+                            return MesenNative.saveStateFile(stateFile.getAbsolutePath());
+                        }
+
+                        @Override
+                        public String statusJson() {
+                            return MesenNative.statusJson(true);
+                        }
+
+                        @Override
+                        public int readByte(int addr) {
+                            return MesenNative.readByte(addr);
+                        }
+
+                        @Override
+                        public String romPath() {
+                            return currentRomPath();
+                        }
+                    },
+                    System.currentTimeMillis());
+            return res.message;
+        }
+    }
+
+    @Override
+    public TestingTools testingTools() {
+        return mTestingTools;
+    }
+
+    @Override
+    public int activeSaveSlot() {
+        return mNativeReady && !mDestroyed ? Progression.activeSlot(Progression.LIVE) : 1;
+    }
+
+    @Override
+    public String saveStatePath(int slot) {
+        return mNativeReady && !mDestroyed ? MesenNative.saveStatePath(slot) : null;
+    }
+
+    @Override
+    public String toggleCheat(TestingTools.Cheat cheat) {
+        return mTestingTools.toggleCheat(cheat, Inventory.LIVE);
+    }
+
+    @Override
+    public String clearCheats() {
+        return mTestingTools.clearAll(Inventory.LIVE);
+    }
+
+    @Override
+    public String runLiveAction(TestingTools.LiveAction action) {
+        return mTestingTools.runAction(action, Inventory.LIVE, this::stepFrames);
+    }
+
+    @Override
+    public boolean loadCaptureState(File stateFile) {
+        return mNativeReady && !mDestroyed && stateFile != null
+                && MesenNative.loadStateFile(stateFile.getAbsolutePath());
+    }
+
+    @Override
+    public boolean stepFrames(int frames) {
+        return mNativeReady && !mDestroyed && MesenNative.stepFrames(frames);
+    }
+
+    @Override
     public CheckpointData checkpointData() {
         return mCheckpointData;
     }
@@ -583,6 +826,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mUiHatY = 0;
         mUiHatX = 0;
         clearFastForward();
+        clearCaptureHotkeys();
+        updateRecBadgeUi(false);
         mUiView.setVisibility(View.VISIBLE);
         setSurfaceFocusable(false);
         if (mHud != null) {
@@ -626,6 +871,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (!mNativeReady || mDestroyed) {
             return false;
         }
+        stopRecordingIfActive(true);
         BatterySaveSeed.Status seeded = seedBatterySave(path);
         if (seeded == BatterySaveSeed.Status.SEEDED) {
             File sidecar = BatterySaveSeed.sidecar(new File(path));
@@ -643,6 +889,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         rememberRom(path);
         applyPerformanceMode();
+        if (mTestingTools.activeCheatCount() > 0) {
+            mTestingTools.syncCheats(Inventory.LIVE);
+        }
         // Warm ROM SHA1 cache off the main thread before refreshHud() runs.
         MesenNative.statusJson(false);
         mHandler.post(() -> {
@@ -677,6 +926,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "fit": return mFillScreen;
             case "play": return mSmoothPlay;
             case "gpu": return mPreferGpu;
+            case "hotkeys": return mCaptureHotkeys;
+            case "rec_hud": return mRecordInputHud;
             default: return false;
         }
     }
@@ -694,6 +945,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "fit": setFillScreen(on); break;
             case "play": setSmoothPlay(on); break;
             case "gpu": setPreferGpu(on); break;
+            case "hotkeys": setCaptureHotkeys(on); break;
+            case "rec_hud": setRecordInputHud(on); break;
             default: break;
         }
     }
@@ -718,18 +971,48 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         runProgression(preset.checkpoint);
     }
 
+    @Override
+    public void startWarp(Progression.Checkpoint target) {
+        if (target == null) {
+            return;
+        }
+        runBlockingAction("Warping to " + target.label + "…",
+                () -> Progression.warpOnly(target, Progression.LIVE));
+    }
+
+    @Override
+    public void fallToDungeonRoom(int roomId) {
+        String label = String.format(Locale.ROOT, "$%04X", roomId & 0xFFFF);
+        runBlockingAction("Dropping into room " + label + "…",
+                () -> Progression.fallToRoom(roomId, Progression.LIVE));
+    }
+
     private void runProgression(final Progression.Checkpoint target) {
-        if (mProgressionBusy || !mNativeReady || target == null) {
+        if (target == null) {
+            return;
+        }
+        runBlockingAction(getString(R.string.progression_running, target.label),
+                () -> Progression.apply(target, Progression.LIVE));
+    }
+
+    private void runBlockingAction(String startToast, Callable<String> task) {
+        if (mProgressionBusy || !mNativeReady || task == null) {
             return;
         }
         mProgressionBusy = true;
-        Toast.makeText(this, getString(R.string.progression_running, target.label), Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, startToast, Toast.LENGTH_SHORT).show();
         Thread worker = new Thread(() -> {
-            String result = Progression.apply(target, Progression.LIVE);
+            String result;
+            try {
+                result = task.call();
+            } catch (Exception e) {
+                result = "Failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+            }
+            final String finalResult = result;
             mHandler.post(() -> {
                 mProgressionBusy = false;
-                Log.i(TAG, "progression: " + result);
-                Toast.makeText(this, result, Toast.LENGTH_LONG).show();
+                Log.i(TAG, "action: " + finalResult);
+                Toast.makeText(this, finalResult, Toast.LENGTH_LONG).show();
             });
         }, "oos-progression");
         worker.setDaemon(true);
@@ -821,6 +1104,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         boolean romFromIntent = intent != null && intent.hasExtra("rom");
         if (mUi != null && !romFromIntent && !mUiVisible) {
             mUi.openLibrary();
+        }
+        if (mPendingStartVideo || mPendingScreenshot || mPendingBugSnapshotCategory != null) {
+            mHandler.postDelayed(this::dispatchPendingCaptureActions, 400);
         }
     }
 
@@ -963,6 +1249,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                         + "  ·  " + performance + "  ·  " + agentBit);
                 mHudLink.setVisibility(mKeepHud ? View.VISIBLE : View.GONE);
             }
+            updateRecBadgeUi(json.optBoolean("recording", false));
             if (mStatusWriter != null) {
                 mStatusWriter.enqueue(json);
             }
@@ -1142,6 +1429,169 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         refreshHud();
     }
 
+    private void setCaptureHotkeys(boolean enabled) {
+        mCaptureHotkeys = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_HOTKEYS, enabled).apply();
+        if (!enabled) {
+            clearCaptureHotkeys();
+        }
+    }
+
+    private void setRecordInputHud(boolean enabled) {
+        mRecordInputHud = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_REC_HUD, enabled).apply();
+    }
+
+    private String romDisplayName() {
+        String path = currentRomPath();
+        return (path != null && !path.isEmpty()) ? new File(path).getName() : "oracle";
+    }
+
+    private void updateRecBadgeUi(boolean recording) {
+        if (!recording) {
+            mVideoStartElapsedMs = 0L;
+            if (mRecBadge != null) {
+                mRecBadge.setVisibility(View.GONE);
+            }
+            return;
+        }
+        if (mVideoStartElapsedMs <= 0L) {
+            mVideoStartElapsedMs = SystemClock.elapsedRealtime();
+        }
+        if (mRecBadge != null) {
+            if (mUiVisible) {
+                mRecBadge.setVisibility(View.GONE);
+            } else {
+                long secs = Math.max(0L, (SystemClock.elapsedRealtime() - mVideoStartElapsedMs) / 1000L);
+                mRecBadge.setText("\u25CF REC " + MediaCapture.formatDuration(secs));
+                mRecBadge.setVisibility(View.VISIBLE);
+                mRecBadge.bringToFront();
+            }
+        }
+    }
+
+    private String stopRecordingLocked(boolean publishGallery) {
+        String activePath = MesenNative.videoRecordingPath();
+        MesenNative.stopVideoRecording();
+        mVideoStartElapsedMs = 0L;
+        mHandler.post(() -> {
+            if (!mDestroyed) {
+                updateRecBadgeUi(false);
+            }
+        });
+        if (activePath == null || activePath.isEmpty()) {
+            return "Video recording stopped";
+        }
+        File out = new File(activePath);
+        if (publishGallery && out.isFile() && out.length() > 0) {
+            MediaGallery.publish(this, out, true);
+        }
+        return "Saved video: " + out.getName();
+    }
+
+    private void stopRecordingIfActive(boolean publishGallery) {
+        if (!mNativeReady) {
+            return;
+        }
+        synchronized (mCaptureLock) {
+            if (MesenNative.isVideoRecording()) {
+                stopRecordingLocked(publishGallery);
+            }
+        }
+    }
+
+    private void clearCaptureHotkeys() {
+        mL2KeyHeld = false;
+        mL2TriggerHeld = false;
+        mL2Held = false;
+        mL2HoldFired = false;
+        mHandler.removeCallbacks(mL2HoldRunnable);
+    }
+
+    private void updateL2CaptureHeld() {
+        boolean next = !mUiVisible && mCaptureHotkeys && (mL2KeyHeld || mL2TriggerHeld);
+        if (next == mL2Held) {
+            return;
+        }
+        mL2Held = next;
+        if (next) {
+            mL2HoldFired = false;
+            mHandler.removeCallbacks(mL2HoldRunnable);
+            mHandler.postDelayed(mL2HoldRunnable, 550L);
+        } else {
+            mHandler.removeCallbacks(mL2HoldRunnable);
+            boolean fireScreenshot = !mL2HoldFired && !mUiVisible && mCaptureHotkeys && !mDestroyed;
+            mL2HoldFired = false;
+            if (fireScreenshot) {
+                triggerScreenshotFromHotkey();
+            }
+        }
+    }
+
+    private void triggerScreenshotFromHotkey() {
+        if (!mNativeReady || mDestroyed || mBgExecutor.isShutdown()) {
+            return;
+        }
+        mBgExecutor.execute(() -> {
+            if (mDestroyed) {
+                return;
+            }
+            String msg = takeScreenshot();
+            mHandler.post(() -> {
+                if (!mDestroyed) {
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
+    }
+
+    private void triggerToggleVideoFromHotkey() {
+        if (!mNativeReady || mDestroyed || mBgExecutor.isShutdown()) {
+            return;
+        }
+        mBgExecutor.execute(() -> {
+            if (mDestroyed) {
+                return;
+            }
+            String msg = toggleVideoRecording();
+            mHandler.post(() -> {
+                if (!mDestroyed) {
+                    refreshHud();
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
+    }
+
+    private void dispatchPendingCaptureActions() {
+        if (!mNativeReady || mDestroyed || mBgExecutor.isShutdown()) {
+            return;
+        }
+        final boolean startVideo = mPendingStartVideo;
+        final boolean screenshot = mPendingScreenshot;
+        final String bugCat = mPendingBugSnapshotCategory;
+        mPendingStartVideo = false;
+        mPendingScreenshot = false;
+        mPendingBugSnapshotCategory = null;
+        if (!startVideo && !screenshot && bugCat == null) {
+            return;
+        }
+        mBgExecutor.execute(() -> {
+            if (mDestroyed) {
+                return;
+            }
+            if (startVideo && !MesenNative.isVideoRecording()) {
+                toast(toggleVideoRecording());
+            }
+            if (screenshot) {
+                toast(takeScreenshot());
+            }
+            if (bugCat != null) {
+                toast(captureBugSnapshot(bugCat));
+            }
+        });
+    }
+
     private void setFastForwardKeyHeld(boolean enabled) {
         mFastForwardKeyHeld = enabled;
         updateFastForward();
@@ -1201,6 +1651,37 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (intent.hasExtra("fast_forward")) {
             setStickyFastForward(intent.getBooleanExtra("fast_forward", false));
             updateFastForward();
+        }
+        if (intent.hasExtra("record_video")) {
+            boolean wantRec = intent.getBooleanExtra("record_video", false);
+            if (wantRec) {
+                mPendingStartVideo = true;
+            } else {
+                mPendingStartVideo = false;
+                if (mNativeReady && !mDestroyed && !mBgExecutor.isShutdown()) {
+                    mBgExecutor.execute(() -> {
+                        if (mNativeReady && !mDestroyed) {
+                            synchronized (mCaptureLock) {
+                                if (MesenNative.isVideoRecording()) {
+                                    toast(stopRecordingLocked(true));
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        if (intent.getBooleanExtra("screenshot", false)) {
+            mPendingScreenshot = true;
+        }
+        if (intent.hasExtra("bug_snapshot")) {
+            String cat = intent.getStringExtra("bug_snapshot");
+            mPendingBugSnapshotCategory = (cat == null || cat.trim().isEmpty())
+                    ? MediaCapture.BUG_CATEGORIES[0]
+                    : cat;
+        }
+        if (mNativeReady && (mPendingStartVideo || mPendingScreenshot || mPendingBugSnapshotCategory != null)) {
+            dispatchPendingCaptureActions();
         }
     }
 

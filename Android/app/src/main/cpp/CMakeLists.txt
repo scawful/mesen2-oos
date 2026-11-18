@@ -30,6 +30,7 @@ file(GLOB SDLSRC "${MESEN_ROOT}/Sdl/*.cpp")
 
 add_library(main SHARED
     mesen_android_main.cpp
+    Mp4VideoRecorder.cpp
     ${CORESRC}
     ${UTILSRC}
     ${SEVENZIPSRC}
@@ -92,10 +93,12 @@ target_compile_options(main PRIVATE
 find_library(log-lib log)
 find_library(android-lib android)
 find_library(dl-lib dl)
+find_library(mediandk-lib mediandk)
 
 target_link_libraries(main
     SDL2::SDL2
     ${android-lib}
     ${log-lib}
     ${dl-lib}
+    ${mediandk-lib}
 )

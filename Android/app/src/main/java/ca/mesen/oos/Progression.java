@@ -14,15 +14,15 @@ import java.util.Map;
  * mirror + inverse checksum), then warp. Bytes no checkpoint names keep their
  * current values. Data comes from CheckpointData (bundled checkpoints.json).
  */
-final class Progression {
-    enum Kind { ENTRANCE, AREA }
+public final class Progression {
+    public enum Kind { ENTRANCE, AREA }
 
-    static final class Checkpoint {
-        final String id;
-        final String label;
-        final int beat;
-        final Kind kind;
-        final int target;
+    public static final class Checkpoint {
+        public final String id;
+        public final String label;
+        public final int beat;
+        public final Kind kind;
+        public final int target;
         /** ENTRANCE only: a house entrance whose exit comes from the cache. */
         final boolean cacheExit;
         /** Area to warp to (AREA target, or the house area for a cache entrance); -1 if none. */
@@ -60,13 +60,13 @@ final class Progression {
             this.writes = writes;
         }
 
-        String rowLabel() {
-            return String.format(Locale.ROOT, "%d · %s", beat, label);
+        public String rowLabel() {
+            return beat < 0 ? label : String.format(Locale.ROOT, "%d · %s", beat, label);
         }
     }
 
     /** Emulator access. LIVE uses MesenNative; tests use a fake. */
-    interface Host {
+    public interface Host {
         int readByte(int addr);
         boolean writeByte(int addr, int value);
         int readSram(int offset);
@@ -81,18 +81,25 @@ final class Progression {
     static final int SUBMODULE = 0x7E0011;
     static final int INDOORS = 0x7E001B;
     static final int BRIGHTNESS = 0x7E0013;
+    static final int FALL_STATE = 0x7E005C;
+    static final int LINK_STATE = 0x7E005D;
     static final int AREA = 0x7E008A;
     static final int HDMA_ENABLE = 0x7E009B;
     static final int ROOM = 0x7E00A0;
+    static final int PREV_ROOM = 0x7E00A2;
     static final int SUBSUB = 0x7E00B0;
     static final int CONTINUE_FLAG = 0x7E010A;
     static final int NEXT_MODULE = 0x7E010C;
     static final int ENTRANCE = 0x7E010E;
     static final int RESPAWN_FLAG = 0x7E04AA;
+    static final int WORLD_FLAG = 0x7E0FFF;
+    static final int SAVED_WORLD = 0x7EF3CA;
     static final int FOLLOWER = 0x7EF3CC;
     static final int GAME_STATE = 0x7EF3C5;
     static final int CRYSTALS = 0x7EF37A;
     static final int SPAWN_FOLLOWER = 0x02;
+    static final int SUBMODE_FALL = 0x15;
+    static final int MAX_ROOM_ID = 0x127;
 
     static final int MOD_DUNGEON = 0x07;
     static final int MOD_OVERWORLD = 0x09;
@@ -287,6 +294,46 @@ final class Progression {
         }
     }
 
+    private static void executeWarp(Checkpoint cp, Host host, List<String> steps) throws Failure {
+        int[] expectMods = cp.expectModules.length > 0 ? cp.expectModules : new int[]{MOD_DUNGEON};
+        if (cp.kind == Kind.ENTRANCE) {
+            int module = host.readByte(MODULE);
+            boolean outdoors = module == MOD_OVERWORLD && host.readByte(INDOORS) == 0;
+            String method;
+            if (outdoors) {
+                method = "door";
+            } else if (cp.cacheExit && cp.viaRoom >= 0) {
+                areaWarp(host, cp.viaRoom);
+                if (!waitPlay(host, MOD_OVERWORLD, MOD_SPECIAL)) {
+                    throw new Failure("House area step did not finish; " + describe(host));
+                }
+                method = host.readByte(MODULE) == MOD_OVERWORLD ? "door" : "reload";
+                steps.add(String.format(Locale.ROOT, "area $%02X", cp.area));
+            } else {
+                method = "reload";
+            }
+            if (method.equals("door")) doorWarp(host, cp.target);
+            else reloadWarp(host, cp.target);
+            steps.add(String.format(Locale.ROOT, "entrance $%02X %s", cp.target, method));
+            if (!waitPlay(host, concat(expectMods, MOD_MESSAGE))) {
+                throw new Failure("Warp did not finish; " + describe(host));
+            }
+        } else {
+            // Module08 keeps the previous HUD and follower graphics; a full
+            // entrance reload first rebuilds both, then the area warp follows.
+            reloadWarp(host, cp.primeEntrance);
+            if (!waitPlay(host, MOD_DUNGEON, MOD_MESSAGE)) {
+                throw new Failure("Reload step did not finish; " + describe(host));
+            }
+            steps.add(String.format(Locale.ROOT, "reload $%02X", cp.primeEntrance));
+            areaWarp(host, cp.viaRoom);
+            if (!waitPlay(host, MOD_OVERWORLD, MOD_SPECIAL, MOD_MESSAGE)) {
+                throw new Failure("Area warp did not finish; " + describe(host));
+            }
+            steps.add(String.format(Locale.ROOT, "area $%02X", cp.target));
+        }
+    }
+
     /** Applies one checkpoint end to end. Blocks for the warp; run off the UI thread. */
     static String apply(Checkpoint cp, Host host) {
         List<String> steps = new ArrayList<>();
@@ -308,49 +355,68 @@ final class Progression {
             }
             steps.add("slot " + slot);
             requireNoSpawnFollower(host);
-            int[] expectMods = cp.expectModules.length > 0 ? cp.expectModules : new int[]{MOD_DUNGEON};
-            if (cp.kind == Kind.ENTRANCE) {
-                int module = host.readByte(MODULE);
-                boolean outdoors = module == MOD_OVERWORLD && host.readByte(INDOORS) == 0;
-                String method;
-                if (outdoors) {
-                    method = "door";
-                } else if (cp.cacheExit && cp.viaRoom >= 0) {
-                    areaWarp(host, cp.viaRoom);
-                    if (!waitPlay(host, MOD_OVERWORLD, MOD_SPECIAL)) {
-                        throw new Failure("House area step did not finish; " + describe(host));
-                    }
-                    method = host.readByte(MODULE) == MOD_OVERWORLD ? "door" : "reload";
-                    steps.add(String.format(Locale.ROOT, "area $%02X", cp.area));
-                } else {
-                    method = "reload";
-                }
-                if (method.equals("door")) doorWarp(host, cp.target);
-                else reloadWarp(host, cp.target);
-                steps.add(String.format(Locale.ROOT, "entrance $%02X %s", cp.target, method));
-                if (!waitPlay(host, concat(expectMods, MOD_MESSAGE))) {
-                    throw new Failure("Warp did not finish; " + describe(host));
-                }
-            } else {
-                // Module08 keeps the previous HUD and follower graphics; a full
-                // entrance reload first rebuilds both, then the area warp follows.
-                reloadWarp(host, cp.primeEntrance);
-                if (!waitPlay(host, MOD_DUNGEON, MOD_MESSAGE)) {
-                    throw new Failure("Reload step did not finish; " + describe(host));
-                }
-                steps.add(String.format(Locale.ROOT, "reload $%02X", cp.primeEntrance));
-                areaWarp(host, cp.viaRoom);
-                if (!waitPlay(host, MOD_OVERWORLD, MOD_SPECIAL, MOD_MESSAGE)) {
-                    throw new Failure("Area warp did not finish; " + describe(host));
-                }
-                steps.add(String.format(Locale.ROOT, "area $%02X", cp.target));
-            }
+            executeWarp(cp, host, steps);
             String problem = verify(cp, host, expected);
             String summary = cp.id + ": " + String.join(", ", steps);
             return problem == null ? "Checkpoint " + summary : "Checkpoint " + summary + " · CHECK: " + problem;
         } catch (Failure f) {
             String done = steps.isEmpty() ? "" : " (done: " + String.join(", ", steps) + ")";
             return "Checkpoint " + cp.id + " failed: " + f.getMessage() + done;
+        }
+    }
+
+    /**
+     * Warps to an entrance or overworld area from warps.json without overwriting
+     * the SRAM save block. Only updates world flags ($7EF3CA/$7E0FFF) when crossing worlds.
+     */
+    public static String warpOnly(Checkpoint target, Host host) {
+        if (target == null) return "No warp target selected";
+        List<String> steps = new ArrayList<>();
+        try {
+            String idle = idleProblem(host);
+            if (idle != null) return idle;
+            requireNoSpawnFollower(host);
+            if (target.area >= 0 && target.area < 0x80) {
+                int wantWorld = (target.area & 0x40) != 0 ? 0x40 : 0;
+                int curWorld = host.readByte(SAVED_WORLD);
+                if (curWorld >= 0 && curWorld != wantWorld) {
+                    poke(host, SAVED_WORLD, wantWorld, WORLD_FLAG, wantWorld);
+                    steps.add("world " + (wantWorld != 0 ? "abyss" : "kalyxo"));
+                }
+            }
+            executeWarp(target, host, steps);
+            String problem = verify(target, host, new LinkedHashMap<>());
+            String summary = target.label + ": " + String.join(", ", steps);
+            return problem == null ? "Warped " + summary : "Warped " + summary + " · CHECK: " + problem;
+        } catch (Failure f) {
+            String done = steps.isEmpty() ? "" : " (done: " + String.join(", ", steps) + ")";
+            return "Warp " + target.label + " failed: " + f.getMessage() + done;
+        }
+    }
+
+    /** Drops Link into dungeon/interior room ID $0000-$0127 via Module $07 Submode $15. */
+    public static String fallToRoom(int roomId, Host host) {
+        if (roomId < 0 || roomId > MAX_ROOM_ID) {
+            return String.format(Locale.ROOT, "Room $%04X out of range ($0000-$0127)", roomId);
+        }
+        try {
+            String idle = idleProblem(host);
+            if (idle != null) return idle;
+            if (host.readByte(MODULE) != MOD_DUNGEON) {
+                return "Enter a dungeon/interior (module $07) before room fall";
+            }
+            int prevLo = host.readByte(ROOM);
+            poke(host, FALL_STATE, 0x20, LINK_STATE, 0x01,
+                    PREV_ROOM, prevLo < 0 ? 0 : prevLo,
+                    ROOM + 1, (roomId >> 8) & 0xFF,
+                    ROOM, roomId & 0xFF,
+                    SUBMODULE, SUBMODE_FALL);
+            if (!waitPlay(host, MOD_DUNGEON, MOD_MESSAGE)) {
+                throw new Failure("Room fall did not finish; " + describe(host));
+            }
+            return String.format(Locale.ROOT, "Fell into room $%04X", roomId);
+        } catch (Failure f) {
+            return String.format(Locale.ROOT, "Room $%04X fall failed: %s", roomId, f.getMessage());
         }
     }
 

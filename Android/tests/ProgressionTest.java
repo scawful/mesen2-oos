@@ -36,6 +36,9 @@ final class ProgressionTest {
             if (addr == Progression.MODULE && (value == 0x05 || value == 0x0F || value == 0x08)) {
                 pending = value;
                 log.add(String.format("module %02X entrance %02X", value, readByte(Progression.ENTRANCE)));
+            } else if (addr == Progression.SUBMODULE && value == Progression.SUBMODE_FALL) {
+                pending = 0x15;
+                log.add(String.format("fall room %04X", readByte(Progression.ROOM) | (readByte(Progression.ROOM + 1) << 8)));
             }
             return true;
         }
@@ -51,6 +54,9 @@ final class ProgressionTest {
                 wram.put(Progression.MODULE, 0x09);
                 wram.put(Progression.INDOORS, 0);
                 wram.put(Progression.AREA, landArea);
+            } else if (pending == 0x15) {
+                wram.put(Progression.MODULE, 0x07);
+                wram.put(Progression.INDOORS, 1);
             } else {
                 wram.put(Progression.MODULE, 0x07);
                 wram.put(Progression.INDOORS, 1);
@@ -73,6 +79,8 @@ final class ProgressionTest {
         testEntranceFromOverworldUsesDoor();
         testWarpTimeout();
         testApplyWritesInPlace();
+        testWarpOnlyWithoutSramOverwrite();
+        testFallToRoom();
         System.out.println("ProgressionTest OK (" + checks + " checks)");
     }
 
@@ -117,6 +125,15 @@ final class ProgressionTest {
             }
         }
         check(find("d8-entrance").kind == Progression.Kind.ENTRANCE, "d8 is an entrance");
+        check(data.areaWarps.size() >= 36, "at least 36 overworld area warps, got " + data.areaWarps.size());
+        check(data.entranceWarps.size() == 80, "80 entrance warps, got " + data.entranceWarps.size());
+        for (Progression.Checkpoint aw : data.areaWarps) {
+            check(aw.kind == Progression.Kind.AREA && aw.viaRoom >= 0 && aw.primeEntrance >= 0,
+                    "area warp valid: " + aw.id);
+        }
+        for (Progression.Checkpoint ew : data.entranceWarps) {
+            check(ew.kind == Progression.Kind.ENTRANCE && ew.target >= 0, "entrance warp valid: " + ew.id);
+        }
     }
 
     static void testBadJsonSafety() {
@@ -246,6 +263,44 @@ final class ProgressionTest {
         Emu blocked = new Emu(0x01, 0);
         check(Progression.applyWrites("FULL", ops, blocked).startsWith("Resume normal play"),
                 "in-place refused outside play");
+    }
+
+    static void testWarpOnlyWithoutSramOverwrite() {
+        Progression.Checkpoint darkArea = null;
+        for (Progression.Checkpoint cp : data.areaWarps) {
+            if ((cp.area & 0x40) != 0) {
+                darkArea = cp;
+                break;
+            }
+        }
+        check(darkArea != null, "found abyss area warp target");
+        Emu emu = new Emu(0x09, 0);
+        emu.wram.put(Progression.SAVED_WORLD, 0);
+        emu.wram.put(0x7EF359, 3); // existing inventory
+        emu.sram.put(0x359, 3);
+        emu.landArea = darkArea.area;
+        emu.landRoom = darkArea.viaRoom;
+        String res = Progression.warpOnly(darkArea, emu);
+        check(res.startsWith("Warped") && !res.contains("failed"), "warpOnly succeeds: " + res);
+        check(emu.wram.get(Progression.SAVED_WORLD) == 0x40 && emu.wram.get(Progression.WORLD_FLAG) == 0x40,
+                "world flags switched for abyss area");
+        check(emu.wram.get(0x7EF359) == 3 && emu.sram.get(0x359) == 3,
+                "warpOnly did not clobber SRAM/inventory");
+    }
+
+    static void testFallToRoom() {
+        Emu overworld = new Emu(0x09, 0);
+        check(Progression.fallToRoom(0x0104, overworld).contains("module $07"),
+                "fallToRoom refused outdoors");
+        Emu dungeon = new Emu(0x07, 1);
+        check(Progression.fallToRoom(Progression.MAX_ROOM_ID + 1, dungeon).contains("out of range"),
+                "out of range room refused");
+        dungeon.wram.put(Progression.ROOM, 0x12);
+        String ok = Progression.fallToRoom(0x0104, dungeon);
+        check("Fell into room $0104".equals(ok), "fallToRoom succeeded: " + ok);
+        check(dungeon.wram.get(Progression.PREV_ROOM) == 0x12, "prev room recorded");
+        check(dungeon.wram.get(Progression.ROOM) == 0x04 && dungeon.wram.get(Progression.ROOM + 1) == 0x01,
+                "target room $0104 written");
     }
 
     static void check(boolean ok, String message) {

@@ -25,6 +25,8 @@
 #include "Shared/Video/VideoDecoder.h"
 #include "Shared/Video/VideoRenderer.h"
 #include "Shared/Video/DebugHud.h"
+#include "Shared/Audio/SoundMixer.h"
+#include "Utilities/Video/AviWriter.h"
 #include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
 #include "Utilities/FolderUtilities.h"
@@ -340,6 +342,7 @@ void SocketServer::InitializeValidationRules() {
 	SocketServer::_validationRules["CPU"] = defaultRule;
 	SocketServer::_validationRules["GAMESTATE"] = defaultRule;
 	SocketServer::_validationRules["SPRITES"] = defaultRule;
+	SocketServer::_validationRules["RECORD"] = defaultRule;
 }
 
 SocketServer::~SocketServer() {
@@ -368,6 +371,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["EXEC_LUA"] = HandleExecLua;
 	_handlers["HELP"] = HandleHelp;
 	_handlers["SCREENSHOT"] = HandleScreenshot;
+	_handlers["RECORD"] = HandleRecord;
 	_handlers["CPU"] = HandleGetCpuState;
 	_handlers["STATEINSPECT"] = HandleStateInspector;
 	_handlers["INPUT"] = HandleSetInput;
@@ -2376,6 +2380,66 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 		return resp;
 	}
 
+	if (cmd.HasParam("path")) {
+		string path = cmd.GetParam("path");
+		bool overwrite = cmd.HasParam("overwrite") && ParseBoolValue(cmd.GetParam("overwrite"));
+		bool isAbsolute = (!path.empty() && (path[0] == '/' || path[0] == '\\')) || (path.size() > 1 && path[1] == ':');
+		if (path.empty() || !isAbsolute) {
+			resp.success = false;
+			resp.error = "path must be an absolute file path";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		string folder = FolderUtilities::GetFolderName(path);
+		if (folder.empty() || !fs::is_directory(folder)) {
+			resp.success = false;
+			resp.error = "Folder does not exist: " + folder;
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		if (fs::exists(path) && !overwrite) {
+			resp.success = false;
+			resp.error = "File exists (pass overwrite=true to replace): " + path;
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		string tmpPath = path + ".tmp";
+		{
+			std::ofstream out(tmpPath, std::ios::out | std::ios::binary | std::ios::trunc);
+			if (!out.good()) {
+				resp.success = false;
+				resp.error = "Could not open screenshot file: " + path;
+				resp.errorCode = SocketErrorCode::InternalError;
+				return resp;
+			}
+			out.write(pngData.data(), static_cast<std::streamsize>(pngData.size()));
+			out.flush();
+			if (!out.good()) {
+				out.close();
+				std::error_code ec;
+				fs::remove(tmpPath, ec);
+				resp.success = false;
+				resp.error = "Failed writing screenshot file: " + path;
+				resp.errorCode = SocketErrorCode::InternalError;
+				return resp;
+			}
+		}
+		std::error_code ec;
+		fs::rename(tmpPath, path, ec);
+		if (ec) {
+			fs::remove(tmpPath, ec);
+			resp.success = false;
+			resp.error = "Failed finalizing screenshot file: " + path;
+			resp.errorCode = SocketErrorCode::InternalError;
+			return resp;
+		}
+		stringstream ss;
+		ss << "{\"written\":true,\"path\":\"" << JsonEscape(path) << "\",\"bytes\":" << pngData.size() << "}";
+		resp.success = true;
+		resp.data = ss.str();
+		return resp;
+	}
+
 	// Base64 encode the PNG data
 	static const char* base64Chars =
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -2420,6 +2484,173 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 
 	resp.success = true;
 	resp.data = "\"" + encoded + "\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cmd) {
+	static SimpleLock recordLock;
+	static string wavPath;
+	auto lock = recordLock.AcquireSafe();
+
+	VideoRenderer* renderer = emu ? emu->GetVideoRenderer() : nullptr;
+	SoundMixer* mixer = emu ? emu->GetSoundMixer() : nullptr;
+	if (!renderer || !mixer) {
+		SocketResponse resp;
+		resp.success = false;
+		resp.error = "Video or audio subsystem unavailable";
+		resp.errorCode = SocketErrorCode::InternalError;
+		return resp;
+	}
+
+	auto lowerCopy = [](string s) {
+		std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return s;
+	};
+	auto buildStatusJson = [&]() {
+		stringstream ss;
+		ss << "{\"video\":{\"active\":" << (renderer->IsRecording() ? "true" : "false");
+		ss << ",\"path\":\"" << JsonEscape(renderer->GetRecordingFile()) << "\"}";
+		ss << ",\"audio\":{\"active\":" << (mixer->IsRecording() ? "true" : "false");
+		ss << ",\"path\":\"" << JsonEscape(mixer->IsRecording() ? wavPath : "") << "\"}}";
+		return ss.str();
+	};
+
+	string action = lowerCopy(cmd.GetParam("action", "status"));
+	SocketResponse resp;
+	if (action == "status") {
+		resp.success = true;
+		resp.data = buildStatusJson();
+		return resp;
+	}
+
+	if (action == "stop") {
+		string kind = lowerCopy(cmd.GetParam("kind", "all"));
+		if (kind != "all" && kind != "video" && kind != "audio") {
+			resp.success = false;
+			resp.error = "kind must be video, audio or all";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		if (kind != "audio" && renderer->IsRecording()) {
+			renderer->StopRecording();
+		}
+		if (kind != "video" && mixer->IsRecording()) {
+			mixer->StopRecording();
+			wavPath.clear();
+		}
+		resp.success = true;
+		resp.data = buildStatusJson();
+		return resp;
+	}
+
+	if (action != "start") {
+		resp.success = false;
+		resp.error = "Unknown action: " + action + " (start/stop/status)";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+	if (!emu->IsRunning()) {
+		resp.success = false;
+		resp.error = "No ROM loaded";
+		resp.errorCode = SocketErrorCode::EmulatorNotRunning;
+		return resp;
+	}
+
+	string path = cmd.GetParam("path");
+	bool overwrite = cmd.HasParam("overwrite") && ParseBoolValue(cmd.GetParam("overwrite"));
+	bool isAbsolute = (!path.empty() && (path[0] == '/' || path[0] == '\\')) || (path.size() > 1 && path[1] == ':');
+	if (path.empty() || !isAbsolute) {
+		resp.success = false;
+		resp.error = "path must be an absolute file path";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+	string folder = FolderUtilities::GetFolderName(path);
+	if (folder.empty() || !fs::is_directory(folder)) {
+		resp.success = false;
+		resp.error = "Folder does not exist: " + folder;
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+	if (fs::exists(path) && !overwrite) {
+		resp.success = false;
+		resp.error = "File exists (pass overwrite=true to replace): " + path;
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+
+	string ext = lowerCopy(FolderUtilities::GetExtension(path));
+	string defaultKind = ext == ".gif" ? "gif" : (ext == ".wav" ? "wav" : (ext == ".avi" ? "avi" : "mp4"));
+	string kind = lowerCopy(cmd.GetParam("kind", defaultKind));
+	if (kind == "wav") {
+		if (mixer->IsRecording()) {
+			resp.success = false;
+			resp.error = "An audio recording is already active";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return resp;
+		}
+		mixer->StartRecording(path);
+		wavPath = path;
+		resp.success = true;
+		resp.data = buildStatusJson();
+		return resp;
+	}
+
+	if (kind != "mp4" && kind != "avi" && kind != "gif") {
+		resp.success = false;
+		resp.error = "kind must be mp4, avi, gif or wav";
+		resp.errorCode = SocketErrorCode::InvalidParameter;
+		return resp;
+	}
+	if (renderer->IsRecording()) {
+		resp.success = false;
+		resp.error = "A video recording is already active";
+		resp.errorCode = SocketErrorCode::InvalidState;
+		return resp;
+	}
+
+	RecordAviOptions options = {};
+	if (kind == "gif") {
+		options.Codec = VideoCodec::GIF;
+	} else {
+		string codec = lowerCopy(cmd.GetParam("codec", "zmbv"));
+		if (codec == "zmbv") {
+			options.Codec = VideoCodec::ZMBV;
+		} else if (codec == "cscd") {
+			options.Codec = VideoCodec::CSCD;
+		} else if (codec == "raw" || codec == "none") {
+			options.Codec = VideoCodec::None;
+		} else {
+			resp.success = false;
+			resp.error = "codec must be zmbv, cscd or raw";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+	}
+	uint32_t compression = 6;
+	if (cmd.HasParam("compression")) {
+		try {
+			compression = static_cast<uint32_t>(std::stoul(cmd.GetParam("compression")));
+		} catch (...) {
+			resp.success = false;
+			resp.error = "Invalid compression level";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+	}
+	options.CompressionLevel = std::min<uint32_t>(compression, 9);
+	options.RecordSystemHud = cmd.HasParam("system_hud") && ParseBoolValue(cmd.GetParam("system_hud"));
+	options.RecordInputHud = cmd.HasParam("input_hud") && ParseBoolValue(cmd.GetParam("input_hud"));
+
+	if (!renderer->StartRecording(path, options)) {
+		resp.success = false;
+		resp.error = "Could not start recording to " + path;
+		resp.errorCode = SocketErrorCode::InternalError;
+		return resp;
+	}
+
+	resp.success = true;
+	resp.data = buildStatusJson();
 	return resp;
 }
 
@@ -4886,6 +5117,7 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "SAVESTATE_LABEL") subResp = HandleSaveStateLabel(emu, subCmd);
 		else if (subCmd.type == "LOADSTATE") subResp = HandleLoadState(emu, subCmd);
 		else if (subCmd.type == "SCREENSHOT") subResp = HandleScreenshot(emu, subCmd);
+		else if (subCmd.type == "RECORD") subResp = HandleRecord(emu, subCmd);
 		else if (subCmd.type == "CPU") subResp = HandleGetCpuState(emu, subCmd);
 		else if (subCmd.type == "EVAL") subResp = HandleEval(emu, subCmd);
 		else if (subCmd.type == "SET_PC") subResp = HandleSetPc(emu, subCmd);
@@ -6624,7 +6856,8 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"BREAKPOINT", "Manage breakpoints", "action (add/list/remove/enable/disable/clear), addr, bptype, condition", "{\"type\":\"BREAKPOINT\",\"action\":\"add\",\"addr\":\"0x008000\",\"bptype\":\"exec\"}"},
 			{"TRACE", "Get or control execution trace log", "action (start/stop/status/clear) or count/offset; format/condition/labels/indent", "{\"type\":\"TRACE\",\"action\":\"start\",\"clear\":\"true\"}"},
 			{"BATCH", "Execute multiple commands at once", "commands (JSON array as string)", "{\"type\":\"BATCH\",\"commands\":\"[{\\\"type\\\":\\\"PING\\\"}]\"}"},
-			{"SCREENSHOT", "Capture screen as base64 PNG", "", "{\"type\":\"SCREENSHOT\"}"},
+			{"SCREENSHOT", "Capture screen as base64 PNG or write PNG to absolute path", "path (optional), overwrite (optional)", "{\"type\":\"SCREENSHOT\"}"},
+			{"RECORD", "Record video (.mp4 on Android, .avi, .gif) or audio (.wav)", "action (start/stop/status), path, kind, codec, input_hud, system_hud, overwrite", "{\"type\":\"RECORD\",\"action\":\"status\"}"},
 			{"SAVESTATE", "Save state to slot or file", "slot or path, label (optional), pause (optional), allow_external (optional)", "{\"type\":\"SAVESTATE\",\"slot\":\"1\",\"label\":\"Boss room\",\"pause\":\"true\"}"},
 			{"SAVESTATE_LABEL", "Get/set save state labels", "action (get/set/clear), slot or path, label (set only)", "{\"type\":\"SAVESTATE_LABEL\",\"action\":\"set\",\"slot\":\"1\",\"label\":\"Boss room\"}"},
 			{"LOADSTATE", "Load state from slot or file", "slot or path, pause (optional), allow_external (optional)", "{\"type\":\"LOADSTATE\",\"slot\":\"1\",\"pause\":\"true\"}"},
@@ -6682,7 +6915,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",
-		"SCREENSHOT", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
+		"SCREENSHOT", "RECORD", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
 		"SNAPSHOT", "DIFF", "SEARCH", "LABELS",
 		"P_WATCH", "P_LOG", "P_ASSERT",
 		"DEBUG_LOG",
