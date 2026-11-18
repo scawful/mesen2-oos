@@ -24,7 +24,7 @@ namespace Mesen.Views
 
 		private void OnPaneKeyDown(object? sender, KeyEventArgs e)
 		{
-			//Enter/Escape hand the keyboard back to the game (the window treats a focused text box as background).
+			//Enter/Escape hand keyboard focus back to the game.
 			IFocusManager? focusManager = TopLevel.GetTopLevel(this)?.FocusManager;
 			if(focusManager?.GetFocusedElement() is not TextBox box) {
 				return;

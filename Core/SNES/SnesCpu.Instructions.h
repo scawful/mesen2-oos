@@ -395,29 +395,8 @@ Jump instructions
 ******************/
 void SnesCpu::JML()
 {
-	uint8_t prevK = _state.K;
-	uint16_t prevPc = _state.PC;
-	uint8_t newK = (_operand >> 16) & 0xFF;
-	uint16_t newPc = (uint16_t)_operand;
-	bool invalidPc = newPc < 0x8000;
-	if (_emu && (newK != prevK || invalidPc)) {
-		uint32_t from = ((uint32_t)prevK << 16) | prevPc;
-		uint32_t target = ((uint32_t)newK << 16) | newPc;
-		_emu->DebugLog(
-			"[K] JML from=" + HexUtilities::ToHex(from) +
-			" to=" + HexUtilities::ToHex(target) +
-			" invalid=" + std::string(invalidPc ? "1" : "0") +
-			" SP=" + HexUtilities::ToHex(_state.SP) +
-			" A=" + HexUtilities::ToHex(_state.A) +
-			" X=" + HexUtilities::ToHex(_state.X) +
-			" Y=" + HexUtilities::ToHex(_state.Y) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
-	}
-	_state.K = newK;
-	_state.PC = newPc;
+	_state.K = (_operand >> 16) & 0xFF;
+	_state.PC = (uint16_t)_operand;
 	IdleEndJump();
 }
 
@@ -429,7 +408,6 @@ void SnesCpu::JMP()
 
 void SnesCpu::JSL()
 {
-	uint8_t prevK = _state.K;
 	uint8_t b1 = ReadOperandByte();
 	uint8_t b2 = ReadOperandByte();
 
@@ -437,30 +415,11 @@ void SnesCpu::JSL()
 	Idle();
 
 	uint8_t b3 = ReadOperandByte();
-	uint8_t newK = b3;
-	uint16_t newPc = b1 | (b2 << 8);
-	bool invalidPc = newPc < 0x8000;
-	if (_emu && (newK != prevK || invalidPc)) {
-		uint32_t target = ((uint32_t)newK << 16) | newPc;
-		uint32_t ret = ((uint32_t)prevK << 16) | (_state.PC - 1);
-		_emu->DebugLog(
-			"[K] JSL ret=" + HexUtilities::ToHex(ret) +
-			" to=" + HexUtilities::ToHex(target) +
-			" invalid=" + std::string(invalidPc ? "1" : "0") +
-			" SP=" + HexUtilities::ToHex(_state.SP) +
-			" A=" + HexUtilities::ToHex(_state.A) +
-			" X=" + HexUtilities::ToHex(_state.X) +
-			" Y=" + HexUtilities::ToHex(_state.Y) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
-	}
 
 	PushWord(_state.PC - 1, false);
 
-	_state.K = newK;
-	_state.PC = newPc;
+	_state.K = b3;
+	_state.PC = b1 | (b2 << 8);
 	RestrictStackPointerValue();
 	IdleEndJump();
 }
@@ -507,44 +466,12 @@ void SnesCpu::RTI()
 	Idle();
 
 	if(_state.EmulationMode) {
-		uint8_t newPs = PopByte() | ProcFlags::MemoryMode8 | ProcFlags::IndexMode8;
-		uint16_t newPc = PopWord();
-		bool invalidPc = newPc < 0x8000;
-		if (_emu && invalidPc && !_invalidRtiLogged) {
-			uint32_t from = ((uint32_t)_state.K << 16) | _state.PC;
-			uint32_t to = ((uint32_t)_state.K << 16) | newPc;
-			_emu->DebugLog(
-				"[K] RTI emu from=" + HexUtilities::ToHex(from) +
-				" to=" + HexUtilities::ToHex(to) +
-				" invalid=1" +
-				" SP=" + HexUtilities::ToHex(_state.SP) +
-				" P=" + HexUtilities::ToHex(newPs)
-			);
-			_invalidRtiLogged = true;
-		}
-		SetPS(newPs);
-		_state.PC = newPc;
+		SetPS(PopByte() | ProcFlags::MemoryMode8 | ProcFlags::IndexMode8);
+		_state.PC = PopWord();
 	} else {
-		uint8_t newPs = PopByte();
-		uint16_t newPc = PopWord();
-		uint8_t newK = PopByte();
-		uint8_t prevK = _state.K;
-		bool invalidPc = newPc < 0x8000;
-		if (_emu && (newK != prevK || invalidPc) && !_invalidRtiLogged) {
-			uint32_t from = ((uint32_t)prevK << 16) | _state.PC;
-			uint32_t to = ((uint32_t)newK << 16) | newPc;
-			_emu->DebugLog(
-				"[K] RTI from=" + HexUtilities::ToHex(from) +
-				" to=" + HexUtilities::ToHex(to) +
-				" invalid=" + std::string(invalidPc ? "1" : "0") +
-				" SP=" + HexUtilities::ToHex(_state.SP) +
-				" P=" + HexUtilities::ToHex(newPs)
-			);
-			_invalidRtiLogged = true;
-		}
-		SetPS(newPs);
-		_state.PC = newPc;
-		_state.K = newK;
+		SetPS(PopByte());
+		_state.PC = PopWord();
+		_state.K = PopByte();
 	}
 	IdleEndJump();
 }
@@ -554,29 +481,9 @@ void SnesCpu::RTL()
 	Idle();
 	Idle();
 
-	uint16_t newPc = PopWord(false);
-	uint8_t newK = PopByte(false);
-	uint16_t finalPc = newPc + 1;
-	bool invalidPc = finalPc < 0x8000;
-	if (_emu && (newK != _state.K || invalidPc)) {
-		uint32_t from = ((uint32_t)_state.K << 16) | _state.PC;
-		uint32_t to = ((uint32_t)newK << 16) | finalPc;
-		_emu->DebugLog(
-			"[K] RTL from=" + HexUtilities::ToHex(from) +
-			" to=" + HexUtilities::ToHex(to) +
-			" invalid=" + std::string(invalidPc ? "1" : "0") +
-			" SP=" + HexUtilities::ToHex(_state.SP) +
-			" A=" + HexUtilities::ToHex(_state.A) +
-			" X=" + HexUtilities::ToHex(_state.X) +
-			" Y=" + HexUtilities::ToHex(_state.Y) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
-	}
-	_state.PC = newPc;
+	_state.PC = PopWord(false);
 	_state.PC++;
-	_state.K = newK;
+	_state.K = PopByte(false);
 	RestrictStackPointerValue();
 	IdleEndJump();
 }
@@ -1165,17 +1072,6 @@ void SnesCpu::TCD()
 
 void SnesCpu::TCS()
 {
-	if(_emu && _state.SP < 0x2000 && _state.A >= 0x2000) {
-		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
-		_emu->DebugLog(
-			"[SP] TCS PC=" + HexUtilities::ToHex(pc) +
-			" A=" + HexUtilities::ToHex(_state.A) +
-			" SP=" + HexUtilities::ToHex(_state.SP) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
-	}
 	SetSP(_state.A);
 }
 
@@ -1201,17 +1097,6 @@ void SnesCpu::TXA()
 
 void SnesCpu::TXS()
 {
-	if(_emu && _state.SP < 0x2000 && _state.X >= 0x2000) {
-		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
-		_emu->DebugLog(
-			"[SP] TXS PC=" + HexUtilities::ToHex(pc) +
-			" X=" + HexUtilities::ToHex(_state.X) +
-			" SP=" + HexUtilities::ToHex(_state.SP) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
-	}
 	SetSP(_state.X);
 }
 

@@ -963,6 +963,10 @@ namespace Mesen.Windows
 				return;
 			}
 
+			if(IsTextInputFocused()) {
+				return;
+			}
+
 			if(OperatingSystem.IsMacOS()) {
 				//Keyhandler handles key internally on macOS
 				return;
@@ -1061,12 +1065,12 @@ namespace Mesen.Windows
 
 		private void UpdateBackgroundFlag()
 		{
-			//A focused text box (e.g. in the Oracle tools pane) counts as background so key
-			//presses reach the text box instead of the game. On macOS the native key monitor
-			//swallows every key while the main window is in the foreground.
+			//A focused text box (e.g. in the Oracle tools pane) sets TextInputFocused so key
+			//presses reach the text box instead of the game without triggering background audio reduction.
 			bool textInputFocused = IsActive && IsTextInputFocused();
 			_model.OracleDebugPanel.IsTextInputFocused = textInputFocused;
-			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive || textInputFocused);
+			ConfigApi.SetEmulationFlag(EmulationFlags.InBackground, !IsActive);
+			ConfigApi.SetEmulationFlag(EmulationFlags.TextInputFocused, textInputFocused);
 		}
 
 		private void OnRendererPointerPressed(object? sender, PointerPressedEventArgs e)

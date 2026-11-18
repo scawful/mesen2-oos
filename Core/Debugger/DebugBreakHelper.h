@@ -11,6 +11,9 @@ private:
 	bool _acquired = true;
 
 public:
+	//Deadline used by callers that can report a failed break instead of waiting forever
+	static constexpr uint32_t DefaultTimeoutMs = 2000;
+
 	DebugBreakHelper(Debugger* debugger, bool breakBetweenInstructions = false, uint32_t timeoutMs = 0)
 	{
 		_debugger = debugger;

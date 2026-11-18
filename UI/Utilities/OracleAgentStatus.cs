@@ -1,33 +1,31 @@
 using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
-using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
+using Mesen.Interop;
 
 namespace Mesen.Utilities
 {
 	public sealed record class OracleStatusSnapshot
 	{
-		public bool GatewayOnline { get; init; }
+		public bool MesenRunning { get; init; }
+		public bool MesenPaused { get; init; }
+		public string? RomName { get; init; }
 		public bool SocketFound { get; init; }
 		public bool? YazeRunning { get; init; }
-		public bool? Mesen2Connected { get; init; }
 		public string? SocketPath { get; init; }
-		public string? GatewayError { get; init; }
 		public DateTimeOffset Timestamp { get; init; }
 
 		public static OracleStatusSnapshot Empty()
 		{
 			return new OracleStatusSnapshot() {
-				GatewayOnline = false,
+				MesenRunning = false,
+				MesenPaused = false,
+				RomName = null,
 				SocketFound = false,
 				YazeRunning = null,
-				Mesen2Connected = null,
 				SocketPath = null,
-				GatewayError = null,
 				Timestamp = DateTimeOffset.MinValue
 			};
 		}
@@ -35,157 +33,81 @@ namespace Mesen.Utilities
 
 	public static class OracleAgentStatus
 	{
-		private const int DefaultGatewayPort = 8765;
-		private static readonly TimeSpan _timeout = TimeSpan.FromMilliseconds(350);
-
-		public static async Task<OracleStatusSnapshot> FetchAsync()
+		public static Task<OracleStatusSnapshot> FetchAsync()
 		{
-			OracleStatusSnapshot snapshot = OracleStatusSnapshot.Empty();
-			int port = ResolveGatewayPort();
-
-			try {
-				using CancellationTokenSource cts = new CancellationTokenSource(_timeout);
-				using HttpClient client = new HttpClient();
-				HttpResponseMessage response = await client.GetAsync($"http://127.0.0.1:{port}/status", cts.Token).ConfigureAwait(false);
-				if(response.IsSuccessStatusCode) {
-					string json = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
-					OracleStatusSnapshot? parsed = ParseGatewayStatus(json);
-					if(parsed != null) {
-						snapshot = parsed;
+			return Task.Run(() => {
+				bool running = EmuApi.IsRunning();
+				bool paused = running && EmuApi.IsPaused();
+				string? romName = null;
+				if(running) {
+					RomInfo rom = EmuApi.GetRomInfo();
+					if(rom.Format != RomFormat.Unknown) {
+						romName = rom.GetRomName();
 					}
 				}
-			} catch(Exception ex) {
-				snapshot = snapshot with { GatewayError = ex.Message };
-			}
 
-			string? socketPath = snapshot.SocketPath ?? GetLocalSocketPath();
-			bool socketFound = !string.IsNullOrWhiteSpace(socketPath);
-			bool? yazeRunning = snapshot.YazeRunning ?? GetYazeRunningFromPid();
-
-			return new OracleStatusSnapshot() {
-				GatewayOnline = snapshot.GatewayOnline,
-				SocketFound = socketFound,
-				YazeRunning = yazeRunning,
-				Mesen2Connected = snapshot.Mesen2Connected,
-				SocketPath = socketPath,
-				GatewayError = snapshot.GatewayError,
-				Timestamp = DateTimeOffset.Now
-			};
-		}
-
-		private static OracleStatusSnapshot? ParseGatewayStatus(string json)
-		{
-			try {
-				using JsonDocument doc = JsonDocument.Parse(json);
-				if(!doc.RootElement.TryGetProperty("ok", out JsonElement okElem) || okElem.ValueKind != JsonValueKind.True) {
-					return null;
-				}
-
-				bool? mesenConnected = null;
-				bool? yazeRunning = null;
-				string? socketPath = null;
-
-				if(doc.RootElement.TryGetProperty("status", out JsonElement statusElem)) {
-					if(statusElem.TryGetProperty("mesen2_connected", out JsonElement connectedElem)) {
-						if(connectedElem.ValueKind == JsonValueKind.True || connectedElem.ValueKind == JsonValueKind.False) {
-							mesenConnected = connectedElem.GetBoolean();
-						}
-					}
-
-					if(statusElem.TryGetProperty("mesen2_sockets", out JsonElement socketsElem) && socketsElem.ValueKind == JsonValueKind.Array) {
-						foreach(JsonElement socketElem in socketsElem.EnumerateArray()) {
-							string? candidate = socketElem.GetString();
-							if(!string.IsNullOrWhiteSpace(candidate)) {
-								socketPath = candidate;
-								break;
-							}
-						}
-					}
-
-					if(statusElem.TryGetProperty("yaze_running", out JsonElement yazeElem)) {
-						if(yazeElem.ValueKind == JsonValueKind.True || yazeElem.ValueKind == JsonValueKind.False) {
-							yazeRunning = yazeElem.GetBoolean();
-						}
-					}
-				}
+				string? socketPath = GetLocalSocketPath();
+				bool socketFound = !string.IsNullOrWhiteSpace(socketPath);
+				bool? yazeRunning = GetYazeRunning();
 
 				return new OracleStatusSnapshot() {
-					GatewayOnline = true,
-					SocketFound = !string.IsNullOrWhiteSpace(socketPath),
+					MesenRunning = running,
+					MesenPaused = paused,
+					RomName = romName,
+					SocketFound = socketFound,
 					YazeRunning = yazeRunning,
-					Mesen2Connected = mesenConnected,
 					SocketPath = socketPath,
-					GatewayError = null,
 					Timestamp = DateTimeOffset.Now
 				};
-			} catch {
-				return null;
-			}
+			});
 		}
 
-		private static int ResolveGatewayPort()
-		{
-			string? envPort = Environment.GetEnvironmentVariable("MESEN2_AGENT_GATEWAY_PORT") ??
-				Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PORT");
-
-			if(int.TryParse(envPort, out int port)) {
-				return port;
-			}
-			return DefaultGatewayPort;
-		}
-
-		private static string? GetLocalSocketPath()
+		/// <summary>
+		/// Resolve THIS Mesen2 process's Unix socket path without probing other running instances.
+		/// Matches SocketServer::SocketServer() in Core/Shared/SocketServer.cpp.
+		/// </summary>
+		public static string? GetLocalSocketPath()
 		{
 			if(OperatingSystem.IsWindows()) {
 				return null;
 			}
 
-			// 1) Explicit overrides (canonical priority)
-			foreach(string? envPath in new[] {
-				Environment.GetEnvironmentVariable("MESEN2_SOCKET_PATH"),
-				Environment.GetEnvironmentVariable("MESEN2_SOCKET")
-			}) {
-				if(!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath)) {
-					return envPath;
-				}
+			string? envPath = Environment.GetEnvironmentVariable("MESEN2_SOCKET_PATH");
+			if(!string.IsNullOrWhiteSpace(envPath)) {
+				return File.Exists(envPath) ? envPath : null;
 			}
 
-			// 2) Status files by mtime (newest first)
-			string[] statusFiles = Directory.GetFiles("/tmp", "mesen2-*.status")
-				.OrderByDescending(p => File.GetLastWriteTimeUtc(p))
-				.ToArray();
+			int currentPid = Environment.ProcessId;
+			string pidSocket = $"/tmp/mesen2-{currentPid}.sock";
+			if(File.Exists(pidSocket)) {
+				return pidSocket;
+			}
 
-			HashSet<string> seen = new(StringComparer.Ordinal);
-			List<string> candidates = new();
-
-			foreach(string statusPath in statusFiles) {
-				try {
-					using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(statusPath));
-					if(doc.RootElement.TryGetProperty("socketPath", out JsonElement socketElem)) {
-						string? socketPath = socketElem.GetString();
-						if(!string.IsNullOrWhiteSpace(socketPath) && File.Exists(socketPath) && seen.Add(socketPath)) {
-							candidates.Add(socketPath);
+			try {
+				foreach(string statusPath in Directory.GetFiles("/tmp", "mesen2-*.status")) {
+					try {
+						using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(statusPath));
+						if(doc.RootElement.TryGetProperty("pid", out JsonElement pidElem)
+							&& pidElem.TryGetInt32(out int pid)
+							&& pid == currentPid
+							&& doc.RootElement.TryGetProperty("socketPath", out JsonElement socketElem)) {
+							string? candidate = socketElem.GetString();
+							if(!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate)) {
+								return candidate;
+							}
 						}
+					} catch {
+						// Ignore malformed status files
 					}
-				} catch {
-					// Ignore malformed status files
 				}
+			} catch {
+				// Ignore /tmp enumeration failures
 			}
 
-			// 3) Fallback raw socket scan by mtime (newest first)
-			string[] sockets = Directory.GetFiles("/tmp", "mesen2-*.sock")
-				.OrderByDescending(p => File.GetLastWriteTimeUtc(p))
-				.ToArray();
-			foreach(string socketPath in sockets) {
-				if(seen.Add(socketPath)) {
-					candidates.Add(socketPath);
-				}
-			}
-
-			return candidates.Count > 0 ? candidates[0] : null;
+			return null;
 		}
 
-		private static bool? GetYazeRunningFromPid()
+		private static bool? GetYazeRunning()
 		{
 			if(OperatingSystem.IsWindows()) {
 				return null;
@@ -200,6 +122,27 @@ namespace Mesen.Utilities
 				if(IsPidRunning(pidFile)) {
 					return true;
 				}
+			}
+
+			try {
+				Process[] procs = Process.GetProcessesByName("yaze");
+				bool anyAlive = false;
+				foreach(Process proc in procs) {
+					using(proc) {
+						if(!anyAlive) {
+							try {
+								anyAlive = !proc.HasExited;
+							} catch {
+								anyAlive = true;
+							}
+						}
+					}
+				}
+				if(anyAlive) {
+					return true;
+				}
+			} catch {
+				// Ignore process enumeration errors
 			}
 
 			return false;
@@ -217,7 +160,7 @@ namespace Mesen.Utilities
 					return false;
 				}
 
-				System.Diagnostics.Process proc = System.Diagnostics.Process.GetProcessById(pid);
+				using Process proc = Process.GetProcessById(pid);
 				return !proc.HasExited;
 			} catch {
 				return false;

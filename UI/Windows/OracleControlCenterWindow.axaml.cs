@@ -92,34 +92,24 @@ namespace Mesen.Windows
 			}
 		}
 
-		private void OnGatewayActionClick(object? sender, RoutedEventArgs e)
+		private void OnRunSocketHealthClick(object? sender, RoutedEventArgs e)
 		{
-			if(sender is Button button && button.Tag is string action) {
-				AgentLauncher.RunGatewayAction(action);
-			}
+			OracleLocalSocketClient.RunSocketCommandWithOutput("HEALTH", null, "Oracle Socket Health");
 		}
 
-		private void OnGatewayActionWithOutputClick(object? sender, RoutedEventArgs e)
+		private void OnRunZsowClick(object? sender, RoutedEventArgs e)
 		{
-			if(sender is Button button && button.Tag is string action) {
-				string title = button.Content?.ToString() ?? "Oracle Output";
-				AgentLauncher.RunGatewayActionWithOutput(action, title);
-			}
+			OracleDebugActions.ShowOutputWindow("ZSCustomOverworld Status", OracleDebugActions.DescribeZsowStatus);
 		}
 
-		private void OnGatewayStartClick(object? sender, RoutedEventArgs e)
+		private void OnRunDayNightClick(object? sender, RoutedEventArgs e)
 		{
-			AgentLauncher.StartGateway();
+			OracleDebugActions.ShowOutputWindow("Day/Night Status", OracleDebugActions.DescribeDayNightStatus);
 		}
 
-		private void OnGatewayStopClick(object? sender, RoutedEventArgs e)
+		private void OnOpenDiagnosticsWindowClick(object? sender, RoutedEventArgs e)
 		{
-			AgentLauncher.StopGateway();
-		}
-
-		private void OnGatewayStatusClick(object? sender, RoutedEventArgs e)
-		{
-			AgentLauncher.GatewayStatus();
+			ApplicationHelper.GetOrCreateUniqueWindow(this, () => new OracleDiagnosticsWindow());
 		}
 
 		private void OnCopySocketClick(object? sender, RoutedEventArgs e)
@@ -148,6 +138,12 @@ namespace Mesen.Windows
 				case "oracle_docs":
 					AgentLauncher.OpenOracleDocs();
 					break;
+				case "oracle_tests":
+					AgentLauncher.OpenOracleTests();
+					break;
+				case "oracle_debug_data":
+					AgentLauncher.OpenOracleDebugData();
+					break;
 				case "mesen_root":
 					AgentLauncher.OpenMesen2Root();
 					break;
@@ -174,6 +170,9 @@ namespace Mesen.Windows
 					break;
 				case "models_dir":
 					AgentLauncher.OpenPath("~/models");
+					break;
+				case "afs_scratchpad":
+					AgentLauncher.OpenAfsScratchpad();
 					break;
 				case "afs_repo":
 					AgentLauncher.OpenPath("~/src/lab/afs");

@@ -50,6 +50,14 @@ struct CpuInfo
 	unique_ptr<ExpressionEvaluator> Evaluator;
 };
 
+//Result of a run/step request that is bounded and/or requires a paused debugger
+enum class DebugControlResult
+{
+	Ok,
+	NotPaused,
+	Timeout
+};
+
 class Debugger
 {
 private:
@@ -91,7 +99,7 @@ private:
 	DebugControllerState _inputOverrides[8] = {};
 	uint32_t _inputOverrideFrames[8] = {};  // Frame counter for auto-clearing overrides
 
-	bool _waitForBreakResume = false;
+	atomic<bool> _waitForBreakResume { false };
 
 	void Reset();
 
@@ -105,6 +113,10 @@ private:
 	bool IsDebugWindowOpened(CpuType cpuType);
 	bool IsBreakOptionEnabled(BreakSource src);
 	template<CpuType type> void SleepOnBreakRequest();
+
+	bool IsPausedOrPausing();
+	DebugControlResult ControlRun(uint32_t timeoutMs, bool requirePaused);
+	DebugControlResult ControlStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs, bool requirePaused);
 
 	void ApplyMergedBreakpoints();
 
@@ -136,9 +148,12 @@ public:
 	int64_t EvaluateExpression(string expression, CpuType cpuType, EvalResultType &resultType, bool useCache);
 
 	void Run();
+	bool TryRun(uint32_t timeoutMs);
+	DebugControlResult TryRunIfPaused(uint32_t timeoutMs);
 	void PauseOnNextFrame();
 	void Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source = BreakSource::Unspecified);
 	bool TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs);
+	DebugControlResult TryStepIfPaused(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs);
 	bool IsPaused();
 	bool IsExecutionStopped();
 

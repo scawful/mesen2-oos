@@ -42,7 +42,6 @@ namespace Mesen.ViewModels
 		[Reactive] private List<object> _netPlayControllers { get; set; } = new();
 
 		private OracleStatusSnapshot _oracleStatus = OracleStatusSnapshot.Empty();
-		private MainMenuAction? _oracleGatewayStatusAction;
 		private MainMenuAction? _oracleMesenStatusAction;
 		private MainMenuAction? _oracleSocketStatusAction;
 		private MainMenuAction? _oracleYazeStatusAction;
@@ -1111,26 +1110,6 @@ namespace Mesen.ViewModels
 			DebugShortcutManager.RegisterActions(wnd, DebugMenuItems);
 		}
 
-		private MainMenuAction CreateOracleAction(string label, string action, Func<bool>? isEnabled = null)
-		{
-			return new MainMenuAction() {
-				ActionType = ActionType.Custom,
-				CustomText = label,
-				IsEnabled = isEnabled,
-				OnClick = () => AgentLauncher.RunGatewayAction(action)
-			};
-		}
-
-		private MainMenuAction CreateOracleActionWithOutput(string label, string action, Func<bool>? isEnabled = null)
-		{
-			return new MainMenuAction() {
-				ActionType = ActionType.Custom,
-				CustomText = label,
-				IsEnabled = isEnabled,
-				OnClick = () => AgentLauncher.RunGatewayActionWithOutput(action, label)
-			};
-		}
-
 		private MainMenuAction CreateOracleCommand(string label, Action onClick, Func<bool>? isEnabled = null)
 		{
 			return new MainMenuAction() {
@@ -1173,7 +1152,7 @@ namespace Mesen.ViewModels
 				args["frames"] = parts[2];
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("draw_path", args, "Draw Path");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("DRAW_PATH", args, "Draw Path");
 		}
 
 		private async void PromptOracleEval(Window wnd)
@@ -1198,7 +1177,7 @@ namespace Mesen.ViewModels
 				args["cpu"] = parts[1];
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("eval_expression", args, "Eval Expression");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("EVAL", args, "Eval Expression");
 		}
 
 		private async void PromptOracleSetPc(Window wnd)
@@ -1223,7 +1202,7 @@ namespace Mesen.ViewModels
 				args["cpu"] = parts[1];
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("set_pc", args, "Set PC");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("SET_PC", args, "Set PC");
 		}
 
 		private async void PromptOracleMemorySize(Window wnd)
@@ -1238,7 +1217,7 @@ namespace Mesen.ViewModels
 			}
 
 			Dictionary<string, string> args = new() { ["memtype"] = input.Trim() };
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("memory_size", args, "Memory Size");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("MEMORY_SIZE", args, "Memory Size");
 		}
 
 		private async void PromptOracleStackRetaddr(Window wnd)
@@ -1261,7 +1240,7 @@ namespace Mesen.ViewModels
 				args["sp"] = parts[2];
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("stack_retaddr", args, "Stack Return Addrs");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("STACK_RETADDR", args, "Stack Return Addrs");
 		}
 
 		private async void PromptOracleMemWatchAdd(Window wnd)
@@ -1292,7 +1271,7 @@ namespace Mesen.ViewModels
 				args["depth"] = parts[2];
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_watch", args, "Mem Watch Add");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("MEM_WATCH_WRITES", args, "Mem Watch Add");
 		}
 
 		private async void PromptOracleMemWatchRemove(Window wnd)
@@ -1310,7 +1289,7 @@ namespace Mesen.ViewModels
 				["action"] = "remove",
 				["watch_id"] = input.Trim()
 			};
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_watch", args, "Mem Watch Remove");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("MEM_WATCH_WRITES", args, "Mem Watch Remove");
 		}
 
 		private async void PromptOracleMemBlame(Window wnd)
@@ -1336,7 +1315,7 @@ namespace Mesen.ViewModels
 				args["addr"] = trimmed;
 			}
 
-			AgentLauncher.RunGatewayActionWithArgsAndOutput("mem_blame", args, "Mem Blame");
+			OracleLocalSocketClient.RunSocketCommandWithOutput("MEM_BLAME", args, "Mem Blame");
 		}
 
 		private void OpenOracleControlCenter(Window wnd, OracleControlCenterTab? tab = null)
@@ -1349,11 +1328,6 @@ namespace Mesen.ViewModels
 
 		private void InitOracleMenu(Window wnd)
 		{
-			_oracleGatewayStatusAction = new MainMenuAction() {
-				ActionType = ActionType.Custom,
-				DynamicText = FormatOracleGatewayStatus,
-				IsEnabled = () => false
-			};
 			_oracleMesenStatusAction = new MainMenuAction() {
 				ActionType = ActionType.Custom,
 				DynamicText = FormatOracleMesenStatus,
@@ -1383,7 +1357,6 @@ namespace Mesen.ViewModels
 					ActionType = ActionType.Custom,
 					CustomText = "Status",
 					SubActions = new List<object>() {
-						_oracleGatewayStatusAction,
 						_oracleMesenStatusAction,
 						_oracleSocketStatusAction,
 						_oracleYazeStatusAction,
@@ -1419,8 +1392,8 @@ namespace Mesen.ViewModels
 					ActionType = ActionType.Custom,
 					CustomText = "Diagnostics",
 					SubActions = new List<object>() {
-						CreateOracleActionWithOutput("Run ZSCustomOverworld Status", "check_zsow_status"),
-						CreateOracleActionWithOutput("Run Day/Night Status", "check_day_night"),
+						CreateOracleCommand("Run ZSCustomOverworld Status", () => OracleDebugActions.ShowOutputWindow("ZSCustomOverworld Status", OracleDebugActions.DescribeZsowStatus), () => IsGameRunning),
+						CreateOracleCommand("Run Day/Night Status", () => OracleDebugActions.ShowOutputWindow("Day/Night Status", OracleDebugActions.DescribeDayNightStatus), () => IsGameRunning),
 						CreateOracleCommand("Open Diagnostics Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Diagnostics)),
 						CreateOracleCommand("Open Diagnostics Window...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleDiagnosticsWindow())),
 					}
@@ -1441,8 +1414,8 @@ namespace Mesen.ViewModels
 						CreateOracleCommand("Mem Watch Remove...", () => PromptOracleMemWatchRemove(wnd), () => IsGameRunning),
 						CreateOracleCommand(
 							"Mem Watch List",
-							() => AgentLauncher.RunGatewayActionWithArgsAndOutput(
-								"mem_watch",
+							() => OracleLocalSocketClient.RunSocketCommandWithOutput(
+								"MEM_WATCH_WRITES",
 								new Dictionary<string, string> { ["action"] = "list" },
 								"Mem Watch List"
 							),
@@ -1450,8 +1423,8 @@ namespace Mesen.ViewModels
 						),
 						CreateOracleCommand(
 							"Mem Watch Clear",
-							() => AgentLauncher.RunGatewayActionWithArgsAndOutput(
-								"mem_watch",
+							() => OracleLocalSocketClient.RunSocketCommandWithOutput(
+								"MEM_WATCH_WRITES",
 								new Dictionary<string, string> { ["action"] = "clear" },
 								"Mem Watch Clear"
 							),
@@ -1462,8 +1435,8 @@ namespace Mesen.ViewModels
 					}
 				},
 				new ContextMenuSeparator(),
-				CreateOracleActionWithOutput("Capture State + Screenshot", "capture_state", () => IsGameRunning),
-				CreateOracleCommand("Health Check (Output)", () => AgentLauncher.RunGatewayActionWithOutput("health", "Oracle Health Check")),
+				CreateOracleCommand("Capture State + Screenshot...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
+				CreateOracleCommand("Socket Health Check (Output)", () => OracleLocalSocketClient.RunSocketCommandWithOutput("HEALTH", null, "Oracle Socket Health")),
 			};
 		}
 
@@ -1484,33 +1457,28 @@ namespace Mesen.ViewModels
 
 		private void RefreshOracleStatusMenu()
 		{
-			_oracleGatewayStatusAction?.Update();
 			_oracleMesenStatusAction?.Update();
 			_oracleSocketStatusAction?.Update();
 			_oracleYazeStatusAction?.Update();
 			_oracleStatusUpdatedAction?.Update();
 		}
 
-		private string FormatOracleGatewayStatus()
-		{
-			return _oracleStatus.GatewayOnline ? "Gateway: online" : "Gateway: offline";
-		}
-
 		private string FormatOracleMesenStatus()
 		{
-			if(_oracleStatus.Mesen2Connected.HasValue) {
-				return _oracleStatus.Mesen2Connected.Value ? "Mesen2: connected" : "Mesen2: disconnected";
+			if(_oracleStatus.MesenRunning) {
+				string romSuffix = string.IsNullOrWhiteSpace(_oracleStatus.RomName) ? "" : $" ({_oracleStatus.RomName})";
+				return _oracleStatus.MesenPaused ? $"Mesen2: paused{romSuffix}" : $"Mesen2: running{romSuffix}";
 			}
-			return "Mesen2: unknown";
+			return IsGameRunning ? $"Mesen2: running ({RomInfo.GetRomName()})" : "Mesen2: idle";
 		}
 
 		private string FormatOracleSocketStatus()
 		{
 			if(_oracleStatus.SocketFound) {
 				if(!string.IsNullOrWhiteSpace(_oracleStatus.SocketPath)) {
-					return $"Socket: found ({_oracleStatus.SocketPath})";
+					return $"Socket: active ({_oracleStatus.SocketPath})";
 				}
-				return "Socket: found";
+				return "Socket: active";
 			}
 			return "Socket: missing";
 		}

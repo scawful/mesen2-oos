@@ -1,109 +1,13 @@
-using Avalonia.Controls;
 using Avalonia.Threading;
 using Mesen.Windows;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
 
 namespace Mesen.Utilities
 {
 	public static class AgentLauncher
 	{
-		private const string GatewayScriptName = "agent_gateway.py";
-		private static readonly TimeSpan GatewayOutputTimeout = TimeSpan.FromSeconds(10);
-
-		public static void RunGatewayAction(string action)
-		{
-			RunGatewayCommand(BuildGatewayActionArgs(action, null));
-		}
-
-		public static void RunGatewayActionWithOutput(string action, string title)
-		{
-			RunGatewayCommandWithOutput(BuildGatewayActionArgs(action, null), title);
-		}
-
-		/// <summary>Run a gateway action and return stdout/stderr as a single string (for use in diagnostics window). Returns null on failure.</summary>
-		public static async Task<string?> RunGatewayActionWithOutputAsync(string action)
-		{
-			return await RunGatewayActionWithOutputAsync(action, null).ConfigureAwait(false);
-		}
-
-		/// <summary>Run a gateway action with optional args and return stdout/stderr as a single string. Returns null on failure.</summary>
-		public static async Task<string?> RunGatewayActionWithOutputAsync(string action, IReadOnlyDictionary<string, string>? args)
-		{
-			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
-				ShowError(error ?? "Agent Gateway not found.");
-				return null;
-			}
-
-			string pythonExe = GetPythonExecutable();
-			string[] commandArgs = BuildGatewayActionArgs(action, args);
-			string arguments = BuildArguments(gatewayPath, commandArgs);
-
-			ProcessStartInfo psi = new ProcessStartInfo() {
-				FileName = pythonExe,
-				Arguments = arguments,
-				UseShellExecute = false,
-				CreateNoWindow = true,
-				RedirectStandardOutput = true,
-				RedirectStandardError = true,
-				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
-			};
-
-			try {
-				using Process? proc = Process.Start(psi);
-				if(proc == null) {
-					ShowError("Failed to start Agent Gateway.");
-					return null;
-				}
-
-				Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
-				Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-				Task waitTask = proc.WaitForExitAsync();
-				Task finished = await Task.WhenAny(waitTask, Task.Delay(5000)).ConfigureAwait(false);
-				if(finished != waitTask && !proc.HasExited) {
-					try { proc.Kill(); } catch { }
-					await waitTask.ConfigureAwait(false);
-				}
-
-				string stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-				string stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-				return BuildOutputMessage(stdout, stderr);
-			} catch(Exception ex) {
-				ShowError($"Failed to run Agent Gateway: {ex.Message}");
-				return null;
-			}
-		}
-
-		public static void RunGatewayActionWithArgs(string action, IReadOnlyDictionary<string, string> args)
-		{
-			RunGatewayCommand(BuildGatewayActionArgs(action, args));
-		}
-
-		public static void RunGatewayActionWithArgsAndOutput(string action, IReadOnlyDictionary<string, string> args, string title)
-		{
-			RunGatewayCommandWithOutput(BuildGatewayActionArgs(action, args), title);
-		}
-
-		public static void StartGateway()
-		{
-			RunGatewayCommand(new[] { "serve", "--daemon" });
-		}
-
-		public static void StopGateway()
-		{
-			RunGatewayCommand(new[] { "stop" });
-		}
-
-		public static void GatewayStatus()
-		{
-			RunGatewayCommandWithOutput(new[] { "status" }, "Agent Gateway Status");
-		}
-
 		public static void OpenMesen2Root()
 		{
 			if(!TryGetMesen2Root(out string root, out string? error)) {
@@ -123,8 +27,7 @@ namespace Mesen.Utilities
 
 			OpenPath(root);
 		}
-		
-		// Legacy alias for compatibility
+
 		public static void OpenOracleRoot() => OpenProjectRoot();
 
 		public static void OpenProjectConfig(string subPath)
@@ -138,7 +41,30 @@ namespace Mesen.Utilities
 
 		public static void OpenOracleRoms() => OpenProjectConfig("Roms");
 		public static void OpenOracleDocs() => OpenProjectConfig("Docs");
-		public static void OpenOracleSavestateLibrary() => OpenProjectConfig(Path.Combine("Roms", "savestates"));
+		public static void OpenOracleTests() => OpenProjectConfig("Tests");
+		public static void OpenOracleDebugData() => OpenProjectConfig(Path.Combine("Data", "debug"));
+
+		public static void OpenOracleSavestateLibrary()
+		{
+			string libraryRoot = OracleStateLibrary.GetLibraryRootPath();
+			if(Directory.Exists(libraryRoot)) {
+				OpenPath(libraryRoot);
+				return;
+			}
+
+			string? parent = Path.GetDirectoryName(libraryRoot);
+			if(!string.IsNullOrWhiteSpace(parent) && Directory.Exists(parent)) {
+				OpenPath(parent);
+				return;
+			}
+
+			OpenOracleRoms();
+		}
+
+		public static void OpenAfsScratchpad()
+		{
+			OpenPath("~/.context/projects/oracle-of-secrets/scratchpad");
+		}
 
 		public static void OpenMesen2Doc(string relativePath)
 		{
@@ -175,153 +101,8 @@ namespace Mesen.Utilities
 			}
 		}
 
-		private static void RunGatewayCommand(string[] args)
-		{
-			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
-				ShowError(error ?? "Agent Gateway not found.");
-				return;
-			}
-
-			string pythonExe = GetPythonExecutable();
-			string arguments = BuildArguments(gatewayPath, args);
-
-			ProcessStartInfo psi = new ProcessStartInfo() {
-				FileName = pythonExe,
-				Arguments = arguments,
-				UseShellExecute = false,
-				CreateNoWindow = true,
-				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
-			};
-
-			try {
-				Process.Start(psi);
-			} catch(Exception ex) {
-				ShowError($"Failed to run Agent Gateway: {ex.Message}");
-			}
-		}
-
-		private static void RunGatewayCommandWithOutput(string[] args, string title)
-		{
-			if(!TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)) {
-				ShowError(error ?? "Agent Gateway not found.");
-				return;
-			}
-
-			string pythonExe = GetPythonExecutable();
-			string arguments = BuildArguments(gatewayPath, args);
-
-			ProcessStartInfo psi = new ProcessStartInfo() {
-				FileName = pythonExe,
-				Arguments = arguments,
-				UseShellExecute = false,
-				CreateNoWindow = true,
-				RedirectStandardOutput = true,
-				RedirectStandardError = true,
-				WorkingDirectory = projectRoot ?? Path.GetDirectoryName(gatewayPath) ?? string.Empty
-			};
-
-			Task.Run(async () => {
-				try {
-					using Process? proc = Process.Start(psi);
-					if(proc == null) {
-						ShowError("Failed to start Agent Gateway.");
-						return;
-					}
-
-					Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
-					Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-
-					Task waitTask = proc.WaitForExitAsync();
-					Task finished = await Task.WhenAny(waitTask, Task.Delay(GatewayOutputTimeout)).ConfigureAwait(false);
-					if(finished != waitTask && !proc.HasExited) {
-						try {
-							proc.Kill();
-						} catch {
-							// Ignore kill failures
-						}
-						await waitTask.ConfigureAwait(false);
-					}
-
-					string stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-					string stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-					if(finished != waitTask && string.IsNullOrWhiteSpace(stderr)) {
-						stderr = $"Command timed out after {GatewayOutputTimeout.TotalSeconds:0} seconds.";
-					}
-					string message = BuildOutputMessage(stdout, stderr);
-
-					Dispatcher.UIThread.Post(() => {
-						Window? parent = ApplicationHelper.GetActiveOrMainWindow();
-						OracleAgentOutputWindow wnd = ApplicationHelper.GetOrCreateUniqueWindow(parent as Control, () => new OracleAgentOutputWindow());
-						wnd.Title = title;
-						wnd.Output = message;
-					});
-				} catch(Exception ex) {
-					ShowError($"Failed to run Agent Gateway: {ex.Message}");
-				}
-			});
-		}
-
-		private static string GetPythonExecutable()
-		{
-			string? envPython = Environment.GetEnvironmentVariable("MESEN2_PYTHON") 
-				?? Environment.GetEnvironmentVariable("OOS_PYTHON");
-				
-			if(!string.IsNullOrWhiteSpace(envPython)) {
-				return ExpandHome(envPython);
-			}
-
-			return OperatingSystem.IsWindows() ? "python" : "python3";
-		}
-
-		private static bool TryGetGatewayPath(out string gatewayPath, out string? projectRoot, out string? error)
-		{
-			gatewayPath = string.Empty;
-			projectRoot = null;
-			error = null;
-
-			// 1. Explicit override
-			string? envGateway = Environment.GetEnvironmentVariable("MESEN2_AGENT_GATEWAY_PATH")
-				?? Environment.GetEnvironmentVariable("OOS_AGENT_GATEWAY_PATH");
-
-			if(!string.IsNullOrWhiteSpace(envGateway)) {
-				string expanded = ExpandHome(envGateway);
-				if(File.Exists(expanded)) {
-					gatewayPath = expanded;
-					projectRoot = Path.GetDirectoryName(Path.GetDirectoryName(expanded));
-					return true;
-				}
-			}
-
-			// 2. Discover from Project Root
-			string? root = ResolveProjectRoot();
-			if(root == null) {
-				error = "Project root not found. Set MESEN2_PROJECT_ROOT.";
-				return false;
-			}
-
-			// Check common script locations
-			string[] candidates = {
-				Path.Combine(root, "scripts", GatewayScriptName),
-				Path.Combine(root, GatewayScriptName),
-				// Fallback for Oracle (legacy)
-				Path.Combine(root, "scripts", "oracle_agent_gateway.py") 
-			};
-
-			foreach(var candidate in candidates) {
-				if(File.Exists(candidate)) {
-					gatewayPath = candidate;
-					projectRoot = root;
-					return true;
-				}
-			}
-			
-			error = $"Gateway script not found in project root: {root}";
-			return false;
-		}
-
 		public static string? ResolveProjectRoot()
 		{
-			// 1. Env Var
 			string? envRoot = Environment.GetEnvironmentVariable("MESEN2_PROJECT_ROOT")
 				?? Environment.GetEnvironmentVariable("ORACLE_OF_SECRETS_ROOT")
 				?? Environment.GetEnvironmentVariable("OOS_ROOT")
@@ -334,7 +115,6 @@ namespace Mesen.Utilities
 				}
 			}
 
-			// 2. Infer from Mesen2 root (common sibling-repo layout)
 			if(TryGetMesen2Root(out string mesenRoot, out _)) {
 				string? hobbyRoot = Directory.GetParent(mesenRoot)?.FullName;
 				if(!string.IsNullOrWhiteSpace(hobbyRoot)) {
@@ -345,7 +125,6 @@ namespace Mesen.Utilities
 				}
 			}
 
-			// 3. Oracle Default Fallback
 			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 			string defaultRoot = Path.Combine(home, "src", "hobby", "oracle-of-secrets");
 			return Directory.Exists(defaultRoot) ? defaultRoot : null;
@@ -354,13 +133,13 @@ namespace Mesen.Utilities
 		private static bool TryGetProjectRoot(out string root, out string? error)
 		{
 			string? resolved = ResolveProjectRoot();
-			if (resolved != null) {
+			if(resolved != null) {
 				root = resolved;
 				error = null;
 				return true;
 			}
 			root = string.Empty;
-			error = "Project root not found. Set MESEN2_PROJECT_ROOT.";
+			error = "Project root not found. Set ORACLE_OF_SECRETS_ROOT or MESEN2_PROJECT_ROOT.";
 			return false;
 		}
 
@@ -391,74 +170,20 @@ namespace Mesen.Utilities
 			return false;
 		}
 
-
 		private static string ExpandHome(string path)
 		{
-			if(path.StartsWith("~")) {
+			if(path.StartsWith("~", StringComparison.Ordinal)) {
 				string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-				return Path.Combine(home, path.TrimStart('~').TrimStart(Path.DirectorySeparatorChar));
+				return Path.Combine(home, path.TrimStart('~').TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 			}
 			return path;
-		}
-
-		private static string BuildArguments(string gatewayPath, string[] args)
-		{
-			string Quote(string value)
-			{
-				if(string.IsNullOrEmpty(value)) {
-					return "\"\"";
-				}
-				bool needsQuotes = value.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"' }) >= 0;
-				if(!needsQuotes) {
-					return value;
-				}
-				string escaped = value.Replace("\"", "\\\"");
-				return $"\"{escaped}\"";
-			}
-
-			string arguments = Quote(gatewayPath);
-			foreach(string arg in args) {
-				arguments += " " + Quote(arg);
-			}
-
-			return arguments;
-		}
-
-		private static string[] BuildGatewayActionArgs(string action, IReadOnlyDictionary<string, string>? args)
-		{
-			if(args == null || args.Count == 0) {
-				return new[] { "action", action };
-			}
-
-			string payload = JsonSerializer.Serialize(args);
-			return new[] { "action", action, "--args-json", payload };
 		}
 
 		private static void ShowError(string message)
 		{
 			Dispatcher.UIThread.Post(() => {
-				MessageBox.Show(ApplicationHelper.GetActiveOrMainWindow(), message, "Agent Launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+				MessageBox.Show(ApplicationHelper.GetActiveOrMainWindow(), message, "Oracle Launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
 			});
-		}
-
-		private static string BuildOutputMessage(string stdout, string stderr)
-		{
-			StringBuilder sb = new StringBuilder();
-			if(!string.IsNullOrWhiteSpace(stdout)) {
-				sb.AppendLine("STDOUT:");
-				sb.AppendLine(stdout.TrimEnd());
-			}
-			if(!string.IsNullOrWhiteSpace(stderr)) {
-				if(sb.Length > 0) {
-					sb.AppendLine();
-				}
-				sb.AppendLine("STDERR:");
-				sb.AppendLine(stderr.TrimEnd());
-			}
-			if(sb.Length == 0) {
-				sb.AppendLine("No output returned.");
-			}
-			return sb.ToString().TrimEnd();
 		}
 	}
 }

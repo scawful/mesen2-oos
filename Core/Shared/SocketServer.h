@@ -240,7 +240,7 @@ private:
 	// P register change tracking (static for use in static handlers)
 	static std::deque<PRegisterChange> _pRegisterLog;
 	static uint32_t _pRegisterLogMaxSize;
-	static bool _pRegisterWatchEnabled;
+	static atomic<bool> _pRegisterWatchEnabled;
 	static uint8_t _lastPRegister;
 	static SimpleLock _pRegisterLock;
 
@@ -248,6 +248,7 @@ private:
 	static vector<MemoryWatchRegion> _memoryWatches;
 	static unordered_map<uint32_t, std::deque<MemoryWriteRecord>> _memoryWriteLog;
 	static uint32_t _nextMemoryWatchId;
+	static atomic<bool> _hasMemoryWatches;
 	static SimpleLock _memoryWatchLock;
 
 	// Symbol table (static for use in static handlers)
@@ -260,6 +261,7 @@ private:
 	static std::deque<LogpointHit> _logpointHits;
 	static uint32_t _nextLogpointId;
 	static uint32_t _logpointHitMaxSize;
+	static atomic<bool> _hasLogpoints;
 	static SimpleLock _logpointLock;
 
 	// Event subscription (static for use in static handlers)
@@ -465,9 +467,9 @@ public:
 	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer, uint8_t opcode = 0, Emulator* emu = nullptr);
 	static void CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu);
 	static void BroadcastEvent(string eventType, string data);
-	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled; }
+	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled.load(std::memory_order_relaxed); }
 	static bool HasMemoryWatch(uint32_t addr);
-	static bool HasLogpoints() { return !_logpoints.empty(); }
+	static bool HasLogpoints() { return _hasLogpoints.load(std::memory_order_relaxed); }
 
 	// ROM offer accessors - called from the UI banner through the interop layer
 	static string GetRomOfferJson();

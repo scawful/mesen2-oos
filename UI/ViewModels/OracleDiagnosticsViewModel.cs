@@ -1,7 +1,6 @@
 using System;
 using System.Threading.Tasks;
 using Mesen.Utilities;
-using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
 namespace Mesen.ViewModels
@@ -22,10 +21,8 @@ namespace Mesen.ViewModels
 			if(IsRunning) return;
 			IsRunning = true;
 			try {
-				string? result = await AgentLauncher.RunGatewayActionWithOutputAsync("check_zsow_status");
-				if(result != null) {
-					AppendOutput("ZSCustomOverworld Status:" + Environment.NewLine + result);
-				}
+				string result = await Task.Run(OracleDebugActions.DescribeZsowStatus);
+				AppendOutput("ZSCustomOverworld Status:" + Environment.NewLine + result);
 			} finally {
 				IsRunning = false;
 			}
@@ -36,10 +33,8 @@ namespace Mesen.ViewModels
 			if(IsRunning) return;
 			IsRunning = true;
 			try {
-				string? result = await AgentLauncher.RunGatewayActionWithOutputAsync("check_day_night");
-				if(result != null) {
-					AppendOutput("Day/Night Status:" + Environment.NewLine + result);
-				}
+				string result = await Task.Run(OracleDebugActions.DescribeDayNightStatus);
+				AppendOutput("Day/Night Status:" + Environment.NewLine + result);
 			} finally {
 				IsRunning = false;
 			}

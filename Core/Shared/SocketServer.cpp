@@ -10,6 +10,7 @@
 #include "CheatManager.h"
 #include "RomInfo.h"
 #include "Core/Debugger/Debugger.h"
+#include "Core/Debugger/DebugBreakHelper.h"
 #include "Core/Debugger/ExpressionEvaluator.h"
 #include "Core/Debugger/ITraceLogger.h"
 #include "Core/Debugger/ScriptManager.h"
@@ -76,7 +77,7 @@ SimpleLock SocketServer::_breakpointLock;
 // Static member definitions for P register tracking
 std::deque<PRegisterChange> SocketServer::_pRegisterLog;
 uint32_t SocketServer::_pRegisterLogMaxSize = 1000;
-bool SocketServer::_pRegisterWatchEnabled = false;
+atomic<bool> SocketServer::_pRegisterWatchEnabled(false);
 uint8_t SocketServer::_lastPRegister = 0;
 SimpleLock SocketServer::_pRegisterLock;
 
@@ -84,6 +85,7 @@ SimpleLock SocketServer::_pRegisterLock;
 vector<MemoryWatchRegion> SocketServer::_memoryWatches;
 unordered_map<uint32_t, std::deque<MemoryWriteRecord>> SocketServer::_memoryWriteLog;
 uint32_t SocketServer::_nextMemoryWatchId = 1;
+atomic<bool> SocketServer::_hasMemoryWatches(false);
 SimpleLock SocketServer::_memoryWatchLock;
 
 // Static member definitions for symbol table
@@ -96,6 +98,7 @@ vector<SocketLogpoint> SocketServer::_logpoints;
 std::deque<LogpointHit> SocketServer::_logpointHits;
 uint32_t SocketServer::_nextLogpointId = 1;
 uint32_t SocketServer::_logpointHitMaxSize = 1000;
+atomic<bool> SocketServer::_hasLogpoints(false);
 SimpleLock SocketServer::_logpointLock;
 
 // Static member definitions for event subscription
@@ -386,9 +389,6 @@ void SocketServer::RegisterHandlers() {
 	// Performance handlers
 	_handlers["READBLOCK_BINARY"] = HandleReadBlockBinary;
 
-	// API discovery handlers
-	_handlers["HELP"] = HandleHelp;
-
 	// ALTTP game state handlers
 	_handlers["GAMESTATE"] = HandleGameState;
 	_handlers["SPRITES"] = HandleSprites;
@@ -431,7 +431,7 @@ void SocketServer::RegisterHandler(const string& command, CommandHandler handler
 
 // Debugger hook: Log P register changes
 void SocketServer::LogPRegisterChange(uint32_t pc, uint8_t oldP, uint8_t newP, uint8_t opcode, uint64_t cycleCount) {
-	if (!_pRegisterWatchEnabled) return;
+	if (!_pRegisterWatchEnabled.load(std::memory_order_relaxed)) return;
 	if (oldP == newP) return;  // No change
 
 	auto lock = _pRegisterLock.AcquireSafe();
@@ -453,6 +453,9 @@ void SocketServer::LogPRegisterChange(uint32_t pc, uint8_t oldP, uint8_t newP, u
 
 // Debugger hook: Check if any memory watch covers an address
 bool SocketServer::HasMemoryWatch(uint32_t addr) {
+	if (!_hasMemoryWatches.load(std::memory_order_relaxed)) {
+		return false;
+	}
 	auto lock = _memoryWatchLock.AcquireSafe();
 	for (const auto& watch : _memoryWatches) {
 		if (addr >= watch.startAddr && addr <= watch.endAddr) {
@@ -1063,13 +1066,99 @@ SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cm
 	return resp;
 }
 
+static bool ParseWaitParams(const SocketCommand& cmd, uint32_t defaultTimeoutMs, bool& wait, uint32_t& timeoutMs, SocketResponse& resp) {
+	wait = false;
+	timeoutMs = defaultTimeoutMs;
+	auto waitIt = cmd.params.find("wait");
+	if(waitIt != cmd.params.end()) {
+		wait = ParseBoolValue(waitIt->second);
+	}
+	auto timeoutIt = cmd.params.find("timeout_ms");
+	if(timeoutIt != cmd.params.end()) {
+		try {
+			size_t idx = 0;
+			unsigned long parsed = std::stoul(timeoutIt->second, &idx, 10);
+			if(idx != timeoutIt->second.size() || parsed == 0 || parsed > 60000) {
+				resp.success = false;
+				resp.error = "timeout_ms must be between 1 and 60000";
+				resp.errorCode = SocketErrorCode::InvalidParameter;
+				return false;
+			}
+			timeoutMs = static_cast<uint32_t>(parsed);
+		} catch(...) {
+			resp.success = false;
+			resp.error = "Invalid timeout_ms parameter";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool WaitUntilPaused(Emulator* emu, uint32_t timeoutMs, SocketResponse& resp) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+	while(!emu->IsPaused()) {
+		if(!emu->IsRunning()) {
+			resp.success = false;
+			resp.error = "Emulation stopped while waiting for pause";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return false;
+		}
+		if(std::chrono::steady_clock::now() >= deadline) {
+			resp.success = false;
+			resp.error = "Emulator did not settle in paused state within " + std::to_string(timeoutMs) + "ms";
+			resp.errorCode = SocketErrorCode::Timeout;
+			resp.retryable = true;
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	return true;
+}
+
+// Shared reply for RESUME/STEP/FRAME. These replace the debugger's step request,
+// so they only run while the emulation thread is held stopped and already paused.
+static bool ApplyDebugControlResult(DebugControlResult result, SocketResponse& resp) {
+	switch(result) {
+		case DebugControlResult::Ok:
+			return true;
+
+		case DebugControlResult::NotPaused:
+			resp.success = false;
+			resp.error = "Emulator is not paused; send PAUSE first";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return false;
+
+		case DebugControlResult::Timeout:
+			resp.success = false;
+			resp.error = "Emulation thread did not stop within " + std::to_string(DebugBreakHelper::DefaultTimeoutMs) + "ms; request cancelled";
+			resp.errorCode = SocketErrorCode::Timeout;
+			resp.retryable = true;
+			return false;
+	}
+	return false;
+}
+
 SocketResponse SocketServer::HandlePause(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
+	bool wait = false;
+	uint32_t timeoutMs = DebugBreakHelper::DefaultTimeoutMs;
+	if(!ParseWaitParams(cmd, DebugBreakHelper::DefaultTimeoutMs, wait, timeoutMs, resp)) {
+		return resp;
+	}
+	if(wait && emu->IsPaused()) {
+		resp.success = true;
+		resp.data = "\"OK\"";
+		return resp;
+	}
 	if(!emu->TryPause()) {
 		resp.success = false;
 		resp.error = "Emulation thread did not respond within 500ms; pause request cancelled";
 		resp.errorCode = SocketErrorCode::Timeout;
 		resp.retryable = true;
+		return resp;
+	}
+	if(wait && !WaitUntilPaused(emu, timeoutMs, resp)) {
 		return resp;
 	}
 	resp.success = true;
@@ -1079,7 +1168,25 @@ SocketResponse SocketServer::HandlePause(Emulator* emu, const SocketCommand& cmd
 
 SocketResponse SocketServer::HandleResume(Emulator* emu, const SocketCommand& cmd) {
 	SocketResponse resp;
-	emu->Resume();
+	auto dbg = emu->GetDebugger();
+	if(Debugger* debugger = dbg.GetDebugger()) {
+		DebugControlResult result = debugger->TryRunIfPaused(DebugBreakHelper::DefaultTimeoutMs);
+		if(result == DebugControlResult::NotPaused) {
+			// Resuming a running emulator is a no-op, not a failure.
+			resp.success = true;
+			resp.data = "\"NOT_PAUSED\"";
+			return resp;
+		}
+		if(!ApplyDebugControlResult(result, resp)) {
+			return resp;
+		}
+	} else if(!emu->IsPaused()) {
+		resp.success = true;
+		resp.data = "\"NOT_PAUSED\"";
+		return resp;
+	} else {
+		emu->Resume();
+	}
 	resp.success = true;
 	resp.data = "\"OK\"";
 	return resp;
@@ -3165,7 +3272,19 @@ SocketResponse SocketServer::HandleStep(Emulator* emu, const SocketCommand& cmd)
 		stepType = StepType::Step;
 	}
 
-	debugger->Step(cpuType, stepCount, stepType);
+	bool wait = false;
+	uint32_t timeoutMs = DebugBreakHelper::DefaultTimeoutMs;
+	if(!ParseWaitParams(cmd, DebugBreakHelper::DefaultTimeoutMs, wait, timeoutMs, resp)) {
+		return resp;
+	}
+
+	if(!ApplyDebugControlResult(debugger->TryStepIfPaused(cpuType, stepCount, stepType, BreakSource::Unspecified, DebugBreakHelper::DefaultTimeoutMs), resp)) {
+		return resp;
+	}
+
+	if(wait && !WaitUntilPaused(emu, timeoutMs, resp)) {
+		return resp;
+	}
 
 	resp.success = true;
 	resp.data = "\"OK\"";
@@ -3195,22 +3314,36 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 		return resp;
 	}
 
+	uint32_t defaultWaitMs = std::min<uint32_t>(60000, static_cast<uint32_t>(frameCount) * 50 + DebugBreakHelper::DefaultTimeoutMs);
+	bool wait = false;
+	uint32_t timeoutMs = defaultWaitMs;
+	if(!ParseWaitParams(cmd, defaultWaitMs, wait, timeoutMs, resp)) {
+		return resp;
+	}
+
 	auto dbg = emu->GetDebugger(true);
 	Debugger* debugger = dbg.GetDebugger();
 	if (debugger) {
 		CpuType cpuType = emu->GetCpuTypes()[0];
 		// Step by frames
-		debugger->Step(cpuType, frameCount, StepType::PpuFrame);
+		if(!ApplyDebugControlResult(debugger->TryStepIfPaused(cpuType, frameCount, StepType::PpuFrame, BreakSource::Unspecified, DebugBreakHelper::DefaultTimeoutMs), resp)) {
+			return resp;
+		}
 	} else {
 		if(frameCount != 1) {
 			resp.success = false;
 			resp.error = "Debugger required for multi-frame stepping";
 			return resp;
 		}
-		emu->PauseOnNextFrame();
-		if(emu->IsPaused()) {
-			emu->Resume();
+		if(!ApplyDebugControlResult(emu->IsPaused() ? DebugControlResult::Ok : DebugControlResult::NotPaused, resp)) {
+			return resp;
 		}
+		// Clears the pause flag and pauses again at the end of the next frame.
+		emu->PauseOnNextFrame();
+	}
+
+	if(wait && !WaitUntilPaused(emu, timeoutMs, resp)) {
+		return resp;
 	}
 
 	resp.success = true;
@@ -4078,8 +4211,40 @@ static bool ParseJsonObject(const string& json, unordered_map<string, string>& o
 			if(!ParseJsonString(json, index, value, error)) {
 				return false;
 			}
-		} else if(c == '{' || c == '[') {
-			error = "Nested JSON values are not supported";
+		} else if(c == '[') {
+			size_t start = index;
+			int bracketDepth = 0;
+			bool inString = false;
+			while(index < json.size()) {
+				char ch = json[index++];
+				if(inString) {
+					if(ch == '\\') {
+						if(index >= json.size()) {
+							error = "Unexpected end of escape sequence in array";
+							return false;
+						}
+						index++;
+					} else if(ch == '"') {
+						inString = false;
+					}
+				} else if(ch == '"') {
+					inString = true;
+				} else if(ch == '[') {
+					bracketDepth++;
+				} else if(ch == ']') {
+					bracketDepth--;
+					if(bracketDepth == 0) {
+						break;
+					}
+				}
+			}
+			if(bracketDepth != 0 || inString) {
+				error = "Unterminated JSON array value";
+				return false;
+			}
+			value = json.substr(start, index - start);
+		} else if(c == '{') {
+			error = "Nested JSON object values are not supported";
 			return false;
 		} else {
 			size_t start = index;
@@ -5036,14 +5201,26 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 			break;
 		}
 
-		// Find matching closing brace
+		// Find matching closing brace (ignoring braces inside quoted strings)
 		int braceCount = 1;
+		bool inSubString = false;
 		size_t start = pos;
 		pos++;
 		while (pos < commandsJson.size() && braceCount > 0) {
-			if (commandsJson[pos] == '{') braceCount++;
-			else if (commandsJson[pos] == '}') braceCount--;
-			pos++;
+			char ch = commandsJson[pos++];
+			if (inSubString) {
+				if (ch == '\\' && pos < commandsJson.size()) {
+					pos++;
+				} else if (ch == '"') {
+					inSubString = false;
+				}
+			} else if (ch == '"') {
+				inSubString = true;
+			} else if (ch == '{') {
+				braceCount++;
+			} else if (ch == '}') {
+				braceCount--;
+			}
 		}
 
 		if (braceCount != 0) {
@@ -5077,6 +5254,7 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 
 		subParams.erase(typeIt);
 		subCmd.params = std::move(subParams);
+		subCmd.clientFd = cmd.clientFd;
 		subCommands.push_back(std::move(subCmd));
 	}
 
@@ -5097,18 +5275,26 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		if (i > 0) ss << ",";
 
 		SocketResponse subResp;
-		if (subCmd.type == "PING") subResp = HandlePing(emu, subCmd);
+		string validationError;
+		SocketErrorCode validationCode = SocketErrorCode::None;
+		if (!ValidateCommand(subCmd, validationError, validationCode)) {
+			subResp.success = false;
+			subResp.error = validationError;
+			subResp.errorCode = validationCode;
+		} else if (subCmd.type == "PING") subResp = HandlePing(emu, subCmd);
 		else if (subCmd.type == "STATE") subResp = HandleState(emu, subCmd);
 		else if (subCmd.type == "HEALTH") subResp = HandleHealth(emu, subCmd);
 		else if (subCmd.type == "PAUSE") subResp = HandlePause(emu, subCmd);
 		else if (subCmd.type == "RESUME") subResp = HandleResume(emu, subCmd);
 		else if (subCmd.type == "RESET") subResp = HandleReset(emu, subCmd);
 		else if (subCmd.type == "LOADROM") subResp = HandleLoadRom(emu, subCmd);
+		else if (subCmd.type == "LOG") subResp = HandleEmuLog(emu, subCmd);
 		else if (subCmd.type == "READ") subResp = HandleRead(emu, subCmd);
 		else if (subCmd.type == "READ16") subResp = HandleRead16(emu, subCmd);
 		else if (subCmd.type == "WRITE") subResp = HandleWrite(emu, subCmd);
 		else if (subCmd.type == "WRITE16") subResp = HandleWrite16(emu, subCmd);
 		else if (subCmd.type == "READBLOCK") subResp = HandleReadBlock(emu, subCmd);
+		else if (subCmd.type == "READBLOCK_BINARY") subResp = HandleReadBlockBinary(emu, subCmd);
 		else if (subCmd.type == "WRITEBLOCK") subResp = HandleWriteBlock(emu, subCmd);
 		else if (subCmd.type == "MEMORY_SIZE") subResp = HandleMemorySize(emu, subCmd);
 		else if (subCmd.type == "SAVESTATE") subResp = HandleSaveState(emu, subCmd);
@@ -5116,13 +5302,18 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "LOADSTATE") subResp = HandleLoadState(emu, subCmd);
 		else if (subCmd.type == "SCREENSHOT") subResp = HandleScreenshot(emu, subCmd);
 		else if (subCmd.type == "CPU") subResp = HandleGetCpuState(emu, subCmd);
+		else if (subCmd.type == "INPUT") subResp = HandleSetInput(emu, subCmd);
 		else if (subCmd.type == "EVAL") subResp = HandleEval(emu, subCmd);
 		else if (subCmd.type == "SET_PC") subResp = HandleSetPc(emu, subCmd);
 		else if (subCmd.type == "STATEINSPECT") subResp = HandleStateInspector(emu, subCmd);
 		else if (subCmd.type == "DISASM") subResp = HandleDisasm(emu, subCmd);
 		else if (subCmd.type == "STEP") subResp = HandleStep(emu, subCmd);
 		else if (subCmd.type == "FRAME") subResp = HandleRunFrame(emu, subCmd);
+		else if (subCmd.type == "CALLSTACK") subResp = HandleCallstack(emu, subCmd);
+		else if (subCmd.type == "OSD") subResp = HandleOsd(emu, subCmd);
 		else if (subCmd.type == "ROMINFO") subResp = HandleRomInfo(emu, subCmd);
+		else if (subCmd.type == "CHEAT") subResp = HandleCheat(emu, subCmd);
+		else if (subCmd.type == "SPEED") subResp = HandleSpeed(emu, subCmd);
 		else if (subCmd.type == "BREAKPOINT") subResp = HandleBreakpoint(emu, subCmd);
 		else if (subCmd.type == "LABELS") subResp = HandleLabels(emu, subCmd);
 		else if (subCmd.type == "SEARCH") subResp = HandleSearch(emu, subCmd);
@@ -5130,6 +5321,20 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "DIFF") subResp = HandleDiff(emu, subCmd);
 		else if (subCmd.type == "TRACE") subResp = HandleTrace(emu, subCmd);
 		else if (subCmd.type == "LOGPOINT") subResp = HandleLogpoint(emu, subCmd);
+		else if (subCmd.type == "P_WATCH") subResp = HandlePWatch(emu, subCmd);
+		else if (subCmd.type == "P_LOG") subResp = HandlePLog(emu, subCmd);
+		else if (subCmd.type == "P_ASSERT") subResp = HandlePAssert(emu, subCmd);
+		else if (subCmd.type == "MEM_WATCH_WRITES") subResp = HandleMemWatchWrites(emu, subCmd);
+		else if (subCmd.type == "MEM_BLAME") subResp = HandleMemBlame(emu, subCmd);
+		else if (subCmd.type == "STACK_RETADDR") subResp = HandleStackRetaddr(emu, subCmd);
+		else if (subCmd.type == "SYMBOLS_LOAD") subResp = HandleSymbolsLoad(emu, subCmd);
+		else if (subCmd.type == "SYMBOLS_RELOAD") subResp = HandleSymbolsReload(emu, subCmd);
+		else if (subCmd.type == "SYMBOLS_RESOLVE") subResp = HandleSymbolsResolve(emu, subCmd);
+		else if (subCmd.type == "GAMESTATE") subResp = HandleGameState(emu, subCmd);
+		else if (subCmd.type == "SPRITES") subResp = HandleSprites(emu, subCmd);
+		else if (subCmd.type == "CAMERA") subResp = HandleCamera(emu, subCmd);
+		else if (subCmd.type == "RECORD") subResp = HandleRecord(emu, subCmd);
+		else if (subCmd.type == "MOVIE") subResp = HandleMovie(emu, subCmd);
 		else if (subCmd.type == "SUBSCRIBE") subResp = HandleSubscribe(emu, subCmd);
 		else if (subCmd.type == "DEBUG_LOG") subResp = HandleDebugLog(emu, subCmd);
 		else if (subCmd.type == "DRAW_PATH") subResp = HandleDrawPath(emu, subCmd);
@@ -5137,6 +5342,7 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else {
 			subResp.success = false;
 			subResp.error = "Unknown command or not allowed in BATCH: " + subCmd.type;
+			subResp.errorCode = SocketErrorCode::CommandNotFound;
 		}
 
 		if (!subResp.success) {
@@ -5151,6 +5357,12 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		}
 		if (!subResp.error.empty()) {
 			ss << ",\"error\":\"" << JsonEscape(subResp.error) << "\"";
+		}
+		if (subResp.errorCode != SocketErrorCode::None) {
+			ss << ",\"errorCode\":" << static_cast<int>(subResp.errorCode);
+		}
+		if (subResp.retryable) {
+			ss << ",\"retryable\":true";
 		}
 		ss << "}";
 	}
@@ -5368,6 +5580,7 @@ SocketResponse SocketServer::HandleLogpoint(Emulator* emu, const SocketCommand& 
 		}
 
 		_logpoints.push_back(lp);
+		_hasLogpoints.store(true, std::memory_order_relaxed);
 		resp.success = true;
 		resp.data = "{\"id\":" + std::to_string(lp.id) + "}";
 	} else if (action == "remove") {
@@ -5382,6 +5595,7 @@ SocketResponse SocketServer::HandleLogpoint(Emulator* emu, const SocketCommand& 
 		auto it = std::remove_if(_logpoints.begin(), _logpoints.end(), [id](const SocketLogpoint& lp) { return lp.id == id; });
 		if (it != _logpoints.end()) {
 			_logpoints.erase(it, _logpoints.end());
+			_hasLogpoints.store(!_logpoints.empty(), std::memory_order_relaxed);
 			resp.success = true;
 		} else {
 			resp.success = false;
@@ -5867,6 +6081,7 @@ SocketResponse SocketServer::HandleMemWatchWrites(Emulator* emu, const SocketCom
 
 		_memoryWatches.push_back(watch);
 		_memoryWriteLog[newId] = std::deque<MemoryWriteRecord>();
+		_hasMemoryWatches.store(true, std::memory_order_relaxed);
 
 		stringstream ss;
 		ss << "{\"watch_id\":" << newId;
@@ -5894,6 +6109,7 @@ SocketResponse SocketServer::HandleMemWatchWrites(Emulator* emu, const SocketCom
 		if (it != _memoryWatches.end()) {
 			_memoryWatches.erase(it);
 			_memoryWriteLog.erase(watchId);
+			_hasMemoryWatches.store(!_memoryWatches.empty(), std::memory_order_relaxed);
 			resp.success = true;
 			resp.data = "\"OK\"";
 		} else {
@@ -5930,6 +6146,7 @@ SocketResponse SocketServer::HandleMemWatchWrites(Emulator* emu, const SocketCom
 		auto lock = _memoryWatchLock.AcquireSafe();
 		_memoryWatches.clear();
 		_memoryWriteLog.clear();
+		_hasMemoryWatches.store(false, std::memory_order_relaxed);
 		resp.success = true;
 		resp.data = "\"OK\"";
 	}
@@ -6050,7 +6267,7 @@ SocketResponse SocketServer::HandleStackRetaddr(Emulator* emu, const SocketComma
 		return resp;
 	}
 
-	auto dbg = emu->GetDebugger(false);
+	auto dbg = emu->GetDebugger(true);
 	if (!dbg.GetDebugger()) {
 		resp.success = false;
 		resp.error = "Debugger not available";

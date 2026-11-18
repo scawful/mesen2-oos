@@ -651,8 +651,38 @@ int64_t Debugger::EvaluateExpression(string expression, CpuType cpuType, EvalRes
 	return 0;
 }
 
-void Debugger::Run()
+bool Debugger::IsPausedOrPausing()
 {
+	//Only meaningful while execution is stopped (e.g. while holding a DebugBreakHelper)
+	if(_waitForBreakResume) {
+		return true;
+	}
+
+	//A pause or step that has not reached its break yet (the paused emulation thread
+	//can take 10ms to pick up a new request) will stop on its own: count it as paused
+	for(int i = 0; i <= (int)DebugUtilities::GetLastCpuType(); i++) {
+		if(_debuggers[i].Debugger) {
+			StepRequest* step = _debuggers[i].Debugger->GetStepRequest();
+			if(step->HasRequest || step->Type != StepType::Step) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+DebugControlResult Debugger::ControlRun(uint32_t timeoutMs, bool requirePaused)
+{
+	//The step requests are read by the emulation thread on every instruction/cycle:
+	//they must only be replaced while execution is stopped
+	DebugBreakHelper helper(this, false, timeoutMs);
+	if(!helper.IsAcquired()) {
+		return DebugControlResult::Timeout;
+	}
+	if(requirePaused && !IsPausedOrPausing()) {
+		return DebugControlResult::NotPaused;
+	}
+
 	for(int i = 0; i <= (int)DebugUtilities::GetLastCpuType(); i++) {
 		if(_debuggers[i].Debugger) {
 			_debuggers[i].Debugger->ResetStepBackCache();
@@ -660,6 +690,24 @@ void Debugger::Run()
 		}
 	}
 	_waitForBreakResume = false;
+	return DebugControlResult::Ok;
+}
+
+void Debugger::Run()
+{
+	if(!TryRun(DebugBreakHelper::DefaultTimeoutMs)) {
+		MessageManager::Log("[Resume] Emulation thread did not stop within " + std::to_string(DebugBreakHelper::DefaultTimeoutMs) + "ms; resume request cancelled");
+	}
+}
+
+bool Debugger::TryRun(uint32_t timeoutMs)
+{
+	return ControlRun(timeoutMs, false) == DebugControlResult::Ok;
+}
+
+DebugControlResult Debugger::TryRunIfPaused(uint32_t timeoutMs)
+{
+	return ControlRun(timeoutMs, true);
 }
 
 void Debugger::PauseOnNextFrame()
@@ -682,10 +730,24 @@ void Debugger::Step(CpuType cpuType, int32_t stepCount, StepType type, BreakSour
 
 bool Debugger::TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs)
 {
+	return ControlStep(cpuType, stepCount, type, source, timeoutMs, false) == DebugControlResult::Ok;
+}
+
+DebugControlResult Debugger::TryStepIfPaused(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs)
+{
+	return ControlStep(cpuType, stepCount, type, source, timeoutMs, true);
+}
+
+DebugControlResult Debugger::ControlStep(CpuType cpuType, int32_t stepCount, StepType type, BreakSource source, uint32_t timeoutMs, bool requirePaused)
+{
 	DebugBreakHelper helper(this, false, timeoutMs);
 	if(!helper.IsAcquired()) {
-		return false;
+		return DebugControlResult::Timeout;
 	}
+	if(requirePaused && !IsPausedOrPausing()) {
+		return DebugControlResult::NotPaused;
+	}
+
 	IDebugger* debugger = _debuggers[(int)cpuType].Debugger.get();
 
 	if(debugger) {
@@ -707,7 +769,7 @@ bool Debugger::TryStep(CpuType cpuType, int32_t stepCount, StepType type, BreakS
 	}
 
 	_waitForBreakResume = false;
-	return true;
+	return DebugControlResult::Ok;
 }
 
 bool Debugger::IsPaused()

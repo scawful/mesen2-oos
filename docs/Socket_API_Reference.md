@@ -82,18 +82,25 @@ Detailed health check with PC sample.
 Control emulation.
 ```json
 {"type":"PAUSE"}
+{"type":"PAUSE","wait":"true","timeout_ms":"2000"}
 {"type":"RESUME"}
 {"type":"RESET"}
 ```
+`PAUSE` accepts optional `"wait":"true"` (and `"timeout_ms"`) to block until `STATE.paused` settles (`"OK"` immediately if already paused).
+`RESUME` on an emulator that is not paused changes nothing and returns `"data":"NOT_PAUSED"` with `success:true`.
 
 ### FRAME
-Run exactly one frame.
+Run **count** frames (default 1, max 600), then pause again. Optional `"wait":"true"` (and `"timeout_ms"`) blocks until the stepped frame(s) settle in a paused state.
 ```json
 {"type":"FRAME"}
+{"type":"FRAME","count":"4","wait":"true"}
 ```
 
+`FRAME` and `STEP` require a paused emulator (a `PAUSE`, `STEP` or `FRAME` still in flight counts as paused). On a running emulator they return `errorCode` 15 (`InvalidState`); send `PAUSE` first.
+`RESUME`, `STEP` and `FRAME` wait up to 2 seconds for the emulation thread to stop. After that they change nothing and return `errorCode` 10 (`Timeout`) with `retryable:true`.
+
 ### STEP
-Step CPU execution. **count** (optional, default 1): number of steps. **mode** (optional, default `into`): step type.
+Step CPU execution. **count** (optional, default 1): number of steps. **mode** (optional, default `into`): step type. **wait** (optional, default `false`): wait until paused after the step settles.
 
 | mode | Description |
 |------|-------------|

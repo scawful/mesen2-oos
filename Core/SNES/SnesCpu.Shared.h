@@ -2,10 +2,6 @@ void SnesCpu::PowerOn()
 {
 	_state = {};
 	_state.PC = GetResetVector();
-	_lastExecPc = GetProgramAddress(_state.PC);
-	_invalidPcLogged = false;
-	_invalidSpLogged = false;
-	_invalidRtiLogged = false;
 	_state.SP = 0x1FF;
 	_state.PS = ProcFlags::IrqDisable;
 	_state.EmulationMode = true;
@@ -32,10 +28,6 @@ void SnesCpu::Reset()
 	_state.CycleCount = 0;
 
 	_state.PC = GetResetVector();
-	_lastExecPc = GetProgramAddress(_state.PC);
-	_invalidPcLogged = false;
-	_invalidSpLogged = false;
-	_invalidRtiLogged = false;
 	SetSP(_state.SP);
 
 	_state.NmiFlag = false;
@@ -375,48 +367,6 @@ uint32_t SnesCpu::GetDataAddress(uint16_t addr)
 
 uint8_t SnesCpu::GetOpCode()
 {
-	uint32_t pcFull = ((uint32_t)_state.K << 16) | _state.PC;
-	bool invalidPcRegion = (_state.K == 0x1D && _state.PC < 0x8000);
-	bool invalidSpRegion = _state.SP >= 0x2000;
-	if (_emu) {
-		if (invalidPcRegion && !_invalidPcLogged) {
-			_emu->DebugLog(
-				"[K] Invalid PC prev=" + HexUtilities::ToHex(_lastExecPc) +
-				" now=" + HexUtilities::ToHex(pcFull) +
-				" SP=" + HexUtilities::ToHex(_state.SP) +
-				" A=" + HexUtilities::ToHex(_state.A) +
-				" X=" + HexUtilities::ToHex(_state.X) +
-				" Y=" + HexUtilities::ToHex(_state.Y) +
-				" D=" + HexUtilities::ToHex(_state.D) +
-				" DBR=" + HexUtilities::ToHex(_state.DBR) +
-				" P=" + HexUtilities::ToHex(_state.PS)
-			);
-			_invalidPcLogged = true;
-		} else if (!invalidPcRegion && _invalidPcLogged) {
-			_invalidPcLogged = false;
-		}
-		if (invalidSpRegion && !_invalidSpLogged) {
-			_emu->DebugLog(
-				"[SP] Invalid SP prev=" + HexUtilities::ToHex(_lastExecPc) +
-				" now=" + HexUtilities::ToHex(pcFull) +
-				" SP=" + HexUtilities::ToHex(_state.SP) +
-				" A=" + HexUtilities::ToHex(_state.A) +
-				" X=" + HexUtilities::ToHex(_state.X) +
-				" Y=" + HexUtilities::ToHex(_state.Y) +
-				" D=" + HexUtilities::ToHex(_state.D) +
-				" K=" + HexUtilities::ToHex(_state.K) +
-				" DBR=" + HexUtilities::ToHex(_state.DBR) +
-				" P=" + HexUtilities::ToHex(_state.PS)
-			);
-			_invalidSpLogged = true;
-		} else if (!invalidSpRegion && _invalidSpLogged) {
-			_invalidSpLogged = false;
-		}
-		if (!invalidSpRegion && _invalidRtiLogged) {
-			_invalidRtiLogged = false;
-		}
-	}
-	_lastExecPc = pcFull;
 	uint8_t opCode = ReadCode(_state.PC, MemoryOperationType::ExecOpCode);
 	_state.PC++;
 	return opCode;
@@ -585,26 +535,10 @@ uint32_t SnesCpu::GetDirectAddressIndirectLong(uint16_t offset)
 
 void SnesCpu::SetSP(uint16_t sp, bool allowEmulationMode)
 {
-	uint16_t prevSp = _state.SP;
 	if(allowEmulationMode && _state.EmulationMode) {
 		_state.SP = 0x100 | (sp & 0xFF);
 	} else {
 		_state.SP = sp;
-	}
-	bool crossedToIo = (prevSp < 0x2000 && _state.SP >= 0x2000);
-	if(_emu && crossedToIo) {
-		uint32_t pc = ((uint32_t)_state.K << 16) | _state.PC;
-		_emu->DebugLog(
-			"[SP] SetSP PC=" + HexUtilities::ToHex(pc) +
-			" prev=" + HexUtilities::ToHex(prevSp) +
-			" new=" + HexUtilities::ToHex(_state.SP) +
-			" A=" + HexUtilities::ToHex(_state.A) +
-			" X=" + HexUtilities::ToHex(_state.X) +
-			" Y=" + HexUtilities::ToHex(_state.Y) +
-			" D=" + HexUtilities::ToHex(_state.D) +
-			" DBR=" + HexUtilities::ToHex(_state.DBR) +
-			" P=" + HexUtilities::ToHex(_state.PS)
-		);
 	}
 }
 

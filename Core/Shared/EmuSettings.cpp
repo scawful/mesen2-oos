@@ -554,6 +554,9 @@ bool EmuSettings::GetRandomBool()
 
 bool EmuSettings::IsInputEnabled()
 {
+	if(CheckFlag(EmulationFlags::TextInputFocused)) {
+		return false;
+	}
 	return !CheckFlag(EmulationFlags::InBackground) || _preferences.AllowBackgroundInput;
 }
 

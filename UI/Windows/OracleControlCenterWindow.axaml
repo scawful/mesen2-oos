@@ -9,8 +9,8 @@
 	x:Class="Mesen.Windows.OracleControlCenterWindow"
 	x:DataType="vm:OracleControlCenterViewModel"
 	Title="Oracle Control Center"
-	Width="760" Height="620"
-	MinWidth="640" MinHeight="480"
+	Width="760" Height="580"
+	MinWidth="640" MinHeight="460"
 	WindowStartupLocation="CenterOwner"
 >
 	<Design.DataContext>
@@ -32,15 +32,13 @@
 		<TabControl x:Name="Tabs">
 			<TabItem Header="Status">
 				<StackPanel Spacing="6">
-					<TextBlock Text="Live status from Oracle Agent Gateway and local probes." Foreground="Gray" />
+					<TextBlock Text="Live status from this Mesen2 instance and local probes." Foreground="Gray" />
 					<StackPanel Spacing="4" Margin="0 8 0 0">
-						<TextBlock Text="{Binding GatewayStatus}" FontWeight="Bold" />
-						<TextBlock Text="{Binding MesenStatus}" />
+						<TextBlock Text="{Binding MesenStatus}" FontWeight="Bold" />
 						<TextBlock Text="{Binding SocketStatus}" />
 						<TextBlock Text="{Binding YazeStatus}" />
 						<TextBlock Text="{Binding UpdatedStatus}" />
 					</StackPanel>
-					<TextBlock Text="{Binding GatewayError}" Foreground="IndianRed" IsVisible="{Binding HasGatewayError}" TextWrapping="Wrap" />
 					<StackPanel Orientation="Horizontal" Spacing="8" Margin="0 6 0 0">
 						<Button Content="Refresh Status" Click="OnRefreshStatusClick" />
 						<Button Content="Copy Socket Path" IsEnabled="{Binding HasSocketPath}" Click="OnCopySocketClick" />
@@ -66,7 +64,7 @@
 						<StackPanel Spacing="6" Margin="6">
 							<TextBlock Text="{Binding SaveStateConfigSummary}" FontWeight="Bold" />
 							<TextBlock Text="{Binding SaveStateFolder}" FontSize="11" Foreground="Gray" TextWrapping="Wrap" />
-							<Grid ColumnDefinitions="Auto, Auto, *" RowDefinitions="Auto, Auto, Auto, Auto">
+							<Grid ColumnDefinitions="Auto, Auto, *" RowDefinitions="Auto, Auto">
 								<TextBlock Grid.Row="0" Grid.Column="0" Text="Slot count" VerticalAlignment="Center" />
 								<NumericUpDown
 									Grid.Row="0" Grid.Column="1"
@@ -80,18 +78,6 @@
 									Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
 									Content="Separate save states by patch"
 									IsChecked="{Binding SeparateSaveStatesByPatch}"
-									Margin="0 6 0 0"
-								/>
-								<CheckBox
-									Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
-									Content="Auto-start Agent Gateway on load"
-									IsChecked="{Binding AutoStartGateway}"
-									Margin="0 6 0 0"
-								/>
-								<CheckBox
-									Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
-									Content="Auto-start Yaze Service on load"
-									IsChecked="{Binding AutoStartYaze}"
 									Margin="0 6 0 0"
 								/>
 							</Grid>
@@ -122,50 +108,25 @@
 					<StackPanel Spacing="10" Margin="0 4 0 0">
 						<c:GroupBox Header="Capture + Notes">
 							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Capture State + Screenshot" Tag="capture_state" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Open Scratchpad" Tag="open_scratchpad" Click="OnGatewayActionClick" />
-								<Button Content="Open Agent Handoff" Tag="open_agent_handoff" Click="OnGatewayActionClick" />
+								<Button Content="Capture State + Screenshot..." Click="OnSaveLabeledStateClick" />
+								<Button Content="Open State Library" Click="OnOpenStateLibraryClick" />
+								<Button Content="Open AFS Scratchpad" Tag="afs_scratchpad" Click="OnOpenPathClick" />
 							</WrapPanel>
 						</c:GroupBox>
 
-						<c:GroupBox Header="Build + Symbols">
+						<c:GroupBox Header="In-Process Diagnostics + Socket">
 							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Build ROM (oos168x)" Tag="build_rom" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Export Symbols (sync)" Tag="export_symbols" Click="OnGatewayActionWithOutputClick" />
+								<Button Content="Socket Health Check (Output)" Click="OnRunSocketHealthClick" />
+								<Button Content="Run ZSCustomOverworld Status" Click="OnRunZsowClick" />
+								<Button Content="Run Day/Night Status" Click="OnRunDayNightClick" />
+								<Button Content="Open Diagnostics Window..." Click="OnOpenDiagnosticsWindowClick" />
 							</WrapPanel>
 						</c:GroupBox>
 
-						<c:GroupBox Header="Testing">
+						<c:GroupBox Header="Testing + Debug Catalogs">
 							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Run Smoke Test" Tag="run_smoke_tests" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Run Test Suite" Tag="run_test_suite" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Open Tests Folder" Tag="open_tests_dir" Click="OnGatewayActionClick" />
-								<Button Content="Health Check (Output)" Tag="health" Click="OnGatewayActionWithOutputClick" />
-							</WrapPanel>
-						</c:GroupBox>
-
-						<c:GroupBox Header="Yaze">
-							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Start Service" Tag="yaze_start" Click="OnGatewayActionClick" />
-								<Button Content="Stop Service" Tag="yaze_stop" Click="OnGatewayActionClick" />
-								<Button Content="Toggle GUI" Tag="yaze_gui_toggle" Click="OnGatewayActionClick" />
-								<Button Content="Start Headless Workflow" Tag="headless_workflow_start" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Stop Headless Workflow" Tag="headless_workflow_stop" Click="OnGatewayActionWithOutputClick" />
-							</WrapPanel>
-						</c:GroupBox>
-
-						<c:GroupBox Header="Gateway">
-							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Start Oracle Agent Gateway" Click="OnGatewayStartClick" />
-								<Button Content="Stop Oracle Agent Gateway" Click="OnGatewayStopClick" />
-								<Button Content="Gateway Status (Output)" Click="OnGatewayStatusClick" />
-							</WrapPanel>
-						</c:GroupBox>
-
-						<c:GroupBox Header="Local LLM Gateway">
-							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Start OpenAI Gateway" Tag="start_llm_gateway" Click="OnGatewayActionWithOutputClick" />
-								<Button Content="Open Gateway Status" Tag="open_llm_status" Click="OnGatewayActionWithOutputClick" />
+								<Button Content="Open Tests Folder" Tag="oracle_tests" Click="OnOpenPathClick" />
+								<Button Content="Open Data/debug Folder" Tag="oracle_debug_data" Click="OnOpenPathClick" />
 							</WrapPanel>
 						</c:GroupBox>
 					</StackPanel>
@@ -180,6 +141,7 @@
 								<Button Content="Open Oracle Repo" Tag="oracle_root" Click="OnOpenPathClick" />
 								<Button Content="Open ROMs Folder" Tag="oracle_roms" Click="OnOpenPathClick" />
 								<Button Content="Open SaveState Library" Tag="oracle_savestates" Click="OnOpenPathClick" />
+								<Button Content="Open Data/debug Folder" Tag="oracle_debug_data" Click="OnOpenPathClick" />
 								<Button Content="Open Docs Folder" Tag="oracle_docs" Click="OnOpenPathClick" />
 							</WrapPanel>
 						</c:GroupBox>
@@ -205,7 +167,7 @@
 
 						<c:GroupBox Header="AFS">
 							<WrapPanel Classes="oracle-wrap" Margin="6">
-								<Button Content="Warm Context" Tag="afs_context_warm" Click="OnGatewayActionClick" />
+								<Button Content="Open AFS Scratchpad" Tag="afs_scratchpad" Click="OnOpenPathClick" />
 								<Button Content="Open AFS Repo" Tag="afs_repo" Click="OnOpenPathClick" />
 								<Button Content="Open AFS-Scawful Repo" Tag="afs_scawful_repo" Click="OnOpenPathClick" />
 								<Button Content="Open Chat Registry" Tag="chat_registry" Click="OnOpenPathClick" />
@@ -217,11 +179,11 @@
 
 			<TabItem Header="Diagnostics">
 				<StackPanel Spacing="6">
-					<TextBlock Text="Run lightweight diagnostics for ZSCustomOverworld and the time system." TextWrapping="Wrap" />
-					<TextBlock Text="See docs/Oracle_Menu_TODO.md for deeper automation ideas." Foreground="Gray" />
+					<TextBlock Text="Run lightweight in-process diagnostics for ZSCustomOverworld and the time system." TextWrapping="Wrap" />
 					<WrapPanel Classes="oracle-wrap" Margin="0 6 0 0">
-						<Button Content="Run ZSCustomOverworld Status" Tag="check_zsow_status" Click="OnGatewayActionWithOutputClick" />
-						<Button Content="Run Day/Night Status" Tag="check_day_night" Click="OnGatewayActionWithOutputClick" />
+						<Button Content="Run ZSCustomOverworld Status" Click="OnRunZsowClick" />
+						<Button Content="Run Day/Night Status" Click="OnRunDayNightClick" />
+						<Button Content="Open Diagnostics Window..." Click="OnOpenDiagnosticsWindowClick" />
 					</WrapPanel>
 				</StackPanel>
 			</TabItem>

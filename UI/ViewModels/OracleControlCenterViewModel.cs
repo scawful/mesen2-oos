@@ -8,13 +8,10 @@ namespace Mesen.ViewModels
 {
 	public class OracleControlCenterViewModel : ViewModelBase
 	{
-		[Reactive] public string GatewayStatus { get; private set; } = "Gateway: unknown";
 		[Reactive] public string MesenStatus { get; private set; } = "Mesen2: unknown";
 		[Reactive] public string SocketStatus { get; private set; } = "Socket: unknown";
 		[Reactive] public string YazeStatus { get; private set; } = "Yaze: unknown";
 		[Reactive] public string UpdatedStatus { get; private set; } = "Updated: unknown";
-		[Reactive] public string GatewayError { get; private set; } = "";
-		[Reactive] public bool HasGatewayError { get; private set; }
 		[Reactive] public string SocketPath { get; private set; } = "";
 		[Reactive] public bool HasSocketPath { get; private set; }
 
@@ -24,8 +21,6 @@ namespace Mesen.ViewModels
 		[Reactive] public string SaveStateFolder { get; private set; } = "";
 		[Reactive] public UInt32 SaveStateSlotCount { get; set; }
 		[Reactive] public bool SeparateSaveStatesByPatch { get; set; }
-		[Reactive] public bool AutoStartGateway { get; set; }
-		[Reactive] public bool AutoStartYaze { get; set; }
 
 		public OracleControlCenterViewModel()
 		{
@@ -56,9 +51,6 @@ namespace Mesen.ViewModels
 			SeparateSaveStatesByPatch = prefs.SeparateSaveStatesByPatch;
 			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;
 
-			AutoStartGateway = ConfigManager.Config.Oracle.AutoStartGateway;
-			AutoStartYaze = ConfigManager.Config.Oracle.AutoStartYaze;
-
 			UpdateSaveStateSummary();
 		}
 
@@ -75,9 +67,6 @@ namespace Mesen.ViewModels
 			prefs.SeparateSaveStatesByPatch = SeparateSaveStatesByPatch;
 			prefs.ApplyConfig();
 
-			ConfigManager.Config.Oracle.AutoStartGateway = AutoStartGateway;
-			ConfigManager.Config.Oracle.AutoStartYaze = AutoStartYaze;
-
 			ConfigManager.Config.Save();
 
 			SaveStateFolder = "Save State folder: " + ConfigManager.SaveStateFolder;
@@ -93,16 +82,16 @@ namespace Mesen.ViewModels
 
 		private void ApplySnapshot(OracleStatusSnapshot snapshot)
 		{
-			GatewayStatus = snapshot.GatewayOnline ? "Gateway: online" : "Gateway: offline";
-			if(snapshot.Mesen2Connected.HasValue) {
-				MesenStatus = snapshot.Mesen2Connected.Value ? "Mesen2: connected" : "Mesen2: disconnected";
+			if(snapshot.MesenRunning) {
+				string romSuffix = string.IsNullOrWhiteSpace(snapshot.RomName) ? "" : $" ({snapshot.RomName})";
+				MesenStatus = snapshot.MesenPaused ? $"Mesen2: paused{romSuffix}" : $"Mesen2: running{romSuffix}";
 			} else {
-				MesenStatus = "Mesen2: unknown";
+				MesenStatus = "Mesen2: idle (no ROM)";
 			}
 
 			SocketPath = snapshot.SocketPath ?? "";
 			if(snapshot.SocketFound) {
-				SocketStatus = string.IsNullOrWhiteSpace(SocketPath) ? "Socket: found" : $"Socket: found ({SocketPath})";
+				SocketStatus = string.IsNullOrWhiteSpace(SocketPath) ? "Socket: active" : $"Socket: active ({SocketPath})";
 			} else {
 				SocketStatus = "Socket: missing";
 			}
@@ -119,8 +108,6 @@ namespace Mesen.ViewModels
 				UpdatedStatus = "Updated: " + snapshot.Timestamp.ToLocalTime().ToString("HH:mm:ss");
 			}
 
-			GatewayError = snapshot.GatewayError ?? "";
-			HasGatewayError = !string.IsNullOrWhiteSpace(GatewayError);
 			HasSocketPath = !string.IsNullOrWhiteSpace(SocketPath);
 		}
 	}

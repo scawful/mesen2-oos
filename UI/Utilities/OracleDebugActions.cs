@@ -1,4 +1,7 @@
+using Avalonia.Controls;
+using Avalonia.Threading;
 using Mesen.Interop;
+using Mesen.Windows;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -366,6 +369,12 @@ namespace Mesen.Utilities
 		/// </summary>
 		public static OracleActionResult CaptureState(string label, IReadOnlyList<string> tags, string notes)
 		{
+			return CaptureState(label, tags, notes, out _);
+		}
+
+		public static OracleActionResult CaptureState(string label, IReadOnlyList<string> tags, string notes, out string capturedId)
+		{
+			capturedId = string.Empty;
 			string? projectRoot = AgentLauncher.ResolveProjectRoot();
 			if(projectRoot == null) {
 				return OracleActionResult.Fail("Oracle project root not found. Set ORACLE_OF_SECRETS_ROOT.");
@@ -382,7 +391,7 @@ namespace Mesen.Utilities
 			long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 			string id = $"{timestamp}_{cleanLabel}";
 			string fileName = $"oos_{id}.mss";
-			string libraryRoot = Path.Combine(projectRoot, "Roms", "SaveStates", "library");
+			string libraryRoot = OracleStateLibrary.GetLibraryRootPath();
 			string statePath = Path.Combine(libraryRoot, fileName);
 			string pngPath = Path.ChangeExtension(statePath, ".png");
 			Directory.CreateDirectory(libraryRoot);
@@ -391,6 +400,7 @@ namespace Mesen.Utilities
 			if(!File.Exists(statePath)) {
 				return OracleActionResult.Fail("Mesen did not write the state file.");
 			}
+			capturedId = id;
 			bool hasPng = false;
 			try {
 				using Avalonia.Media.Imaging.Bitmap? preview = EmuApi.GetSaveStatePreview(statePath);
@@ -443,7 +453,7 @@ namespace Mesen.Utilities
 				["md5"] = ComputeMd5(statePath)
 			};
 
-			string libraryJson = Path.Combine(projectRoot, "Docs", "Debugging", "Testing", "save_state_library.json");
+			string libraryJson = OracleStateLibrary.GetManifestPath();
 			string savedTo = Path.GetRelativePath(projectRoot, statePath);
 			if(TryPrependLibraryEntry(libraryJson, entry, out string? error)) {
 				return OracleActionResult.Ok($"Saved {savedTo}{(hasPng ? " + .png" : "")} (library id {id}, draft).");
@@ -452,6 +462,106 @@ namespace Mesen.Utilities
 			//Keep the capture usable even when the shared library file cannot be updated.
 			File.WriteAllText(statePath + ".meta.json", entry.ToJsonString(JsonOptions));
 			return OracleActionResult.Fail($"Saved {savedTo}, but the library was not updated ({error}); wrote .meta.json instead.");
+		}
+
+		/// <summary>
+		/// In-process ZSCustomOverworld diagnostic reading ROM $140140-$14014A (EnableTable) and live OW state.
+		/// </summary>
+		public static string DescribeZsowStatus()
+		{
+			if(!OraclePanelBridge.CanReadState()) {
+				return "No ROM is currently running in Mesen2.";
+			}
+
+			StringBuilder sb = new StringBuilder();
+			int romSize = DebugApi.GetMemorySize(MemoryType.SnesPrgRom);
+			if(romSize <= 0x14014A) {
+				sb.AppendLine($"ROM PRG size ({romSize:N0} bytes) is smaller than $14014A; ZSCustomOverworld EnableTable not present.");
+				return sb.ToString().TrimEnd();
+			}
+
+			byte enableBgColor = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140140);
+			byte enableMainPal = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140141);
+			byte enableMosaic = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140142);
+			byte enableAnimated = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140143);
+			byte enableSubOverlay = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140144);
+			byte zsowVersion = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140145);
+			byte enableIntroRain = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140146);
+			byte enableMireRain = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140147);
+			byte enableTransGfx = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140148);
+			int bridgeColor = DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x140149)
+				| (DebugApi.GetMemoryValue(MemoryType.SnesPrgRom, 0x14014A) << 8);
+
+			int module = OraclePanelBridge.ReadByte(ModuleAddr);
+			int submodule = OraclePanelBridge.ReadByte(SubmoduleAddr);
+			bool indoors = OraclePanelBridge.ReadByte(IndoorsAddr) != 0;
+			int areaId = OraclePanelBridge.ReadByte(0x7E008A);
+			int animGfxSet = OraclePanelBridge.ReadByte(0x7E0FC0);
+			int camSouth = OraclePanelBridge.ReadWord(0x7E0716);
+			int camEast = OraclePanelBridge.ReadWord(0x7E0718);
+
+			string versionDesc = zsowVersion == 0xFF || zsowVersion == 0x00
+				? $"unpatched (${zsowVersion:X2})"
+				: $"v{zsowVersion} (${zsowVersion:X2})";
+
+			sb.AppendLine($"ZSAppliedASM ($140145): {versionDesc}");
+			sb.AppendLine($"EnableTable ($140140-$140148):");
+			sb.AppendLine($"  BGColor=${enableBgColor:X2}  MainPalette=${enableMainPal:X2}  Mosaic=${enableMosaic:X2}");
+			sb.AppendLine($"  Animated=${enableAnimated:X2}  SubOverlay=${enableSubOverlay:X2}  TransGFX=${enableTransGfx:X2}");
+			sb.AppendLine($"  BeginningRain=${enableIntroRain:X2}  RainMireEvent=${enableMireRain:X2}  BridgeBG=${bridgeColor:X4}");
+			sb.AppendLine($"Live State:");
+			sb.AppendLine($"  Module=${module:X2}  Submodule=${submodule:X2}  Indoors={(indoors ? "yes" : "no")}  OW Area=${areaId:X2}");
+			sb.AppendLine($"  AnimatedTileGFXSet ($7E0FC0)=${animGfxSet:X2}  CameraBounds S=${camSouth:X4} E=${camEast:X4}");
+			return sb.ToString().TrimEnd();
+		}
+
+		/// <summary>
+		/// In-process Day/Night time system diagnostic reading TimeState at $7EE000-$7EE019 (Core/structs.asm).
+		/// </summary>
+		public static string DescribeDayNightStatus()
+		{
+			if(!OraclePanelBridge.CanReadState()) {
+				return "No ROM is currently running in Mesen2.";
+			}
+
+			byte hours = OraclePanelBridge.ReadByte(0x7EE000);
+			byte minutes = OraclePanelBridge.ReadByte(0x7EE001);
+			byte speed = OraclePanelBridge.ReadByte(0x7EE002);
+			int blue = OraclePanelBridge.ReadWord(0x7EE010);
+			int green = OraclePanelBridge.ReadWord(0x7EE012);
+			int red = OraclePanelBridge.ReadWord(0x7EE014);
+			int tempColor = OraclePanelBridge.ReadWord(0x7EE016);
+			int subColor = OraclePanelBridge.ReadWord(0x7EE018);
+
+			bool isNight = hours >= 0x12 || hours < 0x06;
+			bool outOfBounds = hours >= 0x18 || minutes >= 0x3C;
+
+			StringBuilder sb = new StringBuilder();
+			sb.AppendLine($"TimeState ($7EE000): {hours:D2}:{minutes:D2} ({(isNight ? "Night" : "Day")}) · Speed=${speed:X2}");
+			if(outOfBounds) {
+				sb.AppendLine($"WARNING: TimeState out of expected bounds (Hours=${hours:X2} < $18, Minutes=${minutes:X2} < $3C).");
+			}
+			sb.AppendLine($"SubColor ($7EE018):  ${subColor:X4} (TempColor=${tempColor:X4})");
+			sb.AppendLine($"Channels ($7EE010):  R=${red:X4}  G=${green:X4}  B=${blue:X4}");
+			return sb.ToString().TrimEnd();
+		}
+
+		public static void ShowOutputWindow(string title, Func<string> producer)
+		{
+			System.Threading.Tasks.Task.Run(() => {
+				string output;
+				try {
+					output = producer();
+				} catch(Exception ex) {
+					output = $"Diagnostic failed: {ex.Message}";
+				}
+				Dispatcher.UIThread.Post(() => {
+					Window? parent = ApplicationHelper.GetActiveOrMainWindow();
+					OracleAgentOutputWindow wnd = ApplicationHelper.GetOrCreateUniqueWindow(parent as Control, () => new OracleAgentOutputWindow());
+					wnd.Title = title;
+					wnd.Output = output;
+				});
+			});
 		}
 
 		private static readonly JsonSerializerOptions JsonOptions = new() {
@@ -531,7 +641,14 @@ namespace Mesen.Utilities
 		private static string? GetProfileFolder()
 		{
 			string? root = AgentLauncher.ResolveProjectRoot();
-			return root == null ? null : Path.Combine(root, "Docs", "Debugging", "Testing", "save_data_profiles");
+			if(root == null) {
+				return null;
+			}
+			string dataDebug = Path.Combine(root, "Data", "debug", "save_data_profiles");
+			if(Directory.Exists(dataDebug)) {
+				return dataDebug;
+			}
+			return Path.Combine(root, "Docs", "Debugging", "Testing", "save_data_profiles");
 		}
 
 		private static string? GetString(JsonElement element, string property)

@@ -75,8 +75,8 @@ MacOSKeyManager::MacOSKeyManager(Emulator* emu)
 	NSEventMask eventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged;
 
 	_eventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:eventMask handler:^ NSEvent* (NSEvent* event) {
-		if(_emu->GetSettings()->CheckFlag(EmulationFlags::InBackground)) {
-			//Allow UI to handle key-events when main window is not in focus
+		if(_emu->GetSettings()->CheckFlag(EmulationFlags::InBackground) || _emu->GetSettings()->CheckFlag(EmulationFlags::TextInputFocused)) {
+			//Allow UI to handle key-events when main window is not in focus or a text input is focused
 			return event;
 		}
 
