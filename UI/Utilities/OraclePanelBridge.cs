@@ -213,7 +213,8 @@ namespace Mesen.Utilities
 			new() { Group = "Oracle Items", Key = "switchhook", Label = "Switch Hook", Address = 0x7EF3AE },
 			new() { Group = "Oracle Items", Key = "garomask", Label = "Garo Mask", Address = 0x7EF3AF },
 			new() { Group = "Oracle Items", Key = "portalrod", Label = "Portal Rod", Address = 0x7EF3A6 },
-			new() { Group = "Oracle Items", Key = "goldstar", Label = "Goldstar", Address = 0x7EF3A9 }
+			new() { Group = "Oracle Items", Key = "goldstar", Label = "Goldstar", Address = 0x7EF3A9 },
+			new() { Group = "Oracle Items", Key = "fishingrod", Label = "Fishing Rod (Supply)", Address = 0x7EF38A }
 		};
 
 		private static readonly List<ChoiceDef> ItemChoiceDefs = new() {
@@ -260,7 +261,8 @@ namespace Mesen.Utilities
 			new() { Group = "Pendants", Key = "courage", Label = "Pendant of Courage", Address = PendantsAddr, Mask = 0x04 },
 			new() { Group = "Side Quests", Key = "masksalesman", Label = "Met Mask Salesman", Address = SideQuestAddr, Mask = 0x01 },
 			new() { Group = "Side Quests", Key = "dekufound", Label = "Deku Scrub Found", Address = SideQuestAddr, Mask = 0x04 },
-			new() { Group = "Side Quests", Key = "goronquest", Label = "Goron Quest", Address = SideQuestAddr, Mask = 0x20 }
+			new() { Group = "Side Quests", Key = "goronquest", Label = "Goron Quest", Address = SideQuestAddr, Mask = 0x20 },
+			new() { Group = "Side Quests", Key = "eponasong", Label = "Epona's Song", Address = 0x7EF3D8, Mask = 0x02 }
 		};
 
 		private static readonly List<ChoiceDef> FlagChoiceDefs = new() {
@@ -277,16 +279,18 @@ namespace Mesen.Utilities
 			["magic"] = MagicAddr, ["arrows"] = 0x7EF377, ["keys"] = 0x7EF36F,
 			// Oracle RC inventory: 0 is absent, 2 is an empty bottle, 3..10 are contents.
 			["bottle1"] = 0x7EF35C, ["bottle2"] = 0x7EF35D, ["bottle3"] = 0x7EF35E, ["bottle4"] = 0x7EF35F,
-			["customrods"] = 0x7EF351, ["portalrod"] = 0x7EF3A6, ["goldstar"] = 0x7EF3A9,
+			["customrods"] = 0x7EF351, ["portalrod"] = 0x7EF3A6, ["goldstar"] = 0x7EF3A9, ["fishingrod"] = 0x7EF38A,
 			["goldstar_inventory_version"] = 0x7EF3AA, ["saved_ocarina_song"] = 0x7EF3AB, ["rings"] = 0x7EF3A2,
 			["byrna"] = 0x7EF3AC, ["bombchu"] = 0x7EF3AD, ["switchhook"] = 0x7EF3AE, ["garomask"] = 0x7EF3AF,
 			["bombchu_ammo"] = 0x7EF3B0,
 			["bananas"] = 0x7EF38B, ["pineapples"] = 0x7EF38D, ["rockmeat"] = 0x7EF38F,
 			["seashells"] = 0x7EF391, ["honeycombs"] = 0x7EF393, ["dekusticks"] = 0x7EF395,
-			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398,
+			["tinglemaps"] = 0x7EF396, ["dungeonscrolls"] = 0x7EF398, ["scrollsfound"] = 0x7EF3BF,
+			["swordstory"] = 0x7EF3BC, ["swordslotflags"] = 0x7EF3BD,
+			["compass1"] = 0x7EF364, ["compass2"] = 0x7EF365, ["bigkey1"] = 0x7EF366, ["bigkey2"] = 0x7EF367,
+			["dngmap1"] = 0x7EF368, ["dngmap2"] = 0x7EF369,
 			// Ownership is exactly 1; Bombchu ammo is 0..20.
-			["byrna"] = 0x7EF3AC, ["bombchu"] = 0x7EF3AD, ["switchhook"] = 0x7EF3AE,
-			["garomask"] = 0x7EF3AF, ["bombchuammo"] = 0x7EF3B0
+			["bombchuammo"] = 0x7EF3B0
 		};
 
 		private static readonly Dictionary<string, FlagBitDef> FlagBitIndex = FlagToggleDefs.ToDictionary(def => def.Key, def => def, StringComparer.OrdinalIgnoreCase);
@@ -297,7 +301,7 @@ namespace Mesen.Utilities
 			new() {
 				Id = "all_items",
 				Label = "All Items",
-				Description = "Tools, masks, six songs, rings, maps, scrolls and Oracle collectibles, including 20 Bombchus and at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
+				Description = "Tools, masks, six songs (+ Epona's Song), rings, maps, compasses, all 8 scrolls, Tunic/Sword slots and Oracle collectibles, including 20 Bombchus and at least 5 Rock Meat. Fills missing or empty bottles with red/green/blue potion and fairy; keeps filled bottles, higher counts and story progress.",
 				Items = new Dictionary<string, int> {
 					["bow"] = 4, ["boomerang"] = 2, ["hookshot"] = 1, ["bombs"] = 50, ["powder"] = 2, ["firerod"] = 1,
 					["icerod"] = 1, ["lamp"] = 1, ["hammer"] = 1, ["flute"] = 7, ["ocarina_song"] = 1, ["feather"] = 1,
@@ -307,12 +311,18 @@ namespace Mesen.Utilities
 					["rupees"] = 9999, ["arrows"] = 70, ["keys"] = 9,
 					["bottle1"] = 3, ["bottle2"] = 4, ["bottle3"] = 5, ["bottle4"] = 6,
 					["customrods"] = 2, ["portalrod"] = 1, ["goldstar"] = 1, ["goldstar_inventory_version"] = 0xA5,
-					["saved_ocarina_song"] = 1, ["rings"] = 0x3F, ["tinglemaps"] = 0x7F, ["dungeonscrolls"] = 0x7F,
+					["fishingrod"] = 1,
+					["saved_ocarina_song"] = 1, ["rings"] = 0x3F, ["tinglemaps"] = 0x7F, ["dungeonscrolls"] = 0xFF, ["scrollsfound"] = 0xFF,
+					["swordstory"] = 4, ["swordslotflags"] = 0x85,
+					["compass1"] = 0xFF, ["compass2"] = 0xFF, ["dngmap1"] = 0xFF, ["dngmap2"] = 0xFF,
 					["byrna"] = 1, ["bombchu"] = 1, ["switchhook"] = 1, ["garomask"] = 1, ["bombchu_ammo"] = 20,
 					// Five Rock Meat meets
 					// the Goron's normal dialogue gate; do not set its world event.
-					["bananas"] = 10, ["pineapples"] = 10, ["rockmeat"] = 5,
-					["seashells"] = 10, ["honeycombs"] = 10, ["dekusticks"] = 10
+					["bananas"] = 20, ["pineapples"] = 20, ["rockmeat"] = 5,
+					["seashells"] = 20, ["honeycombs"] = 20, ["dekusticks"] = 20
+				},
+				Flags = new Dictionary<string, int> {
+					["eponasong"] = 1
 				}
 			},
 			new() {
@@ -572,7 +582,14 @@ namespace Mesen.Utilities
 						case 0x7EF3A2: // Appraised rings
 						case 0x7EF396: // Purchased maps
 						case 0x7EF398: // Collected dungeon scrolls
+						case 0x7EF3BF: // ScrollsFound
+						case 0x7EF3BD: // SwordSlotFlags (keep story/tunic bits)
+						case 0x7EF364: case 0x7EF365: // Compass1/2
+						case 0x7EF368: case 0x7EF369: // DngMap1/2
 							value |= current;
+							break;
+						case 0x7EF3BC: // SwordStoryBlade
+							value = Math.Max(current, value);
 							break;
 						case 0x7EF38B: case 0x7EF38D: case 0x7EF38F: // Magic Bag
 						case 0x7EF391: case 0x7EF393: case 0x7EF395:
