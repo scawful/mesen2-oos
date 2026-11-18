@@ -56,7 +56,13 @@ android {
                 arguments(*(cmakeExtra + [
                         "-DCMAKE_C_FLAGS_DEBUG=${nativeCFlags}",
                         "-DCMAKE_CXX_FLAGS_DEBUG=${nativeCxxFlags}",
-                        "-DCMAKE_SHARED_LINKER_FLAGS_DEBUG=${nativeLdFlags}"
+                        "-DCMAKE_SHARED_LINKER_FLAGS_DEBUG=${nativeLdFlags}",
+                        "-DCMAKE_C_FLAGS_RELWITHDEBINFO=${nativeCFlags}",
+                        "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=${nativeCxxFlags}",
+                        "-DCMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO=${nativeLdFlags}",
+                        "-DCMAKE_C_FLAGS_RELEASE=${nativeCFlags}",
+                        "-DCMAKE_CXX_FLAGS_RELEASE=${nativeCxxFlags}",
+                        "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=${nativeLdFlags}"
                 ]))
                 cppFlags "-std=c++17 -fexceptions -frtti -fPIC"
             }
@@ -65,10 +71,13 @@ android {
 
     buildTypes {
         release {
+            signingConfig signingConfigs.debug
             minifyEnabled false
+            debuggable false
+            jniDebuggable false
         }
         debug {
-            jniDebuggable true
+            jniDebuggable(project.hasProperty("jniDebug") && project.property("jniDebug").toString() == "true")
         }
     }
 

@@ -55,6 +55,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 private object Pal {
     val BG = Color(0xFF0C121E)
@@ -75,11 +76,18 @@ private class RomCard(
     val saveLabel: String,
     val source: String,
     val states: List<SaveStateSlots.Entry>,
+    val canonicalPath: String?,
 ) {
     val file: File get() = entry.file
     val newest: SaveStateSlots.Entry? get() = states.filter { it.occupied }.maxByOrNull { it.modified }
     val stateCount: Int get() = states.count { it.occupied }
 }
+
+private class LibrarySnapshot(
+    val cards: List<RomCard>,
+    val currentCanonical: String?,
+    val hasCurrent: Boolean,
+)
 
 class Confirm(val title: String, val body: String, val yes: String, val action: () -> Unit)
 
@@ -102,7 +110,12 @@ private enum class Key { UP, DOWN, LEFT, RIGHT, A, B, X, Y, L, R, START }
  * SRAM inventory + progression editor, bundled story presets, and settings).
  * All screens are navigated by controller (D-pad / A / B / L1 / R1 / Y / Start).
  */
-class OracleUi(private val host: Host) {
+class OracleUi internal constructor(
+    private val host: Host,
+    private val postMain: (Runnable) -> Unit,
+) {
+    constructor(host: Host) : this(host, mainPoster())
+
     interface Host {
         fun nativeReady(): Boolean
         fun romRoots(): Array<File>
@@ -117,7 +130,7 @@ class OracleUi(private val host: Host) {
         /** UI became visible (pause the game) or was closed (resume it). */
         fun uiOpened()
         fun uiClosed()
-        /** Seeds the battery save, loads the ROM and remembers it. Main thread. */
+        /** Seeds the battery save, loads the ROM and remembers it. Safe off main thread. */
         fun bootRom(path: String): Boolean
         fun resetConsole()
         fun requestHomeShortcut()
@@ -131,9 +144,13 @@ class OracleUi(private val host: Host) {
         fun toast(message: String)
     }
 
-    private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "oracle-ui").apply { isDaemon = true } }
     private val mismatchWarnings = SaveStateSlots.MismatchWarnings()
+    private val cardsGen = AtomicLong(0)
+    private val statesGen = AtomicLong(0)
+    private val itemsGen = AtomicLong(0)
+    private val metaGen = AtomicLong(0)
+    private var libNavTick = 0L
 
     var screen by mutableStateOf(Screen.CLOSED); private set
     private var status by mutableStateOf("")
@@ -143,6 +160,9 @@ class OracleUi(private val host: Host) {
 
     // Library
     private var cards by mutableStateOf(listOf<RomCard>())
+    private var loadingLibrary by mutableStateOf(false)
+    private var currentRomCanonical by mutableStateOf<String?>(null)
+    private var hasCurrentRom by mutableStateOf(false)
     private var libIndex by mutableIntStateOf(0)
     private var libRow by mutableIntStateOf(0)
     private var libAction by mutableIntStateOf(0)
@@ -151,6 +171,7 @@ class OracleUi(private val host: Host) {
     private var rail by mutableIntStateOf(0)
     private var inPanel by mutableStateOf(false)
     private var states by mutableStateOf(listOf<SaveStateSlots.Entry>())
+    private var loadingStates by mutableStateOf(false)
     private var slotPage by mutableIntStateOf(0)
     private var slotIndex by mutableIntStateOf(0)
     private var listIndex by mutableIntStateOf(0)
@@ -158,6 +179,11 @@ class OracleUi(private val host: Host) {
     private var bitIndex by mutableIntStateOf(0)
     private var itemRows by mutableStateOf(listOf<Inventory.Row>())
     private var itemValues by mutableStateOf(listOf<Int>())
+    private var loadedItemTab by mutableStateOf("")
+    private var loadingItems by mutableStateOf(false)
+    private var activeSaveSlot by mutableIntStateOf(1)
+    private var menuTitle by mutableStateOf("Oracle of Secrets")
+    private var socketMeta by mutableStateOf("")
     private var fastOn by mutableStateOf(false)
     private var settingsTick by mutableIntStateOf(0)
 
@@ -177,6 +203,18 @@ class OracleUi(private val host: Host) {
     }
 
     val isOpen: Boolean get() = screen != Screen.CLOSED
+    internal val isBusy: Boolean get() = busy
+    internal val isLoadingLibrary: Boolean get() = loadingLibrary
+    internal val isLoadingStates: Boolean get() = loadingStates
+    internal val isLoadingItems: Boolean get() = loadingItems
+    internal val currentStatus: String get() = status
+    internal val currentMenuTitle: String get() = menuTitle
+    internal val currentSocketMeta: String get() = socketMeta
+    internal val currentActiveSaveSlot: Int get() = activeSaveSlot
+    internal val cardChannels: List<String> get() = cards.map { it.entry.channel }
+    internal val stateSlotsCount: Int get() = states.size
+    internal val currentItemRows: List<Inventory.Row> get() = itemRows
+    internal val currentItemValues: List<Int> get() = itemValues
 
     fun install(view: ComposeView) {
         view.setContent { Root() }
@@ -186,16 +224,19 @@ class OracleUi(private val host: Host) {
 
     fun openLibrary() {
         val wasClosed = screen == Screen.CLOSED
-        reloadCards()
-        val current = canonical(host.currentRomPath())
-        val at = cards.indexOfFirst { canonical(it.file.path) == current }
-        libIndex = if (at >= 0) at else 0
+        if (cards.isNotEmpty() && currentRomCanonical != null) {
+            val at = cards.indexOfFirst { it.canonicalPath == currentRomCanonical }
+            libIndex = if (at >= 0) at else libIndex.coerceIn(0, cards.size - 1)
+        } else if (cards.isEmpty()) {
+            libIndex = 0
+        }
         libRow = 0
         libAction = 0
         status = ""
         confirm = null
         screen = Screen.LIBRARY
         if (wasClosed) host.uiOpened()
+        reloadCards(selectCurrent = true)
     }
 
     fun openMenu() {
@@ -205,10 +246,11 @@ class OracleUi(private val host: Host) {
         status = ""
         confirm = null
         fastOn = host.isStickyFastForward()
-        refreshStates()
-        refreshItems()
         screen = Screen.MENU
         if (wasClosed) host.uiOpened()
+        refreshMenuMeta()
+        refreshStates()
+        refreshItems()
     }
 
     fun close() {
@@ -306,22 +348,56 @@ class OracleUi(private val host: Host) {
 
     private class LibAction(val label: String, val run: () -> Unit)
 
-    private fun reloadCards() {
+    private fun reloadCards(selectCurrent: Boolean = false) {
+        val gen = cardsGen.incrementAndGet()
+        val navTick = libNavTick
+        if (cards.isEmpty()) {
+            loadingLibrary = true
+        }
+        worker.execute {
+            val snapshot = scanCardsSnapshot()
+            postMain(Runnable {
+                if (gen != cardsGen.get()) return@Runnable
+                applyCardsSnapshot(snapshot, selectCurrent && libNavTick == navTick)
+            })
+        }
+    }
+
+    private fun scanCardsSnapshot(): LibrarySnapshot {
         val dir = host.statesDir()
-        cards = RomLibrary.scan(host.romRoots()).map { entry ->
+        val currentPath = host.currentRomPath()
+        val currentCanon = canonical(currentPath)
+        val scanned = RomLibrary.scan(host.romRoots()).map { entry ->
             val base = RomLibrary.baseName(entry.file)
             val slots = slotList { slot -> File(dir, "${base}_$slot.mss").path }
-            RomCard(entry, host.batterySaveLabel(entry.file), host.romSourceLabel(entry.file), slots)
+            RomCard(
+                entry,
+                host.batterySaveLabel(entry.file),
+                host.romSourceLabel(entry.file),
+                slots,
+                canonical(entry.file.path),
+            )
         }
-        if (cards.isEmpty()) {
+        return LibrarySnapshot(scanned, currentCanon, currentPath != null)
+    }
+
+    private fun applyCardsSnapshot(snapshot: LibrarySnapshot, selectCurrent: Boolean) {
+        cards = snapshot.cards
+        currentRomCanonical = snapshot.currentCanonical
+        hasCurrentRom = snapshot.hasCurrent
+        loadingLibrary = false
+        if (snapshot.cards.isEmpty()) {
             libIndex = 0
+        } else if (selectCurrent) {
+            val at = snapshot.cards.indexOfFirst { it.canonicalPath == snapshot.currentCanonical }
+            libIndex = if (at >= 0) at else libIndex.coerceIn(0, snapshot.cards.size - 1)
         } else {
-            libIndex = libIndex.coerceIn(0, cards.size - 1)
+            libIndex = libIndex.coerceIn(0, snapshot.cards.size - 1)
         }
     }
 
     private fun isCurrent(card: RomCard): Boolean =
-        host.nativeReady() && canonical(card.file.path) == canonical(host.currentRomPath())
+        host.nativeReady() && currentRomCanonical != null && card.canonicalPath == currentRomCanonical
 
     private fun libActions(card: RomCard): List<LibAction> {
         val out = ArrayList<LibAction>()
@@ -357,7 +433,19 @@ class OracleUi(private val host: Host) {
             status = "Emulator is still starting."
             return
         }
-        if (host.bootRom(card.file.path)) close() else status = "Could not load ${card.file.name}."
+        val path = card.file.path
+        val canon = card.canonicalPath
+        work("Loading ${card.entry.channel}…", {
+            if (host.bootRom(path)) null else "Could not load ${card.file.name}."
+        }) { problem ->
+            if (problem == null) {
+                currentRomCanonical = canon
+                hasCurrentRom = true
+                close()
+            } else {
+                status = problem
+            }
+        }
     }
 
     private fun resumeState(card: RomCard, entry: SaveStateSlots.Entry) {
@@ -365,18 +453,25 @@ class OracleUi(private val host: Host) {
             status = "Emulator is still starting."
             return
         }
-        if (!isCurrent(card) && !host.bootRom(card.file.path)) {
-            status = "Could not load ${card.file.name}."
-            return
-        }
-        val warning = mismatchWarnings.check(entry, card.entry.build)
+        val needBoot = !isCurrent(card)
+        val path = card.file.path
+        val canon = card.canonicalPath
         val name = slotName(entry.slot)
+        var warning: String? = null
         work("Loading $name…", {
+            if (needBoot && !host.bootRom(path)) {
+                return@work "Could not load ${card.file.name}."
+            }
+            warning = mismatchWarnings.check(entry, card.entry.build)
             Thread.sleep(150)
             if (loadEntry(entry)) null else "The $name did not load."
         }) { problem ->
             if (problem == null) {
-                if (warning != null) host.toast(warning)
+                if (needBoot) {
+                    currentRomCanonical = canon
+                    hasCurrentRom = true
+                }
+                if (warning != null) host.toast(warning!!)
                 close()
             } else {
                 status = problem
@@ -386,41 +481,72 @@ class OracleUi(private val host: Host) {
 
     private fun rollbackChannel(card: RomCard) {
         val wasCurrent = isCurrent(card)
-        val problem = RomLibrary.rollback(card.entry)
-        if (problem != null) {
-            status = problem
-            return
+        val cardCanon = card.canonicalPath
+        val cardPath = card.file.path
+        val gen = cardsGen.incrementAndGet()
+        var snapshot: LibrarySnapshot? = null
+        var toBuild = "previous build"
+        work("Rolling back ${card.entry.channel}…", {
+            val problem = RomLibrary.rollback(card.entry)
+            if (problem != null) return@work problem
+            val scanned = scanCardsSnapshot()
+            snapshot = scanned
+            val updated = scanned.cards.firstOrNull { it.canonicalPath == cardCanon }
+            toBuild = updated?.entry?.build?.ifEmpty { "previous build" } ?: "previous build"
+            if (wasCurrent && host.nativeReady()) {
+                host.bootRom(cardPath)
+            }
+            null
+        }) { problem ->
+            val scanned = snapshot
+            if (scanned != null && gen == cardsGen.get()) {
+                applyCardsSnapshot(scanned, selectCurrent = false)
+            }
+            if (problem != null) {
+                status = problem
+            } else {
+                libAction = 0
+                status = "Rolled back ${card.entry.channel} to $toBuild."
+            }
         }
-        reloadCards()
-        val updated = cards.firstOrNull { canonical(it.file.path) == canonical(card.file.path) }
-        val toBuild = updated?.entry?.build?.ifEmpty { "previous build" } ?: "previous build"
-        if (wasCurrent && host.nativeReady()) {
-            host.bootRom(card.file.path)
-        }
-        status = "Rolled back ${card.entry.channel} to $toBuild."
-        libAction = 0
     }
 
     private fun pruneOlderCopies(card: RomCard) {
-        val cleanup = RomLibrary.removeOlderCopies(card.entry, host.statesDir(), host.savesDir())
-        reloadCards()
-        libAction = 0
-        status = cleanup.summary(card.entry.channel)
+        val gen = cardsGen.incrementAndGet()
+        var snapshot: LibrarySnapshot? = null
+        var summary = ""
+        work("Removing older copies…", {
+            val cleanup = RomLibrary.removeOlderCopies(card.entry, host.statesDir(), host.savesDir())
+            snapshot = scanCardsSnapshot()
+            summary = cleanup.summary(card.entry.channel)
+            null
+        }) { problem ->
+            val scanned = snapshot
+            if (scanned != null && gen == cardsGen.get()) {
+                applyCardsSnapshot(scanned, selectCurrent = false)
+            }
+            if (problem != null) {
+                status = problem
+            } else {
+                libAction = 0
+                status = summary
+            }
+        }
     }
 
     private fun libraryKey(key: Key) {
         val card = cards.getOrNull(libIndex)
         val actions = card?.let { libActions(it) } ?: emptyList()
         when (key) {
-            Key.LEFT -> if (libRow == 0) libIndex = (libIndex - 1).coerceAtLeast(0) else libAction = (libAction - 1).coerceAtLeast(0)
-            Key.RIGHT -> if (libRow == 0) libIndex = (libIndex + 1).coerceAtMost((cards.size - 1).coerceAtLeast(0))
+            Key.LEFT -> if (libRow == 0) { libNavTick++; libIndex = (libIndex - 1).coerceAtLeast(0) } else libAction = (libAction - 1).coerceAtLeast(0)
+            Key.RIGHT -> if (libRow == 0) { libNavTick++; libIndex = (libIndex + 1).coerceAtMost((cards.size - 1).coerceAtLeast(0)) }
                 else libAction = (libAction + 1).coerceAtMost((actions.size - 1).coerceAtLeast(0))
-            Key.DOWN -> if (actions.isNotEmpty()) { libRow = 1; libAction = libAction.coerceIn(0, actions.size - 1) }
+            Key.DOWN -> if (actions.isNotEmpty()) { libNavTick++; libRow = 1; libAction = libAction.coerceIn(0, actions.size - 1) }
             Key.UP -> libRow = 0
             Key.A -> actions.getOrNull(if (libRow == 0) 0 else libAction)?.run?.invoke()
             Key.START -> actions.firstOrNull()?.run?.invoke()
             Key.B -> if (libRow == 1) libRow = 0
-                else if (host.nativeReady() && host.currentRomPath() != null) close()
+                else if (host.nativeReady() && hasCurrentRom) close()
             else -> {}
         }
         if (key == Key.LEFT || key == Key.RIGHT) {
@@ -431,10 +557,32 @@ class OracleUi(private val host: Host) {
 
     // ---- quick menu --------------------------------------------------------
 
-    private fun refreshStates() {
+    private fun refreshMenuMeta() {
+        val gen = metaGen.incrementAndGet()
+        worker.execute {
+            val path = host.currentRomPath()
+            val title = computeTitle(path)
+            val canon = canonical(path)
+            val summary = host.socketSummary()
+            val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else 1
+            postMain(Runnable {
+                if (gen != metaGen.get()) return@Runnable
+                menuTitle = title
+                currentRomCanonical = canon
+                hasCurrentRom = path != null
+                socketMeta = summary
+                activeSaveSlot = slot
+            })
+        }
+    }
+
+    private fun loadStatesSnapshot(): List<SaveStateSlots.Entry> {
+        if (!host.nativeReady()) {
+            return slotList { null }
+        }
         // Native saveStatePath() rejects slots above the handheld count, so the
         // auto-save path is derived from slot 1's ("<rom>_1.mss" -> "<rom>_11.mss").
-        states = slotList { slot ->
+        return slotList { slot ->
             if (slot == SaveStateSlots.AUTO_SLOT) {
                 MesenNative.saveStatePath(1)?.replace(Regex("_1\\.mss$"), "_${SaveStateSlots.AUTO_SLOT}.mss")
             } else {
@@ -443,21 +591,61 @@ class OracleUi(private val host: Host) {
         }
     }
 
+    private fun refreshStates() {
+        val gen = statesGen.incrementAndGet()
+        if (states.isEmpty()) {
+            loadingStates = true
+        }
+        worker.execute {
+            val loaded = loadStatesSnapshot()
+            postMain(Runnable {
+                if (gen != statesGen.get()) return@Runnable
+                states = loaded
+                loadingStates = false
+            })
+        }
+    }
+
     private fun activeItemTabName(): String = itemTabs.getOrElse(itemTab) { TAB_PRESETS }
 
     private fun refreshItems() {
         val tab = activeItemTabName()
+        val gen = itemsGen.incrementAndGet()
         if (tab == TAB_PRESETS) {
             itemRows = emptyList()
             itemValues = emptyList()
+            loadedItemTab = TAB_PRESETS
+            loadingItems = false
+            worker.execute {
+                val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else 1
+                postMain(Runnable {
+                    if (gen != itemsGen.get()) return@Runnable
+                    activeSaveSlot = slot
+                })
+            }
             return
         }
         val rows = Inventory.rows(tab, host.checkpointData().names)
-        itemRows = rows
-        itemValues = if (host.nativeReady()) {
-            rows.map { Inventory.read(it, Inventory.LIVE) }
-        } else {
-            rows.map { if (it.kind == Inventory.Kind.ACTION) 0 else -1 }
+        if (loadedItemTab != tab) {
+            itemRows = rows
+            itemValues = emptyList()
+            loadingItems = true
+        }
+        worker.execute {
+            val values = if (host.nativeReady()) {
+                rows.map { Inventory.read(it, Inventory.LIVE) }
+            } else {
+                rows.map { if (it.kind == Inventory.Kind.ACTION) 0 else -1 }
+            }
+            val slot = if (host.nativeReady()) Progression.activeSlot(Progression.LIVE) else activeSaveSlot
+            postMain(Runnable {
+                if (gen != itemsGen.get() || activeItemTabName() != tab) return@Runnable
+                itemRows = rows
+                itemValues = values
+                loadedItemTab = tab
+                loadingItems = false
+                activeSaveSlot = slot
+            })
         }
     }
 
@@ -473,6 +661,7 @@ class OracleUi(private val host: Host) {
         when (item) {
             RailItem.SAVE, RailItem.LOAD -> { refreshStates(); slotIndex = 0 }
             RailItem.ITEMS -> { listIndex = 0; bitIndex = 0; refreshItems() }
+            RailItem.SETTINGS -> { listIndex = 0; refreshMenuMeta() }
             else -> listIndex = 0
         }
         inPanel = true
@@ -509,8 +698,11 @@ class OracleUi(private val host: Host) {
             }
             if (key == Key.UP || key == Key.DOWN) {
                 status = ""
-                if (railItem == RailItem.ITEMS) {
-                    refreshItems()
+                when (railItem) {
+                    RailItem.ITEMS -> refreshItems()
+                    RailItem.SAVE, RailItem.LOAD -> refreshStates()
+                    RailItem.SETTINGS -> refreshMenuMeta()
+                    else -> {}
                 }
             }
             return
@@ -542,8 +734,12 @@ class OracleUi(private val host: Host) {
                         return
                     }
                     ask("Reset console?", "Unsaved progress since your last in-game save will be lost.", "Reset") {
-                        host.resetConsole()
-                        close()
+                        work("Resetting console…", {
+                            host.resetConsole()
+                            null
+                        }) { problem ->
+                            if (problem == null) close() else status = problem
+                        }
                     }
                 }
                 "home" -> {
@@ -583,14 +779,21 @@ class OracleUi(private val host: Host) {
     }
 
     private fun saveSlot(entry: SaveStateSlots.Entry) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
         val slot = entry.slot
         if (slot == SaveStateSlots.AUTO_SLOT) {
             status = "The auto-save is written by the emulator. Pick slot 1–10."
             return
         }
-        val build = currentBuildId()
         val doSave = {
+            val gen = statesGen.incrementAndGet()
+            var loaded: List<SaveStateSlots.Entry>? = null
+            var build = ""
             work("Saving slot $slot…", {
+                build = currentBuildId()
                 if (!MesenNative.saveState(slot)) {
                     "Slot $slot did not save."
                 } else {
@@ -598,10 +801,15 @@ class OracleUi(private val host: Host) {
                     if (path != null && build.isNotEmpty()) {
                         SaveStateSlots.writeBuild(File(path), build)
                     }
+                    loaded = loadStatesSnapshot()
                     null
                 }
             }) { problem ->
-                refreshStates()
+                val list = loaded
+                if (list != null && gen == statesGen.get()) {
+                    states = list
+                    loadingStates = false
+                }
                 status = problem ?: if (build.isNotEmpty()) "Saved slot $slot ($build)." else "Saved slot $slot."
             }
         }
@@ -609,15 +817,22 @@ class OracleUi(private val host: Host) {
     }
 
     private fun loadSlot(entry: SaveStateSlots.Entry) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
         if (!entry.occupied) {
             status = "Slot ${entry.slot} is empty."
             return
         }
-        val warning = mismatchWarnings.check(entry, currentBuildId())
         val name = slotName(entry.slot)
-        work("Loading $name…", { if (loadEntry(entry)) null else "The $name did not load." }) { problem ->
+        var warning: String? = null
+        work("Loading $name…", {
+            warning = mismatchWarnings.check(entry, currentBuildId())
+            if (loadEntry(entry)) null else "The $name did not load."
+        }) { problem ->
             if (problem == null) {
-                if (warning != null) host.toast(warning)
+                if (warning != null) host.toast(warning!!)
                 close()
             } else {
                 status = problem
@@ -629,9 +844,21 @@ class OracleUi(private val host: Host) {
         val file = entry.file
         if (!entry.occupied || file == null) return
         ask("Delete slot ${entry.slot}?", "Removes ${caption(entry)}. This cannot be undone.", "Delete") {
-            val ok = SaveStateSlots.delete(file)
-            refreshStates()
-            status = if (ok) "Deleted slot ${entry.slot}." else "Could not delete slot ${entry.slot}."
+            val gen = statesGen.incrementAndGet()
+            var loaded: List<SaveStateSlots.Entry>? = null
+            var ok = false
+            work("Deleting slot ${entry.slot}…", {
+                ok = SaveStateSlots.delete(file)
+                loaded = loadStatesSnapshot()
+                null
+            }) { problem ->
+                val list = loaded
+                if (list != null && gen == statesGen.get()) {
+                    states = list
+                    loadingStates = false
+                }
+                status = problem ?: if (ok) "Deleted slot ${entry.slot}." else "Could not delete slot ${entry.slot}."
+            }
         }
     }
 
@@ -640,18 +867,21 @@ class OracleUi(private val host: Host) {
             status = "Emulator is still starting."
             return
         }
-        val slot = Progression.activeSlot(Progression.LIVE)
+        val slot = activeSaveSlot
         ask(
             "Warp to ${cp.label}?",
             "Replaces save slot $slot progress up to beat ${cp.beat}. Items not named by the preset stay as they are.",
             "Warp",
         ) {
-            val problem = Progression.idleProblem(Progression.LIVE)
-            if (problem != null) {
-                status = problem
-            } else {
-                close()
-                host.startCheckpoint(cp.id)
+            work("Checking game state…", {
+                Progression.idleProblem(Progression.LIVE)
+            }) { problem ->
+                if (problem != null) {
+                    status = problem
+                } else {
+                    close()
+                    host.startCheckpoint(cp.id)
+                }
             }
         }
     }
@@ -662,17 +892,41 @@ class OracleUi(private val host: Host) {
             return
         }
         if (preset.inPlace) {
-            status = PresetData.applyInPlace(preset, Progression.LIVE)
-            refreshItems()
+            val tab = activeItemTabName()
+            val rows = itemRows
+            val gen = itemsGen.incrementAndGet()
+            var applyMsg = ""
+            var refreshedValues: List<Int>? = null
+            var slot = activeSaveSlot
+            work("Applying ${preset.name}…", {
+                applyMsg = PresetData.applyInPlace(preset, Progression.LIVE)
+                slot = Progression.activeSlot(Progression.LIVE)
+                if (tab != TAB_PRESETS) {
+                    refreshedValues = rows.map { Inventory.read(it, Inventory.LIVE) }
+                }
+                null
+            }) { problem ->
+                activeSaveSlot = slot
+                val vals = refreshedValues
+                if (vals != null && gen == itemsGen.get() && activeItemTabName() == tab) {
+                    itemValues = vals
+                    loadedItemTab = tab
+                    loadingItems = false
+                }
+                status = problem ?: applyMsg
+            }
             return
         }
-        val problem = Progression.idleProblem(Progression.LIVE)
-        if (problem != null) {
-            status = problem
-            return
+        work("Checking game state…", {
+            Progression.idleProblem(Progression.LIVE)
+        }) { problem ->
+            if (problem != null) {
+                status = problem
+            } else {
+                close()
+                host.startPreset(preset.id)
+            }
         }
-        close()
-        host.startPreset(preset.id)
     }
 
     private fun itemsKey(key: Key) {
@@ -715,9 +969,27 @@ class OracleUi(private val host: Host) {
                     status = "Emulator is still starting."
                     return
                 }
-                val result = Inventory.step(row, Inventory.LIVE, if (key == Key.LEFT) -1 else 1)
-                if (result != null) status = result
-                refreshItems()
+                val dir = if (key == Key.LEFT) -1 else 1
+                val gen = itemsGen.incrementAndGet()
+                var resultMsg: String? = null
+                var refreshedValues: List<Int>? = null
+                work("Updating ${row.label}…", {
+                    resultMsg = Inventory.step(row, Inventory.LIVE, dir)
+                    refreshedValues = rows.map { Inventory.read(it, Inventory.LIVE) }
+                    null
+                }) { problem ->
+                    val vals = refreshedValues
+                    if (vals != null && gen == itemsGen.get() && activeItemTabName() == tab) {
+                        itemValues = vals
+                        loadedItemTab = tab
+                        loadingItems = false
+                    }
+                    if (problem != null) {
+                        status = problem
+                    } else if (resultMsg != null) {
+                        status = resultMsg!!
+                    }
+                }
             }
             Key.A -> {
                 val row = rows.getOrNull(listIndex) ?: return
@@ -725,8 +997,23 @@ class OracleUi(private val host: Host) {
                     status = "Emulator is still starting."
                     return
                 }
-                status = Inventory.toggle(row, Inventory.LIVE, bitIndex)
-                refreshItems()
+                val bit = bitIndex
+                val gen = itemsGen.incrementAndGet()
+                var toggleMsg = ""
+                var refreshedValues: List<Int>? = null
+                work("Updating ${row.label}…", {
+                    toggleMsg = Inventory.toggle(row, Inventory.LIVE, bit)
+                    refreshedValues = rows.map { Inventory.read(it, Inventory.LIVE) }
+                    null
+                }) { problem ->
+                    val vals = refreshedValues
+                    if (vals != null && gen == itemsGen.get() && activeItemTabName() == tab) {
+                        itemValues = vals
+                        loadedItemTab = tab
+                        loadingItems = false
+                    }
+                    status = problem ?: toggleMsg
+                }
             }
             else -> {}
         }
@@ -741,11 +1028,11 @@ class OracleUi(private val host: Host) {
             } catch (e: Exception) {
                 "Failed: ${e.message ?: e.javaClass.simpleName}"
             }
-            main.post {
+            postMain(Runnable {
                 busy = false
                 status = ""
                 done(result)
-            }
+            })
         }
     }
 
@@ -778,7 +1065,11 @@ class OracleUi(private val host: Host) {
             Spacer(Modifier.height(10.dp))
             if (cards.isEmpty()) {
                 Box(Modifier.fillMaxWidth().height(232.dp).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL), Alignment.Center) {
-                    Txt("No ROMs found in files/Roms/, OracleOfSecrets/, or snes/.", 13.sp, Pal.DIM)
+                    Txt(
+                        if (loadingLibrary) "Scanning ROMs…" else "No ROMs found in files/Roms/, OracleOfSecrets/, or snes/.",
+                        13.sp,
+                        Pal.DIM,
+                    )
                 }
             } else {
                 LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(232.dp)) {
@@ -819,7 +1110,7 @@ class OracleUi(private val host: Host) {
             HintBar(
                 if (status.isNotEmpty()) status else null,
                 listOf("A / START" to "Play", "D-PAD" to "Browse") +
-                    if (host.nativeReady() && host.currentRomPath() != null) listOf("B" to "Back to game") else emptyList(),
+                    if (host.nativeReady() && hasCurrentRom) listOf("B" to "Back to game") else emptyList(),
             )
         }
     }
@@ -852,7 +1143,7 @@ class OracleUi(private val host: Host) {
                 Column(Modifier.width(206.dp).fillMaxHeight().background(Pal.PANEL).padding(horizontal = 10.dp)) {
                     Spacer(Modifier.height(12.dp))
                     Txt("PAUSED", 11.sp, Pal.GOLD, bold = true, italic = true)
-                    Txt(currentTitle(), 17.sp, Pal.TEXT, bold = true)
+                    Txt(menuTitle, 17.sp, Pal.TEXT, bold = true)
                     Spacer(Modifier.height(10.dp))
                     RailItem.values().forEachIndexed { i, r -> RailRow(r, i == rail) }
                 }
@@ -897,6 +1188,10 @@ class OracleUi(private val host: Host) {
 
     @Composable
     private fun SlotGrid(saving: Boolean) {
+        if (states.isEmpty() && loadingStates) {
+            Txt("Loading save states…", 13.sp, Pal.DIM)
+            return
+        }
         val slots = pageSlots
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             for (row in 0 until 2) {
@@ -986,15 +1281,17 @@ class OracleUi(private val host: Host) {
                 LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     itemsIndexed(itemRows) { i, row ->
                         val value = itemValues.getOrElse(i) { -1 }
+                        val pending = loadingItems && i >= itemValues.size
                         val selected = inPanel && i == listIndex
                         if (row.kind == Inventory.Kind.BITS) {
-                            BitsRow(row, value, selected, bitIndex)
+                            BitsRow(row, value, selected, bitIndex, pending)
                         } else {
-                            val tag = when (row.kind) {
-                                Inventory.Kind.ACTION -> "apply"
+                            val tag = when {
+                                row.kind == Inventory.Kind.ACTION -> "apply"
+                                pending -> "…"
                                 else -> Inventory.valueText(row, value)
                             }
-                            val color = if (row.kind != Inventory.Kind.ACTION && value > 0) Pal.TEAL else Pal.DIM
+                            val color = if (row.kind != Inventory.Kind.ACTION && !pending && value > 0) Pal.TEAL else Pal.DIM
                             ListRow(row.label, tag, selected, tagColor = color)
                         }
                     }
@@ -1004,7 +1301,7 @@ class OracleUi(private val host: Host) {
     }
 
     @Composable
-    private fun BitsRow(row: Inventory.Row, value: Int, selected: Boolean, focusBit: Int) {
+    private fun BitsRow(row: Inventory.Row, value: Int, selected: Boolean, focusBit: Int, pending: Boolean = false) {
         Row(
             Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(8.dp))
                 .background(if (selected) Pal.PANEL2 else Pal.PANEL)
@@ -1013,7 +1310,7 @@ class OracleUi(private val host: Host) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.weight(1f)) { Txt(row.label, 13.sp, Pal.TEXT, bold = true) }
-            Txt(Inventory.valueText(row, value), 11.sp, if (value > 0) Pal.TEAL else Pal.DIM, bold = true)
+            Txt(if (pending) "…" else Inventory.valueText(row, value), 11.sp, if (!pending && value > 0) Pal.TEAL else Pal.DIM, bold = true)
             Spacer(Modifier.width(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 for (bit in 7 downTo 0) {
@@ -1049,7 +1346,8 @@ class OracleUi(private val host: Host) {
                 }
             }
             Spacer(Modifier.height(6.dp))
-            Txt("ADB socket: ${host.socketSummary()}", 11.sp, Pal.TEAL, bold = true)
+            val socket = socketMeta.ifEmpty { "tcp://127.0.0.1:${StatusManifest.PORT}" }
+            Txt("ADB socket: $socket", 11.sp, Pal.TEAL, bold = true)
         }
     }
 
@@ -1156,8 +1454,8 @@ class OracleUi(private val host: Host) {
 
     // ---- text helpers ------------------------------------------------------
 
-    private fun currentTitle(): String {
-        val path = host.currentRomPath() ?: return "No ROM"
+    private fun computeTitle(path: String?): String {
+        if (path.isNullOrEmpty()) return "No ROM"
         val file = File(path)
         val parsed = RomLibrary.parse(file)
         val build = RomLibrary.buildId(file)
@@ -1176,12 +1474,12 @@ class OracleUi(private val host: Host) {
         RailItem.ITEMS -> {
             val tab = activeItemTabName()
             if (tab == TAB_PRESETS) {
-                "Save slot ${Progression.activeSlot(Progression.LIVE)}"
+                "Save slot $activeSaveSlot"
             } else {
                 tab
             }
         }
-        RailItem.SETTINGS -> host.socketSummary()
+        RailItem.SETTINGS -> socketMeta.ifEmpty { "tcp://127.0.0.1:${StatusManifest.PORT}" }
         else -> ""
     }
 
@@ -1246,6 +1544,11 @@ class OracleUi(private val host: Host) {
     companion object {
         private const val TAB_PRESETS = "Presets"
 
+        private fun mainPoster(): (Runnable) -> Unit {
+            val main = Handler(Looper.getMainLooper())
+            return { r -> main.post(r) }
+        }
+
         private fun clock(ms: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(ms))
 
         private fun whenText(ms: Long): String {
@@ -1267,6 +1570,15 @@ class OracleUi(private val host: Host) {
 
         private val previewCache = HashMap<String, ImageBitmap?>()
 
+        private fun cachedPreview(file: File?, modified: Long): Pair<Boolean, ImageBitmap?> {
+            if (file == null) return true to null
+            val key = "${file.path}@$modified"
+            synchronized(previewCache) {
+                if (previewCache.containsKey(key)) return true to previewCache[key]
+            }
+            return false to null
+        }
+
         private fun loadPreview(file: File, modified: Long): ImageBitmap? {
             val key = "${file.path}@$modified"
             synchronized(previewCache) { if (previewCache.containsKey(key)) return previewCache[key] }
@@ -1285,8 +1597,13 @@ class OracleUi(private val host: Host) {
 
         @Composable
         private fun rememberPreview(file: File?, modified: Long): ImageBitmap? {
-            val state = produceState<ImageBitmap?>(null, file?.path, modified) {
-                value = if (file == null) null else withContext(Dispatchers.IO) { loadPreview(file, modified) }
+            val (hit, cached) = cachedPreview(file, modified)
+            val state = produceState<ImageBitmap?>(cached, file?.path, modified) {
+                if (!hit && file != null) {
+                    value = withContext(Dispatchers.IO) { loadPreview(file, modified) }
+                } else if (hit) {
+                    value = cached
+                }
             }
             return state.value
         }

@@ -45,6 +45,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String TAG = "MesenActivity";
@@ -95,23 +97,35 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     };
 
     private StatusManifest mStatusManifest;
+    private StatusWriter mStatusWriter;
     private CheckpointData mCheckpointData;
     private PresetData mPresetData;
     private OracleUi mUi;
     private ComposeView mUiView;
     private ComposeHost mComposeHost;
 
-    private boolean mDestroyed;
-    private boolean mNativeReady;
-    private boolean mUiVisible;
+    private final ExecutorService mNativeControlExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "oos-native-ctrl");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ExecutorService mBgExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "oos-activity-bg");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private volatile boolean mDestroyed;
+    private volatile boolean mNativeReady;
+    private volatile boolean mUiVisible;
     private volatile boolean mProgressionBusy;
     private boolean mStickyFast;
     private int mUiHatY;
     private int mUiHatX;
-    private boolean mKeepHud;
-    private boolean mFillScreen;
-    private boolean mSmoothPlay;
-    private boolean mPreferGpu;
+    private volatile boolean mKeepHud;
+    private volatile boolean mFillScreen;
+    private volatile boolean mSmoothPlay;
+    private volatile boolean mPreferGpu;
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
@@ -181,6 +195,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         applyImmersive();
         requestPlaybackFocus();
         mStatusManifest = new StatusManifest(this);
+        mStatusWriter = new StatusWriter(rawJson -> mStatusManifest.write(new JSONObject(rawJson)));
         String warpsJson = readAssetText(CheckpointData.WARPS_ASSET);
         mCheckpointData = CheckpointData.parse(
                 readAssetText(CheckpointData.CHECKPOINTS_ASSET),
@@ -218,6 +233,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             sInstance = null;
         }
         mHandler.removeCallbacksAndMessages(null);
+        if (mStatusWriter != null) {
+            mStatusWriter.shutdown();
+        }
+        mNativeControlExecutor.shutdown();
+        mBgExecutor.shutdown();
         if (mHomeReceiverRegistered) {
             unregisterReceiver(mHomeReceiver);
             mHomeReceiverRegistered = false;
@@ -288,14 +308,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         setIntent(intent);
         applyIntentPrefs(intent);
         if (intent != null) {
-            String rom = intent.getStringExtra("rom");
+            final String rom = intent.getStringExtra("rom");
             if (rom != null && !rom.isEmpty() && mNativeReady) {
-                seedBatterySave(rom);
-                if (MesenNative.loadRom(rom)) {
-                    rememberRom(rom);
-                    applyPerformanceMode();
-                    refreshHud();
-                }
+                mBgExecutor.execute(() -> {
+                    if (!mDestroyed) {
+                        bootRom(rom);
+                    }
+                });
             }
         }
     }
@@ -571,7 +590,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             mHud.setVisibility(View.GONE);
         }
         if (mNativeReady) {
-            MesenNative.pauseEmu();
+            mNativeControlExecutor.execute(() -> {
+                if (mNativeReady && !mDestroyed && mUiVisible) {
+                    MesenNative.pauseEmu();
+                }
+            });
         }
     }
 
@@ -584,7 +607,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             mUiView.setVisibility(View.GONE);
         }
         if (mNativeReady) {
-            MesenNative.resumeEmu();
+            mNativeControlExecutor.execute(() -> {
+                if (mNativeReady && !mDestroyed && !mUiVisible) {
+                    MesenNative.resumeEmu();
+                }
+            });
         }
         setSurfaceFocusable(true);
         updateFastForward();
@@ -596,20 +623,33 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     public boolean bootRom(String path) {
-        if (!mNativeReady) {
+        if (!mNativeReady || mDestroyed) {
             return false;
         }
         BatterySaveSeed.Status seeded = seedBatterySave(path);
         if (seeded == BatterySaveSeed.Status.SEEDED) {
-            Toast.makeText(this, "Imported " + BatterySaveSeed.sidecar(new File(path)).getName(),
-                    Toast.LENGTH_SHORT).show();
+            File sidecar = BatterySaveSeed.sidecar(new File(path));
+            if (sidecar != null) {
+                final String msg = "Imported " + sidecar.getName();
+                mHandler.post(() -> {
+                    if (!mDestroyed) {
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
         }
         if (!MesenNative.loadRom(path)) {
             return false;
         }
         rememberRom(path);
         applyPerformanceMode();
-        refreshHud();
+        // Warm ROM SHA1 cache off the main thread before refreshHud() runs.
+        MesenNative.statusJson(false);
+        mHandler.post(() -> {
+            if (!mDestroyed) {
+                refreshHud();
+            }
+        });
         return true;
     }
 
@@ -914,7 +954,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             json.put("observedFpsState",
                     paused ? (observedFps == null ? "paused" : "last_running")
                             : (observedFps == null ? "measuring" : "live"));
-            int agents = mStatusManifest != null ? mStatusManifest.agentCount() : 0;
+            int agents = mStatusManifest != null ? mStatusManifest.cachedAgentCount() : 0;
             String endpoint = mStatusManifest != null ? mStatusManifest.adbEndpoint() : socket;
             String agentBit = agents > 0 ? (agents + " agents") : "ready";
             mHudSocket.setText(socket + (pad ? " · pad" : " · no pad"));
@@ -923,10 +963,93 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                         + "  ·  " + performance + "  ·  " + agentBit);
                 mHudLink.setVisibility(mKeepHud ? View.VISIBLE : View.GONE);
             }
-            if (mStatusManifest != null) {
-                mStatusManifest.write(json);
+            if (mStatusWriter != null) {
+                mStatusWriter.enqueue(json);
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Single-daemon-thread coalescing status manifest writer. Callers snapshot
+     * JSON immediately on enqueue; while a disk write is in flight, newer
+     * snapshots overwrite the single pending slot so writes stay bounded,
+     * thread-safe, and chronologically ordered without stalling the UI thread.
+     */
+    static final class StatusWriter {
+        interface Sink {
+            void write(String snapshotJson) throws Exception;
+        }
+
+        private final Sink mSink;
+        private final Object mLock = new Object();
+        private String mPendingJson;
+        private boolean mStopped;
+        private final Thread mThread;
+
+        StatusWriter(Sink sink) {
+            mSink = sink;
+            mThread = new Thread(this::runLoop, "oos-status-writer");
+            mThread.setDaemon(true);
+            mThread.start();
+        }
+
+        void enqueue(JSONObject json) {
+            if (json == null) {
+                return;
+            }
+            enqueueSnapshot(json.toString());
+        }
+
+        void enqueueSnapshot(String snapshotJson) {
+            if (snapshotJson == null) {
+                return;
+            }
+            synchronized (mLock) {
+                if (mStopped) {
+                    return;
+                }
+                mPendingJson = snapshotJson;
+                mLock.notifyAll();
+            }
+        }
+
+        void shutdown() {
+            synchronized (mLock) {
+                mStopped = true;
+                mPendingJson = null;
+                mLock.notifyAll();
+            }
+        }
+
+        boolean isAlive() {
+            return mThread.isAlive();
+        }
+
+        private void runLoop() {
+            while (true) {
+                final String next;
+                synchronized (mLock) {
+                    while (mPendingJson == null && !mStopped) {
+                        try {
+                            mLock.wait();
+                        } catch (InterruptedException ignored) {
+                            if (mStopped) {
+                                return;
+                            }
+                        }
+                    }
+                    if (mStopped) {
+                        return;
+                    }
+                    next = mPendingJson;
+                    mPendingJson = null;
+                }
+                try {
+                    mSink.write(next);
+                } catch (Throwable ignored) {
+                }
+            }
         }
     }
 

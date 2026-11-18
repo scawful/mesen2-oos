@@ -25,6 +25,7 @@ final class StatusManifest {
 
     private final Context mContext;
     private long mLastWriteMs;
+    private volatile int mCachedAgentCount;
 
     StatusManifest(Context context) {
         mContext = context.getApplicationContext();
@@ -34,27 +35,32 @@ final class StatusManifest {
         return "tcp://127.0.0.1:" + PORT;
     }
 
+    int cachedAgentCount() {
+        return mCachedAgentCount;
+    }
+
     int agentCount() {
         File status = new File(mContext.getFilesDir(), "mesen2-tcp-" + PORT + ".status");
-        if (!status.isFile() || status.length() > 64 * 1024) {
-            return 0;
-        }
-        try (FileInputStream in = new FileInputStream(status)) {
-            byte[] raw = new byte[(int) status.length()];
-            int off = 0;
-            while (off < raw.length) {
-                int n = in.read(raw, off, raw.length - off);
-                if (n < 0) break;
-                off += n;
+        int count = 0;
+        if (status.isFile() && status.length() <= 64 * 1024) {
+            try (FileInputStream in = new FileInputStream(status)) {
+                byte[] raw = new byte[(int) status.length()];
+                int off = 0;
+                while (off < raw.length) {
+                    int n = in.read(raw, off, raw.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+                count = new JSONObject(new String(raw, 0, off, StandardCharsets.UTF_8)).optInt("registeredAgents", 0);
+            } catch (Exception ignored) {
             }
-            return new JSONObject(new String(raw, 0, off, StandardCharsets.UTF_8)).optInt("registeredAgents", 0);
-        } catch (Exception ignored) {
-            return 0;
         }
+        mCachedAgentCount = count;
+        return count;
     }
 
     /** Throttled to one write per 1.5 s. */
-    void write(JSONObject status) {
+    synchronized void write(JSONObject status) {
         long now = System.currentTimeMillis();
         if (now - mLastWriteMs < 1500) {
             return;
