@@ -46,8 +46,8 @@ android {
         targetSdk 30
         // Shipping = PGO optimize (must outrank generate + non-PGO handheld).
         // generate is lower so train installs can replace shipping with -d.
-        versionCode pgoMode == "optimize" ? 1782 : (pgoMode == "generate" ? 1781 : 1780)
-        versionName pgoMode == "optimize" ? "0.1.46-b59-sync-pgo" : (pgoMode == "generate" ? "0.1.46-b59-sync-pgo-gen" : "0.1.46-b59-sync")
+        versionCode pgoMode == "optimize" ? 1792 : (pgoMode == "generate" ? 1791 : 1790)
+        versionName pgoMode == "optimize" ? "0.1.47-pgo" : (pgoMode == "generate" ? "0.1.47-pgo-gen" : "0.1.47")
         ndk {
             abiFilters 'arm64-v8a'
         }
@@ -101,6 +101,16 @@ android {
         }
     }
 }
+
+def oracleDebugDir = rootProject.file("../../oracle-of-secrets/Data/debug")
+tasks.register("syncOracleData", Copy) {
+    onlyIf { oracleDebugDir.isDirectory() }
+    from(oracleDebugDir) {
+        include "checkpoints.json", "warps.json"
+    }
+    into file("src/main/assets/oracle")
+}
+preBuild.dependsOn("syncOracleData")
 
 dependencies {
     // Compose launcher + pause menu (ui/OracleUi.kt). No Material: the UI draws its own styles.

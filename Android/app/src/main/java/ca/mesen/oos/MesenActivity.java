@@ -1,28 +1,23 @@
 package ca.mesen.oos;
 
-import android.Manifest;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Color;
-import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.net.Uri;
-import android.Manifest;
-import android.content.pm.PackageManager;
-import android.media.AudioManager;
 import android.os.Build;
-import android.widget.Toast;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.InputDevice;
@@ -32,11 +27,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
-import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -46,13 +38,13 @@ import org.json.JSONObject;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLControllerManager;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String TAG = "MesenActivity";
@@ -65,117 +57,54 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
-    private static final int ACCENT = Color.parseColor("#70B7FF");
+    private static final String ACTION_DUMP_PGO = "ca.mesen.oos.DUMP_PGO";
+
     private static final int TEXT_PRIMARY = Color.parseColor("#EDF0F5");
+    private static final int GOLD = Color.parseColor("#E8C35A");
+    private static final int TEAL = Color.parseColor("#4FB3A9");
+
     private static MesenActivity sInstance;
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
-    private final ExecutorService mArtifactExecutor = Executors.newSingleThreadExecutor();
-    private final List<View> mBusyDisabledViews = new ArrayList<>();
-    // Keep runtime identity/performance fresh even when the compact HUD is
-    // hidden. HUD visibility is a presentation preference, not a telemetry
-    // switch for Workshop captures.
+    private final FrameRateTracker mFrameRateTracker = new FrameRateTracker();
+    private final FrameRateTracker mPresentRateTracker = new FrameRateTracker();
+
+    // Keep runtime telemetry fresh even when the compact top HUD is hidden.
     private final Runnable mStatusPoller = new Runnable() {
         @Override
         public void run() {
             if (mDestroyed) {
                 return;
             }
-            if (!mPauseVisible) {
+            if (!mUiVisible) {
                 refreshHud();
             }
             mHandler.postDelayed(this, 1000);
         }
     };
-    private final Runnable mPadPoller = new Runnable() {
-        @Override
-        public void run() {
-            if (!mPauseVisible) {
-                return;
-            }
-            setSurfaceFocusable(false);
-            View focused = getCurrentFocus();
-            if (isArtifactEditor(focused)) {
-                refreshHud();
-                mHandler.postDelayed(this, 180);
-                return;
-            }
-            List<View> focusables = pauseFocusables();
-            if (!mArtifactBusy && !focusables.isEmpty() && focusables.indexOf(focused) < 0) {
-                focusPauseView(focusables.get(0));
-            }
-            refreshHud();
-            mHandler.postDelayed(this, 180);
-        }
-    };
-    private View mHud;
-    private View mPauseScrim;
+
+    private LinearLayout mHud;
     private TextView mHudRom;
     private TextView mHudSocket;
     private TextView mHudLink;
-    private TextView mPauseStatus;
-    private TextView mPausePad;
-    private TextView mWorkshopLink;
-    private TextView mWorkshopMeta;
-    private TextView mHomeStatus;
-    private Button mChipHud;
-    private Button mChipFit;
-    private Button mChipPlay;
-    private Button mChipGpu;
-    private LinearLayout mRomList;
-    private ScrollView mRomScroller;
-    private TextView mArtifactBuild;
-    private TextView mArtifactStatus;
-    private EditText mArtifactTitle;
-    private EditText mArtifactNote;
-    private LinearLayout mBugCategories;
-    private LinearLayout mCheckpointList;
-    private ScrollView mCheckpointScroller;
-    private View mRestoreReview;
-    private TextView mRestoreDescription;
-    private LinearLayout mStateList;
-    private ScrollView mStateScroller;
-    private View mStateReview;
-    private TextView mStateDescription;
-    private Button mStateSave;
-    private Button mStateLoad;
-    private Button mTabPlay;
-    private Button mTabStates;
-    private Button mTabCapture;
-    private Button mTabCheats;
-    private Button mTabSetup;
-    private View mPanelPlay;
-    private View mPanelStates;
-    private View mPanelCheats;
-    private View mPanelCapture;
-    private View mPanelSetup;
-    private LinearLayout mCheatGroups;
-    private LinearLayout mCheatList;
-    private TextView mCheatStatus;
-    private final java.util.Map<String, Integer> mMenuSelection = new java.util.HashMap<>();
-    private String mCheatGroup = WorkshopCheats.GROUP_QUICK;
-    private static final long PROGRESSION_CONFIRM_MS = 4000;
-    private String mProgressionArmed;
-    private long mProgressionArmedAt;
-    private volatile boolean mProgressionBusy;
-    private Button mVoiceButton;
-    private WorkshopVoiceRecorder mVoiceRecorder;
-    private WorkshopVoiceNote.Session mVoiceSession;
-    private final Runnable mVoiceAutoStop = this::stopVoiceNote;
-    private static final int REQ_RECORD_AUDIO = 4401;
-    private WorkshopArtifacts mArtifacts;
-    private WorkshopArtifacts.Entry mSelectedCheckpoint;
-    private SaveStateSlots.Entry mSelectedState;
-    private boolean mArtifactBusy;
-    private boolean mDestroyed;
-    private boolean mPauseVisible;
-    private int mPauseTab;
-    private boolean mNativeReady;
-    // Compose Library + quick menu. The legacy overlay stays as Workshop.
+    private TextView mNoteView;
+    private final Runnable mHideNote = () -> {
+        if (mNoteView != null) {
+            mNoteView.setVisibility(View.GONE);
+        }
+    };
+
+    private StatusManifest mStatusManifest;
+    private CheckpointData mCheckpointData;
+    private PresetData mPresetData;
     private OracleUi mUi;
     private ComposeView mUiView;
     private ComposeHost mComposeHost;
+
+    private boolean mDestroyed;
+    private boolean mNativeReady;
     private boolean mUiVisible;
+    private volatile boolean mProgressionBusy;
     private boolean mStickyFast;
     private int mUiHatY;
     private int mUiHatX;
@@ -186,30 +115,22 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
-    private int mPauseHatLatch;
-    private int mPauseHatXLatch;
-    private final FrameRateTracker mFrameRateTracker = new FrameRateTracker();
-    private final FrameRateTracker mPresentRateTracker = new FrameRateTracker();
-    private WorkshopLink mWorkshop;
-    private static final String ACTION_DUMP_PGO = "ca.mesen.oos.DUMP_PGO";
-    private static final int TAB_PLAY = 0;
-    private static final int TAB_STATES = 1;
-    private static final int TAB_CHEATS = 2;
-    private static final int TAB_CAPTURE = 3;
-    private static final int TAB_SETUP = 4;
+
     private boolean mHomeReceiverRegistered;
     private boolean mPgoDumpReceiverRegistered;
     private String mHomeRequestToken;
+
     private final BroadcastReceiver mHomeReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (HOME_SHORTCUT_PINNED.equals(intent.getAction()) && mHomeRequestToken != null
                     && mHomeRequestToken.equals(intent.getStringExtra(HOME_REQUEST_TOKEN))) {
                 mHomeRequestToken = null;
-                setHomeStatus(R.string.home_added);
+                Toast.makeText(MesenActivity.this, R.string.home_added, Toast.LENGTH_LONG).show();
             }
         }
     };
+
     private final BroadcastReceiver mPgoDumpReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -259,24 +180,29 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         super.onCreate(savedInstanceState);
         applyImmersive();
         requestPlaybackFocus();
-        mWorkshop = new WorkshopLink(this);
-        mArtifacts = new WorkshopArtifacts(this);
+        mStatusManifest = new StatusManifest(this);
+        String warpsJson = readAssetText(CheckpointData.WARPS_ASSET);
+        mCheckpointData = CheckpointData.parse(
+                readAssetText(CheckpointData.CHECKPOINTS_ASSET),
+                warpsJson);
+        mPresetData = PresetData.parse(
+                readAssetText(PresetData.PRESETS_ASSET),
+                mCheckpointData,
+                warpsJson);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         mKeepHud = prefs.getBoolean(PREF_HUD, false);
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
         mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
-        attachOverlay();
+        attachHud();
+        attachOracleUi();
         applyIntentPrefs(getIntent());
-        // Do not collapse the shade here — StatusBarManager.collapsePanels during
-        // first resume races WindowManager and pauses the activity before the
-        // SDL SurfaceView ever receives surfaceChanged.
+        // Delay shade collapse until after SurfaceView binds.
         startNativeIfNeeded();
         mHandler.post(this::startNativeIfNeeded);
         for (int delayMs : new int[] {250, 500, 1000, 2000, 4000}) {
             mHandler.postDelayed(this::startNativeIfNeeded, delayMs);
         }
-        // Collapse after the surface has had time to bind.
         mHandler.postDelayed(this::collapseNotificationShade, 600);
         mHandler.postDelayed(this::markNativeReady, 1200);
         mHandler.postDelayed(this::refreshHud, 1500);
@@ -288,9 +214,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     protected void onDestroy() {
         mDestroyed = true;
-        cancelVoiceNote(false);
-        // Let an in-flight artifact finish writing; never interrupt a state save.
-        mArtifactExecutor.shutdown();
         if (sInstance == this) {
             sInstance = null;
         }
@@ -326,11 +249,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         keepVisibleScreenOn();
         applyImmersive();
         startNativeIfNeeded();
-        // Delay shade collapse so the first SurfaceView bind can complete.
         mHandler.postDelayed(this::collapseNotificationShade, 400);
-        if (mWorkshop != null) {
-            mWorkshop.refresh(true);
-        }
         if (mComposeHost != null) {
             mComposeHost.onResume();
         }
@@ -346,7 +265,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             try {
                 MesenNative.dumpPgoProfile();
             } catch (UnsatisfiedLinkError ignored) {
-                // Non-instrumented builds omit the symbol.
             }
         }
         super.onPause();
@@ -367,12 +285,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (mArtifactBusy) {
-            if (intent != null && intent.hasExtra("rom")) {
-                Toast.makeText(this, R.string.artifact_wait, Toast.LENGTH_LONG).show();
-            }
-            return;
-        }
         setIntent(intent);
         applyIntentPrefs(intent);
         if (intent != null) {
@@ -392,8 +304,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     public void onBackPressed() {
         if (mUiVisible) {
             mUi.onBack();
-        } else if (mPauseVisible) {
-            handlePauseBack();
         } else {
             openQuickMenu();
         }
@@ -406,8 +316,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             if (event.getAction() == KeyEvent.ACTION_UP) {
                 if (mUiVisible) {
                     mUi.onBack();
-                } else if (mPauseVisible) {
-                    handlePauseBack();
                 } else {
                     openQuickMenu();
                 }
@@ -415,67 +323,18 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return true;
         }
         if (mUiVisible) {
-            // Same reason as the legacy overlay: keep SDL's pad state current
-            // so the game does not see a stuck button after the menu closes.
+            // Keep SDL's pad state current so the game does not see a stuck button after closing.
             forwardPadToSdl(event);
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 mUi.onKey(code, event.getRepeatCount());
             }
             return true;
         }
-        if (!mPauseVisible && code == KeyEvent.KEYCODE_BUTTON_R2) {
+        if (code == KeyEvent.KEYCODE_BUTTON_R2) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 setFastForwardKeyHeld(true);
             } else if (event.getAction() == KeyEvent.ACTION_UP) {
                 setFastForwardKeyHeld(false);
-            }
-            return true;
-        }
-        if (mPauseVisible) {
-            if (mArtifactBusy) {
-                // The confirm DOWN may have started this action. Its matching
-                // UP must still clear SDL's pad state before Continue is used.
-                if (event.getAction() == KeyEvent.ACTION_UP) {
-                    forwardPadToSdl(event);
-                }
-                return true;
-            }
-            // Overlay steals focus from SDLSurface, so pad keys never reach
-            // handleKeyEvent. Forward them ourselves for the live readout.
-            forwardPadToSdl(event);
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                if (code == KeyEvent.KEYCODE_BUTTON_B || code == KeyEvent.KEYCODE_ESCAPE) {
-                    handlePauseBack();
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_BUTTON_A
-                        || code == KeyEvent.KEYCODE_ENTER
-                        || code == KeyEvent.KEYCODE_DPAD_CENTER) {
-                    View focused = getCurrentFocus();
-                    if (focused != null && event.getRepeatCount() == 0) {
-                        focused.performClick();
-                    }
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
-                    if (event.getRepeatCount() == 0) {
-                        boolean left = code == KeyEvent.KEYCODE_BUTTON_L1;
-                        if (mPauseTab == TAB_CHEATS && !railViews().contains(getCurrentFocus())) {
-                            cycleCheatGroup(left);
-                        } else {
-                            cyclePauseTab(left);
-                        }
-                    }
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    movePauseFocus(code == KeyEvent.KEYCODE_DPAD_UP);
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    movePauseFocusHorizontal(code == KeyEvent.KEYCODE_DPAD_LEFT);
-                    return true;
-                }
             }
             return true;
         }
@@ -503,51 +362,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             mUiHatX = dirX;
             return true;
         }
-        if (!mPauseVisible) {
-            if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0) {
-                float trigger = Math.max(
-                        event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
-                        event.getAxisValue(MotionEvent.AXIS_GAS));
-                setFastForwardTriggerHeld(trigger > 0.55f);
-            }
-            return super.dispatchGenericMotionEvent(event);
+        if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0) {
+            float trigger = Math.max(
+                    event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
+                    event.getAxisValue(MotionEvent.AXIS_GAS));
+            setFastForwardTriggerHeld(trigger > 0.55f);
         }
-        if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_DPAD
-                | InputDevice.SOURCE_GAMEPAD)) == 0) {
-            return super.dispatchGenericMotionEvent(event);
-        }
-        SDLControllerManager.handleJoystickMotionEvent(event);
-        if (mArtifactBusy) {
-            // Keep axes/hat releases current while suppressing menu navigation.
-            // Joystick motion does not send the Start/Select pause combo.
-            return true;
-        }
-        float hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
-        float axisY = event.getAxisValue(MotionEvent.AXIS_Y);
-        int dir = 0;
-        if (hatY < -0.5f || axisY < -0.6f) {
-            dir = -1;
-        } else if (hatY > 0.5f || axisY > 0.6f) {
-            dir = 1;
-        }
-        if (dir != 0 && dir != mPauseHatLatch) {
-            movePauseFocus(dir < 0);
-        }
-        mPauseHatLatch = dir;
-
-        float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X);
-        float axisX = event.getAxisValue(MotionEvent.AXIS_X);
-        int dirX = 0;
-        if (hatX < -0.5f || axisX < -0.6f) {
-            dirX = -1;
-        } else if (hatX > 0.5f || axisX > 0.6f) {
-            dirX = 1;
-        }
-        if (dirX != 0 && dirX != mPauseHatXLatch) {
-            movePauseFocusHorizontal(dirX < 0);
-        }
-        mPauseHatXLatch = dirX;
-        return true;
+        return super.dispatchGenericMotionEvent(event);
     }
 
     public static void showPauseFromNative() {
@@ -558,135 +379,85 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         activity.mHandler.post(activity::openQuickMenu);
     }
 
-    private void attachOverlay() {
+    private void attachHud() {
         if (mLayout == null) {
             return;
         }
-        View overlay = getLayoutInflater().inflate(R.layout.oracle_overlay, mLayout, false);
+        float dp = getResources().getDisplayMetrics().density;
+        int padH = Math.round(10 * dp);
+        int padV = Math.round(6 * dp);
+
+        mHud = new LinearLayout(this);
+        mHud.setOrientation(LinearLayout.VERTICAL);
+        mHud.setBackgroundResource(R.drawable.hud_scrim);
+        mHud.setPadding(padH, padV, padH, padV);
+        mHud.setFocusable(false);
+        mHud.setClickable(true);
+        mHud.setOnClickListener(v -> openQuickMenu());
+        mHud.setVisibility(View.GONE);
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView brand = new TextView(this);
+        brand.setText(R.string.hud_brand);
+        brand.setTextColor(GOLD);
+        brand.setTextSize(11);
+        brand.setAllCaps(true);
+        brand.setTypeface(Typeface.DEFAULT_BOLD);
+
+        mHudRom = new TextView(this);
+        mHudRom.setText(R.string.hud_waiting);
+        mHudRom.setTextColor(TEXT_PRIMARY);
+        mHudRom.setTextSize(11);
+        mHudRom.setSingleLine(true);
+        mHudRom.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        LinearLayout.LayoutParams romLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        romLp.setMarginStart(Math.round(12 * dp));
+
+        mHudSocket = new TextView(this);
+        mHudSocket.setText("tcp:" + StatusManifest.PORT);
+        mHudSocket.setTextColor(TEAL);
+        mHudSocket.setTextSize(10);
+        mHudSocket.setTypeface(Typeface.MONOSPACE);
+
+        top.addView(brand);
+        top.addView(mHudRom, romLp);
+        top.addView(mHudSocket);
+
+        mHudLink = new TextView(this);
+        mHudLink.setTextColor(TEAL);
+        mHudLink.setTextSize(10);
+        mHudLink.setTypeface(Typeface.MONOSPACE);
+        mHudLink.setSingleLine(true);
+        mHudLink.setEllipsize(TextUtils.TruncateAt.END);
+        mHudLink.setVisibility(View.GONE);
+
+        mHud.addView(top);
+        mHud.addView(mHudLink);
+
         RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-        );
-        mLayout.addView(overlay, params);
-
-        mPauseScrim = overlay.findViewById(R.id.pause_scrim);
-        mHud = overlay.findViewById(R.id.oracle_hud);
-        mHudRom = overlay.findViewById(R.id.hud_rom);
-        mHudSocket = overlay.findViewById(R.id.hud_socket);
-        mHudLink = overlay.findViewById(R.id.hud_link);
-        mPauseStatus = overlay.findViewById(R.id.pause_status);
-        mPausePad = overlay.findViewById(R.id.pause_pad);
-        mWorkshopLink = overlay.findViewById(R.id.workshop_link);
-        mWorkshopMeta = overlay.findViewById(R.id.workshop_meta);
-        mHomeStatus = overlay.findViewById(R.id.home_status);
-        mChipHud = overlay.findViewById(R.id.btn_hud);
-        mChipFit = overlay.findViewById(R.id.btn_fit);
-        mChipPlay = overlay.findViewById(R.id.btn_play);
-        mChipGpu = overlay.findViewById(R.id.btn_gpu);
-        mRomList = overlay.findViewById(R.id.rom_list);
-        mRomScroller = overlay.findViewById(R.id.rom_scroller);
-        mArtifactBuild = overlay.findViewById(R.id.artifact_build);
-        mArtifactStatus = overlay.findViewById(R.id.artifact_status);
-        mArtifactTitle = overlay.findViewById(R.id.artifact_title);
-        mArtifactNote = overlay.findViewById(R.id.artifact_note);
-        mBugCategories = overlay.findViewById(R.id.bug_categories);
-        mCheckpointList = overlay.findViewById(R.id.checkpoint_list);
-        mCheckpointScroller = overlay.findViewById(R.id.checkpoint_scroller);
-        mRestoreReview = overlay.findViewById(R.id.restore_review);
-        mRestoreDescription = overlay.findViewById(R.id.restore_description);
-        mStateList = overlay.findViewById(R.id.state_list);
-        mStateScroller = overlay.findViewById(R.id.state_scroller);
-        mStateReview = overlay.findViewById(R.id.state_review);
-        mStateDescription = overlay.findViewById(R.id.state_description);
-        mStateSave = overlay.findViewById(R.id.btn_state_save);
-        mStateLoad = overlay.findViewById(R.id.btn_state_load);
-        mTabPlay = overlay.findViewById(R.id.tab_play);
-        mTabStates = overlay.findViewById(R.id.tab_states);
-        mTabCheats = overlay.findViewById(R.id.tab_cheats);
-        mTabCapture = overlay.findViewById(R.id.tab_capture);
-        mTabSetup = overlay.findViewById(R.id.tab_setup);
-        mPanelPlay = overlay.findViewById(R.id.panel_play);
-        mPanelStates = overlay.findViewById(R.id.panel_states);
-        mPanelCheats = overlay.findViewById(R.id.panel_cheats);
-        mPanelCapture = overlay.findViewById(R.id.panel_capture);
-        mPanelSetup = overlay.findViewById(R.id.panel_setup);
-        mCheatGroups = overlay.findViewById(R.id.cheat_groups);
-        mCheatList = overlay.findViewById(R.id.cheat_list);
-        mCheatStatus = overlay.findViewById(R.id.cheat_status);
-
-        overlay.findViewById(R.id.oracle_hud).setOnClickListener(v -> togglePauseMenu());
-        overlay.findViewById(R.id.btn_continue).setOnClickListener(v -> hidePauseMenu());
-        overlay.findViewById(R.id.btn_reset).setOnClickListener(v -> {
-            if (mArtifactBusy) {
-                return;
-            }
-            if (mNativeReady) {
-                MesenNative.resetEmu();
-            }
-            hidePauseMenu();
-        });
-        overlay.findViewById(R.id.btn_roms).setOnClickListener(v -> toggleRomList());
-        overlay.findViewById(R.id.btn_home).setOnClickListener(v -> requestHomeShortcut());
-        overlay.findViewById(R.id.btn_checkpoint_save).setOnClickListener(v -> saveCheckpoint());
-        overlay.findViewById(R.id.btn_bug_capture).setOnClickListener(v -> toggleBugCategories());
-        mVoiceButton = overlay.findViewById(R.id.btn_voice_note);
-        if (mVoiceButton != null) {
-            mVoiceButton.setOnClickListener(v -> toggleVoiceNote());
-        }
-        overlay.findViewById(R.id.btn_checkpoints).setOnClickListener(v -> toggleCheckpoints());
-        overlay.findViewById(R.id.btn_restore_checkpoint).setOnClickListener(v -> restoreCheckpoint());
-        mTabPlay.setOnClickListener(v -> selectPauseTab(TAB_PLAY, true));
-        mTabStates.setOnClickListener(v -> selectPauseTab(TAB_STATES, true));
-        mTabCheats.setOnClickListener(v -> selectPauseTab(TAB_CHEATS, true));
-        mTabCapture.setOnClickListener(v -> selectPauseTab(TAB_CAPTURE, true));
-        mTabSetup.setOnClickListener(v -> selectPauseTab(TAB_SETUP, true));
-        populateCheatGroups();
-        mStateSave.setOnClickListener(v -> saveSelectedState());
-        mStateLoad.setOnClickListener(v -> loadSelectedState());
-        overlay.findViewById(R.id.btn_cancel_state).setOnClickListener(v -> {
-            closeArtifactPanels();
-            showSaveStates();
-        });
-        overlay.findViewById(R.id.btn_cancel_restore).setOnClickListener(v -> handlePauseBack());
-        populateBugCategories();
-        if (mChipHud != null) {
-            mChipHud.setOnClickListener(v -> setKeepHud(!mKeepHud));
-        }
-        if (mChipFit != null) {
-            mChipFit.setOnClickListener(v -> setFillScreen(!mFillScreen));
-        }
-        if (mChipPlay != null) {
-            mChipPlay.setOnClickListener(v -> setSmoothPlay(!mSmoothPlay));
-        }
-        if (mChipGpu != null) {
-            mChipGpu.setOnClickListener(v -> setPreferGpu(!mPreferGpu));
-        }
-        applyChipState();
-        applyPresentMode();
-        attachOracleUi();
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mLayout.addView(mHud, params);
     }
 
     private void attachOracleUi() {
-        try {
-            mComposeHost = new ComposeHost();
-            mUiView = new ComposeView(this);
-            mComposeHost.attach(mUiView);
+        mComposeHost = new ComposeHost();
+        mUiView = new ComposeView(this);
+        mComposeHost.attach(mUiView);
+        if (mLayout != null) {
             mComposeHost.tag(mLayout);
             mComposeHost.tag(mLayout.getRootView());
-            mComposeHost.tag(getWindow().getDecorView());
-            mUiView.setVisibility(View.GONE);
-            mUiView.setFocusable(false);
             mLayout.addView(mUiView, new RelativeLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
-            mUi = new OracleUi(this);
-            mUi.install(mUiView);
-        } catch (RuntimeException e) {
-            // Keep the legacy overlay usable if Compose cannot start.
-            Log.e(TAG, "Oracle UI unavailable", e);
-            mUi = null;
-            mUiView = null;
         }
+        mComposeHost.tag(getWindow().getDecorView());
+        mUiView.setVisibility(View.GONE);
+        mUiView.setFocusable(false);
+        mUi = new OracleUi(this);
+        mUi.install(mUiView);
     }
 
     private static int axisDir(float hat, float axis) {
@@ -699,13 +470,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         return 0;
     }
 
-    /** Back/Mode/native pause: the Compose quick menu, else the legacy panel. */
     private void openQuickMenu() {
-        if (mPauseVisible || mUiVisible) {
-            return;
-        }
-        if (mUi == null || !mNativeReady || mArtifactBusy || mProgressionBusy) {
-            showPauseMenu();
+        if (mUi == null || mUiVisible || mProgressionBusy) {
             return;
         }
         mUi.openMenu();
@@ -719,8 +485,15 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
-    public List<File> romFiles() {
-        return discoverRoms();
+    public File[] romRoots() {
+        return new File[] {
+                new File(getFilesDir(), "Roms"),
+                getFilesDir(),
+                getExternalFilesDir(null),
+                new File("/storage/emulated/0/Android/data/ca.mesen.oos/files"),
+                new File("/storage/emulated/0/OracleOfSecrets"),
+                new File("/storage/0000-0000/snes")
+        };
     }
 
     @Override
@@ -755,6 +528,31 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             }
         }
         return new File(getFilesDir(), "SaveStates");
+    }
+
+    @Override
+    public File savesDir() {
+        return new File(getFilesDir(), "Saves");
+    }
+
+    @Override
+    public CheckpointData checkpointData() {
+        return mCheckpointData;
+    }
+
+    @Override
+    public PresetData presetData() {
+        return mPresetData;
+    }
+
+    @Override
+    public String socketSummary() {
+        if (mStatusManifest == null) {
+            return "tcp://127.0.0.1:" + StatusManifest.PORT;
+        }
+        int agents = mStatusManifest.agentCount();
+        String agentBit = agents > 0 ? (agents + " agents") : "adb-forward ready";
+        return mStatusManifest.adbEndpoint() + " · " + agentBit;
     }
 
     @Override
@@ -797,16 +595,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
-    public void openWorkshop() {
-        mUiVisible = false;
-        if (mUiView != null) {
-            mUiView.setVisibility(View.GONE);
-        }
-        // The game stays paused: showPauseMenu pauses again and takes focus.
-        showPauseMenu();
-    }
-
-    @Override
     public boolean bootRom(String path) {
         if (!mNativeReady) {
             return false;
@@ -826,13 +614,19 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
+    public void resetConsole() {
+        if (mNativeReady) {
+            MesenNative.resetEmu();
+        }
+    }
+
+    @Override
     public boolean isStickyFastForward() {
         return mStickyFast;
     }
 
     @Override
     public void setStickyFastForward(boolean on) {
-        // Applied by updateFastForward() when the menu closes.
         mStickyFast = on;
     }
 
@@ -866,20 +660,28 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     public void startCheckpoint(String id) {
-        if (mProgressionBusy || !mNativeReady) {
+        if (mCheckpointData == null) {
             return;
         }
-        Progression.Checkpoint cp = null;
-        for (Progression.Checkpoint c : Progression.checkpoints()) {
-            if (c.id.equals(id)) {
-                cp = c;
-                break;
-            }
-        }
-        if (cp == null) {
+        runProgression(mCheckpointData.find(id));
+    }
+
+    @Override
+    public void startPreset(String id) {
+        if (mPresetData == null) {
             return;
         }
-        final Progression.Checkpoint target = cp;
+        PresetData.Preset preset = mPresetData.find(id);
+        if (preset == null || preset.checkpoint == null) {
+            return;
+        }
+        runProgression(preset.checkpoint);
+    }
+
+    private void runProgression(final Progression.Checkpoint target) {
+        if (mProgressionBusy || !mNativeReady || target == null) {
+            return;
+        }
         mProgressionBusy = true;
         Toast.makeText(this, getString(R.string.progression_running, target.label), Toast.LENGTH_SHORT).show();
         Thread worker = new Thread(() -> {
@@ -892,6 +694,76 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }, "oos-progression");
         worker.setDaemon(true);
         worker.start();
+    }
+
+    @Override
+    public void toast(String message) {
+        if (message == null || message.isEmpty()) {
+            return;
+        }
+        mHandler.post(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
+    }
+
+    @Override
+    public void requestHomeShortcut() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            toast(getString(R.string.home_unsupported));
+            return;
+        }
+        try {
+            ShortcutManager shortcuts = getSystemService(ShortcutManager.class);
+            if (shortcuts == null || !shortcuts.isRequestPinShortcutSupported()) {
+                toast(getString(R.string.home_unsupported));
+                return;
+            }
+            if (!mHomeReceiverRegistered) {
+                IntentFilter filter = new IntentFilter(HOME_SHORTCUT_PINNED);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(mHomeReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    registerReceiver(mHomeReceiver, filter);
+                }
+                mHomeReceiverRegistered = true;
+            }
+            Intent open = new Intent(Intent.ACTION_MAIN, null, this, MesenActivity.class);
+            open.addCategory(Intent.CATEGORY_LAUNCHER);
+            ShortcutInfo shortcut = new ShortcutInfo.Builder(this, HOME_SHORTCUT_ID)
+                    .setShortLabel(getString(R.string.app_name))
+                    .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                    .setIntent(open)
+                    .build();
+            mHomeRequestToken = UUID.randomUUID().toString();
+            Intent result = new Intent(HOME_SHORTCUT_PINNED).setPackage(getPackageName())
+                    .putExtra(HOME_REQUEST_TOKEN, mHomeRequestToken);
+            PendingIntent callback = PendingIntent.getBroadcast(this, 0, result,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                            | PendingIntent.FLAG_ONE_SHOT);
+            if (shortcuts.requestPinShortcut(shortcut, callback.getIntentSender())) {
+                toast(getString(R.string.home_requested));
+            } else {
+                mHomeRequestToken = null;
+                toast(getString(R.string.home_unsupported));
+            }
+        } catch (RuntimeException e) {
+            mHomeRequestToken = null;
+            Log.w(TAG, "Home shortcut request failed", e);
+            toast(getString(R.string.home_failed));
+        }
+    }
+
+    private String readAssetText(String path) {
+        try (InputStream in = getAssets().open(path)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            Log.w(TAG, "Missing asset " + path + ": " + e.getMessage());
+            return null;
+        }
     }
 
     private void markNativeReady() {
@@ -907,7 +779,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         Intent intent = getIntent();
         boolean romFromIntent = intent != null && intent.hasExtra("rom");
-        if (mUi != null && !romFromIntent && !mPauseVisible && !mUiVisible) {
+        if (mUi != null && !romFromIntent && !mUiVisible) {
             mUi.openLibrary();
         }
     }
@@ -918,9 +790,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                 | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                 | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
-        // SDL may also update the window flag asynchronously. A visible-view
-        // request remains part of Android's effective window attributes and
-        // stops applying when this app's window is no longer visible.
         window.getDecorView().setKeepScreenOn(true);
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(true);
@@ -956,7 +825,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
-    /** Best-effort collapse of the RG353P notification shade during adb sessions. */
+    /** Best-effort collapse of the notification shade during adb sessions. */
     private void collapseNotificationShade() {
         try {
             Object statusBar = getSystemService("statusbar");
@@ -983,438 +852,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mPgoDumpReceiverRegistered = true;
     }
 
-    private void togglePauseMenu() {
-        if (mPauseVisible) {
-            handlePauseBack();
-        } else {
-            showPauseMenu();
-        }
-    }
-
-    private void handlePauseBack() {
-        if (mArtifactBusy) {
-            return;
-        }
-        if (mStateReview != null && mStateReview.getVisibility() == View.VISIBLE) {
-            closeArtifactPanels();
-            showSaveStates();
-            return;
-        }
-        if (mRestoreReview != null && mRestoreReview.getVisibility() == View.VISIBLE) {
-            mRestoreReview.setVisibility(View.GONE);
-            mSelectedCheckpoint = null;
-            mCheckpointScroller.setVisibility(View.VISIBLE);
-            restoreContentFocus();
-            return;
-        }
-        if (mCheckpointScroller != null && mCheckpointScroller.getVisibility() == View.VISIBLE) {
-            closeArtifactPanels();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_checkpoints));
-            return;
-        }
-        if (mBugCategories != null && mBugCategories.getVisibility() == View.VISIBLE) {
-            closeArtifactPanels();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_bug_capture));
-            return;
-        }
-        if (mRomScroller != null && mRomScroller.getVisibility() == View.VISIBLE
-                && mPauseTab == TAB_PLAY) {
-            closeRomList();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_roms));
-            return;
-        }
-        if (!railViews().contains(getCurrentFocus())) {
-            focusPauseView(selectedRailView());
-            return;
-        }
-        hidePauseMenu();
-    }
-
-    private void showPauseMenu() {
-        if (mPauseScrim == null) {
-            return;
-        }
-        clearFastForward();
-        mPauseVisible = true;
-        setSurfaceFocusable(false);
-        mPauseScrim.setVisibility(View.VISIBLE);
-        showHudBar();
-        selectPauseTab(TAB_PLAY, false);
-        View continueBtn = mPauseScrim.findViewById(R.id.btn_continue);
-        if (continueBtn != null) {
-            continueBtn.requestFocus();
-            continueBtn.post(() -> {
-                if (mPauseVisible) {
-                    continueBtn.requestFocus();
-                }
-            });
-        }
-        if (mNativeReady) {
-            MesenNative.pauseEmu();
-        }
-        refreshHud();
-        mHandler.removeCallbacks(mPadPoller);
-        mHandler.post(mPadPoller);
-    }
-
-    private void selectPauseTab(int tab, boolean focusContent) {
-        if (mPauseScrim == null || mArtifactBusy) {
-            return;
-        }
-        if (tab < TAB_PLAY || tab > TAB_SETUP) {
-            tab = TAB_PLAY;
-        }
-        mPauseTab = tab;
-        if (mPanelPlay != null) {
-            mPanelPlay.setVisibility(tab == TAB_PLAY ? View.VISIBLE : View.GONE);
-        }
-        if (mPanelStates != null) {
-            mPanelStates.setVisibility(tab == TAB_STATES ? View.VISIBLE : View.GONE);
-        }
-        if (mPanelCheats != null) {
-            mPanelCheats.setVisibility(tab == TAB_CHEATS ? View.VISIBLE : View.GONE);
-        }
-        if (mPanelCapture != null) {
-            mPanelCapture.setVisibility(tab == TAB_CAPTURE ? View.VISIBLE : View.GONE);
-        }
-        if (mPanelSetup != null) {
-            mPanelSetup.setVisibility(tab == TAB_SETUP ? View.VISIBLE : View.GONE);
-        }
-        setTabSelected(mTabPlay, tab == TAB_PLAY);
-        setTabSelected(mTabStates, tab == TAB_STATES);
-        setTabSelected(mTabCheats, tab == TAB_CHEATS);
-        setTabSelected(mTabCapture, tab == TAB_CAPTURE);
-        setTabSelected(mTabSetup, tab == TAB_SETUP);
-
-        closeArtifactPanels();
-        closeRomList();
-        if (tab == TAB_STATES) {
-            showSaveStates();
-        } else if (tab == TAB_CHEATS) {
-            showCheatGroup(mCheatGroup);
-        }
-        syncMenuScreens();
-
-        if (focusContent) {
-            restoreContentFocus();
-        }
-    }
-
-    private static void setTabSelected(Button tab, boolean selected) {
-        if (tab == null) {
-            return;
-        }
-        tab.setSelected(selected);
-        tab.setTextColor(selected ? ACCENT : TEXT_PRIMARY);
-    }
-
-    private void populateCheatGroups() {
-        if (mCheatGroups == null) {
-            return;
-        }
-        mCheatGroups.removeAllViews();
-        for (String group : WorkshopCheats.groups()) {
-            Button chip = new Button(this);
-            chip.setText(group);
-            chip.setBackgroundResource(R.drawable.chip);
-            chip.setTextColor(TEXT_PRIMARY);
-            chip.setTextSize(12);
-            chip.setTypeface(android.graphics.Typeface.SANS_SERIF);
-            chip.setMinHeight(0);
-            chip.setPadding(dp(10), dp(6), dp(10), dp(6));
-            chip.setFocusable(true);
-            chip.setFocusableInTouchMode(true);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(0, 0, dp(4), 0);
-            chip.setLayoutParams(lp);
-            String selected = group;
-            chip.setOnClickListener(v -> showCheatGroup(selected));
-            mCheatGroups.addView(chip);
-        }
-    }
-
-    private void showCheatGroup(String group) {
-        if (mCheatList == null) {
-            return;
-        }
-        mCheatGroup = group == null ? WorkshopCheats.GROUP_QUICK : group;
-        if (mCheatGroups != null) {
-            for (int i = 0; i < mCheatGroups.getChildCount(); i++) {
-                View child = mCheatGroups.getChildAt(i);
-                if (child instanceof Button) {
-                    Button chip = (Button) child;
-                    boolean selected = mCheatGroup.equals(chip.getText().toString());
-                    chip.setSelected(selected);
-                    chip.setTextColor(selected ? ACCENT : TEXT_PRIMARY);
-                }
-            }
-        }
-        mCheatList.removeAllViews();
-        if (!mNativeReady) {
-            if (mCheatStatus != null) {
-                mCheatStatus.setText(R.string.cheats_need_rom);
-            }
-            return;
-        }
-        if (mCheatStatus != null) {
-            mCheatStatus.setText(R.string.cheats_hint);
-        }
-        if (WorkshopCheats.GROUP_PROGRESS.equals(mCheatGroup)) {
-            showProgressionRows();
-            return;
-        }
-        View first = null;
-        for (WorkshopCheats.Action action : WorkshopCheats.forGroup(mCheatGroup)) {
-            Button row = artifactButton(WorkshopCheats.rowLabel(action));
-            row.setOnClickListener(v -> {
-                focusPauseView(row);
-                applyCheat(action);
-            });
-            mCheatList.addView(row);
-            if (first == null) {
-                first = row;
-            }
-        }
-        if (first != null && mPauseTab == TAB_CHEATS) {
-            restoreContentFocus();
-        }
-    }
-
-    private void showProgressionRows() {
-        if (mCheatStatus != null) {
-            mCheatStatus.setText(mProgressionBusy
-                    ? getString(R.string.progression_busy)
-                    : getString(R.string.progression_hint, Progression.activeSlot(Progression.LIVE)));
-        }
-        View first = null;
-        for (Progression.Checkpoint cp : Progression.checkpoints()) {
-            boolean armed = cp.id.equals(mProgressionArmed)
-                    && SystemClock.uptimeMillis() - mProgressionArmedAt < PROGRESSION_CONFIRM_MS;
-            Button row = artifactButton(armed
-                    ? getString(R.string.progression_confirm, cp.label)
-                    : cp.rowLabel());
-            row.setOnClickListener(v -> {
-                focusPauseView(row);
-                onProgressionRow(cp);
-            });
-            mCheatList.addView(row);
-            if (first == null) {
-                first = row;
-            }
-        }
-        if (first != null && mPauseTab == TAB_CHEATS) {
-            restoreContentFocus();
-        }
-    }
-
-    /** First A arms the row; a second A within PROGRESSION_CONFIRM_MS applies it. */
-    private void onProgressionRow(Progression.Checkpoint cp) {
-        if (mArtifactBusy || !mNativeReady || mProgressionBusy) {
-            return;
-        }
-        long now = SystemClock.uptimeMillis();
-        if (!cp.id.equals(mProgressionArmed) || now - mProgressionArmedAt >= PROGRESSION_CONFIRM_MS) {
-            mProgressionArmed = cp.id;
-            mProgressionArmedAt = now;
-            int index = mCheatList.indexOfChild(mCheatList.getFocusedChild());
-            mCheatList.removeAllViews();
-            showProgressionRows();
-            if (index >= 0 && index < mCheatList.getChildCount()) {
-                mCheatList.getChildAt(index).requestFocus();
-            }
-            return;
-        }
-        mProgressionArmed = null;
-        String problem = Progression.idleProblem(Progression.LIVE);
-        if (problem != null) {
-            if (mCheatStatus != null) mCheatStatus.setText(problem);
-            Toast.makeText(this, problem, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        mProgressionBusy = true;
-        hidePauseMenu();
-        Toast.makeText(this, getString(R.string.progression_running, cp.label), Toast.LENGTH_SHORT).show();
-        Thread worker = new Thread(() -> {
-            String result = Progression.apply(cp, Progression.LIVE);
-            mHandler.post(() -> {
-                mProgressionBusy = false;
-                Log.i(TAG, "progression: " + result);
-                Toast.makeText(this, result, Toast.LENGTH_LONG).show();
-            });
-        }, "oos-progression");
-        worker.setDaemon(true);
-        worker.start();
-    }
-
-    private void applyCheat(WorkshopCheats.Action action) {
-        if (mArtifactBusy || !mNativeReady) {
-            return;
-        }
-        String result = WorkshopCheats.apply(action);
-        showCheatGroup(mCheatGroup);
-        if (mCheatStatus != null) {
-            mCheatStatus.setText(result);
-            mCheatStatus.setVisibility(View.VISIBLE);
-        }
-        Toast.makeText(this, result, Toast.LENGTH_SHORT).show();
-    }
-
-    private boolean isVoiceRecording() {
-        return mVoiceRecorder != null && mVoiceRecorder.isRecording();
-    }
-
-    private void toggleVoiceNote() {
-        if (mArtifactBusy) {
-            return;
-        }
-        if (isVoiceRecording()) {
-            stopVoiceNote();
-            return;
-        }
-        if (Build.VERSION.SDK_INT >= 23
-                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_RECORD_AUDIO);
-            setArtifactStatus(getString(R.string.voice_need_mic), true);
-            return;
-        }
-        startVoiceNote();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQ_RECORD_AUDIO) {
-            return;
-        }
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startVoiceNote();
-        } else {
-            setArtifactStatus(getString(R.string.voice_need_mic), true);
-        }
-    }
-
-    private void startVoiceNote() {
-        if (mDestroyed || isVoiceRecording() || mArtifactBusy) {
-            return;
-        }
-        try {
-            JSONObject status = null;
-            if (mNativeReady) {
-                status = new JSONObject(MesenNative.statusJson(true));
-            }
-            String input = voiceInputHint();
-            WorkshopVoiceNote.Stamp stamp = WorkshopVoiceNote.stampFromStatus(status, input);
-            File workshopRoot = new File(getFilesDir(), "Workshop");
-            WorkshopVoiceNote.Session session = WorkshopVoiceNote.begin(
-                    workshopRoot, stamp, System.currentTimeMillis());
-            WorkshopVoiceRecorder recorder = new WorkshopVoiceRecorder();
-            recorder.start(session.audioFile);
-            mVoiceSession = session;
-            mVoiceRecorder = recorder;
-            mHandler.removeCallbacks(mVoiceAutoStop);
-            mHandler.postDelayed(mVoiceAutoStop, WorkshopVoiceNote.MAX_DURATION_MS);
-            updateVoiceButtonUi(true);
-            setArtifactStatus(getString(R.string.voice_recording), false);
-        } catch (Exception error) {
-            cancelVoiceNote(true);
-            setArtifactStatus(getString(R.string.voice_failed, error.getMessage()), true);
-        }
-    }
-
-    private void stopVoiceNote() {
-        mHandler.removeCallbacks(mVoiceAutoStop);
-        WorkshopVoiceNote.Session session = mVoiceSession;
-        WorkshopVoiceRecorder recorder = mVoiceRecorder;
-        mVoiceSession = null;
-        mVoiceRecorder = null;
-        updateVoiceButtonUi(false);
-        if (recorder == null || session == null) {
-            return;
-        }
-        try {
-            long durationMs = recorder.stop();
-            String digest = WorkshopArtifactFiles.sha256(session.audioFile);
-            long bytes = session.audioFile.length();
-            WorkshopVoiceNote.complete(session, durationMs, digest, bytes);
-            int seconds = Math.max(1, (int) ((durationMs + 500) / 1000));
-            setArtifactStatus(getString(R.string.voice_saved, seconds), true);
-            Toast.makeText(this, getString(R.string.voice_saved, seconds), Toast.LENGTH_SHORT).show();
-        } catch (Exception error) {
-            WorkshopVoiceNote.discard(session);
-            setArtifactStatus(getString(R.string.voice_failed, error.getMessage()), true);
-        }
-    }
-
-    private void cancelVoiceNote(boolean discardFiles) {
-        mHandler.removeCallbacks(mVoiceAutoStop);
-        WorkshopVoiceNote.Session session = mVoiceSession;
-        WorkshopVoiceRecorder recorder = mVoiceRecorder;
-        mVoiceSession = null;
-        mVoiceRecorder = null;
-        if (recorder != null) {
-            recorder.cancel();
-        }
-        if (discardFiles && session != null) {
-            WorkshopVoiceNote.discard(session);
-        }
-        updateVoiceButtonUi(false);
-    }
-
-    private void updateVoiceButtonUi(boolean recording) {
-        if (mVoiceButton == null) {
-            return;
-        }
-        mVoiceButton.setText(recording ? R.string.voice_recording : R.string.voice_note);
-        mVoiceButton.setTextColor(recording ? ACCENT : TEXT_PRIMARY);
-    }
-
-    private String voiceInputHint() {
-        try {
-            AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (audio != null && audio.isBluetoothScoOn()) {
-                return "bluetooth-sco";
-            }
-            if (audio != null && audio.isWiredHeadsetOn()) {
-                return "wired-headset";
-            }
-        } catch (Exception ignored) {
-        }
-        return "mic";
-    }
-
-    private static int dp(int value) {
-        return Math.round(value * android.content.res.Resources.getSystem().getDisplayMetrics().density);
-    }
-
-    private void hidePauseMenu() {
-        if (mPauseScrim == null || mArtifactBusy) {
-            return;
-        }
-        if (isVoiceRecording()) {
-            stopVoiceNote();
-        }
-        mPauseVisible = false;
-        mPauseHatLatch = 0;
-        mPauseHatXLatch = 0;
-        mHandler.removeCallbacks(mPadPoller);
-        mPauseScrim.setVisibility(View.GONE);
-        if (mRomScroller != null) {
-            mRomScroller.setVisibility(View.GONE);
-        }
-        closeArtifactPanels();
-        if (mNativeReady) {
-            MesenNative.resumeEmu();
-        }
-        setSurfaceFocusable(true);
-        updateFastForward();
-        mHandler.postDelayed(this::hideHudBar, 2500);
-        applyChipState();
-    }
-
     private void showHudBar() {
-        if (mHud == null) {
+        if (mHud == null || mUiVisible) {
             return;
         }
         mHud.setVisibility(View.VISIBLE);
@@ -1422,529 +861,14 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     private void hideHudBar() {
-        if (mHud == null || mPauseVisible || mKeepHud) {
+        if (mHud == null || mKeepHud) {
             return;
         }
         mHud.animate().alpha(0f).setDuration(350).withEndAction(() -> {
-            if (!mPauseVisible && !mKeepHud) {
+            if (!mKeepHud) {
                 mHud.setVisibility(View.GONE);
             }
         }).start();
-    }
-
-    private void toggleRomList() {
-        if (mRomScroller == null || mArtifactBusy) {
-            return;
-        }
-        if (mRomScroller.getVisibility() == View.VISIBLE) {
-            closeRomList();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_roms));
-            return;
-        }
-        closeArtifactPanels();
-        populateRoms();
-        mRomScroller.setVisibility(View.VISIBLE);
-        restoreContentFocus();
-    }
-
-    private void populateRoms() {
-        mRomList.removeAllViews();
-        List<File> roms = discoverRoms();
-        if (roms.isEmpty()) {
-            TextView empty = new TextView(this);
-            empty.setText(R.string.roms_empty);
-            empty.setTextColor(TEXT_PRIMARY);
-            empty.setTextSize(12);
-            mRomList.addView(empty);
-            return;
-        }
-        for (File rom : roms) {
-            Button row = new Button(this, null, 0, R.style.OracleMenuButton);
-            String folder = romSource(rom);
-            row.setText(rom.getName() + (folder.isEmpty() ? "" : "  ·  " + folder)
-                    + saveTag(rom));
-            row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            row.setFocusable(true);
-            row.setFocusableInTouchMode(true);
-            String last = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_LAST_ROM, "");
-            if (rom.getAbsolutePath().equals(last)) {
-                row.setTextColor(ACCENT);
-            }
-            row.setOnClickListener(v -> {
-                if (mArtifactBusy) {
-                    return;
-                }
-                if (mNativeReady) {
-                    BatterySaveSeed.Status seeded = seedBatterySave(rom.getAbsolutePath());
-                    if (seeded == BatterySaveSeed.Status.SEEDED) {
-                        Toast.makeText(this, "Imported " + BatterySaveSeed.sidecar(rom).getName(),
-                                Toast.LENGTH_SHORT).show();
-                    }
-                }
-                if (mNativeReady && MesenNative.loadRom(rom.getAbsolutePath())) {
-                    rememberRom(rom.getAbsolutePath());
-                    applyPerformanceMode();
-                    hidePauseMenu();
-                    refreshHud();
-                }
-            });
-            mRomList.addView(row);
-        }
-    }
-
-    private List<File> discoverRoms() {
-        File[] roots = new File[] {
-                getExternalFilesDir(null),
-                new File("/storage/emulated/0/Android/data/ca.mesen.oos/files"),
-                new File("/storage/emulated/0/OracleOfSecrets"),
-                new File("/storage/0000-0000/snes")
-        };
-        return RomFiles.discover(roots);
-    }
-
-    private interface ArtifactTask<T> {
-        T run() throws Exception;
-    }
-
-    private interface ArtifactResult<T> {
-        void done(T value);
-    }
-
-    private <T> void runArtifactTask(int progressMessage, int errorMessage,
-            int returnFocus, ArtifactTask<T> task, ArtifactResult<T> result) {
-        if (mArtifactBusy || mDestroyed) {
-            return;
-        }
-        if (!mNativeReady) {
-            setArtifactStatus(getString(R.string.artifact_not_ready), true);
-            return;
-        }
-        setArtifactStatus(getString(progressMessage), false);
-        setArtifactBusy(true);
-        mArtifactExecutor.execute(() -> {
-            try {
-                T value = task.run();
-                mHandler.post(() -> {
-                    if (mDestroyed) {
-                        return;
-                    }
-                    setArtifactBusy(false);
-                    focusPauseView(mPauseScrim.findViewById(returnFocus));
-                    result.done(value);
-                });
-            } catch (Exception error) {
-                Log.w(TAG, "Workshop artifact action failed", error);
-                mHandler.post(() -> {
-                    if (mDestroyed) {
-                        return;
-                    }
-                    setArtifactBusy(false);
-                    String detail = error.getMessage();
-                    if (detail == null || detail.isEmpty()) {
-                        detail = error.getClass().getSimpleName();
-                    }
-                    setArtifactStatus(getString(errorMessage, detail), true);
-                    focusPauseView(mPauseScrim.findViewById(returnFocus));
-                });
-            }
-        });
-    }
-
-    private void setArtifactBusy(boolean busy) {
-        mArtifactBusy = busy;
-        if (busy) {
-            mBusyDisabledViews.clear();
-            mBusyDisabledViews.addAll(pauseFocusables());
-            addBusyView(mArtifactTitle);
-            addBusyView(mArtifactNote);
-            for (View view : mBusyDisabledViews) {
-                view.setEnabled(false);
-            }
-        } else {
-            for (View view : mBusyDisabledViews) {
-                view.setEnabled(true);
-            }
-            mBusyDisabledViews.clear();
-        }
-    }
-
-    private void addBusyView(View view) {
-        if (view != null) {
-            mBusyDisabledViews.add(view);
-        }
-    }
-
-    private static String fieldText(EditText field) {
-        if (field == null || field.getText() == null) {
-            return null;
-        }
-        String value = field.getText().toString();
-        return value.trim().isEmpty() ? null : value;
-    }
-
-    private boolean isArtifactEditor(View view) {
-        return view != null && (view == mArtifactTitle || view == mArtifactNote);
-    }
-
-    private void setArtifactStatus(String message, boolean announce) {
-        if (mArtifactStatus != null) {
-            mArtifactStatus.setText(message);
-            mArtifactStatus.setVisibility(View.VISIBLE);
-        }
-        if (announce) {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private void closeArtifactPanels() {
-        if (mArtifactStatus != null) {
-            mArtifactStatus.setVisibility(View.GONE);
-        }
-        if (mBugCategories != null) {
-            mBugCategories.setVisibility(View.GONE);
-        }
-        if (mCheckpointScroller != null) {
-            mCheckpointScroller.setVisibility(View.GONE);
-        }
-        if (mRestoreReview != null) {
-            mRestoreReview.setVisibility(View.GONE);
-        }
-        if (mStateScroller != null) {
-            mStateScroller.setVisibility(View.GONE);
-        }
-        if (mStateReview != null) {
-            mStateReview.setVisibility(View.GONE);
-        }
-        mSelectedCheckpoint = null;
-        mSelectedState = null;
-        syncMenuScreens();
-    }
-
-    private void closeRomList() {
-        if (mRomScroller != null) {
-            mRomScroller.setVisibility(View.GONE);
-        }
-        syncMenuScreens();
-    }
-
-    private void showSaveStates() {
-        mStateList.removeAllViews();
-        boolean pathsAvailable = false;
-        for (int slot = 1; slot <= SaveStateSlots.SLOT_COUNT; slot++) {
-            SaveStateSlots.Entry entry = SaveStateSlots.inspect(
-                    slot, MesenNative.saveStatePath(slot));
-            pathsAvailable |= entry.file != null;
-            Button row = artifactButton(entry.title());
-            if (entry.occupied) {
-                row.setTextColor(ACCENT);
-            }
-            row.setOnClickListener(v -> {
-                focusPauseView(row);
-                reviewSaveState(entry);
-            });
-            mStateList.addView(row);
-        }
-        if (!pathsAvailable) {
-            setArtifactStatus(getString(R.string.states_empty), true);
-            return;
-        }
-        mStateScroller.setVisibility(View.VISIBLE);
-        setArtifactStatus(getString(R.string.states_choose), false);
-        restoreContentFocus();
-    }
-
-    private void reviewSaveState(SaveStateSlots.Entry entry) {
-        if (mArtifactBusy || entry.file == null) {
-            return;
-        }
-        closeArtifactPanels();
-        mSelectedState = entry;
-        mStateDescription.setText(entry.occupied
-                ? getString(R.string.state_review_occupied, entry.title())
-                : getString(R.string.state_review_empty, entry.slot));
-        mStateSave.setText(entry.occupied ? R.string.state_overwrite : R.string.state_save);
-        mStateLoad.setEnabled(entry.occupied);
-        mStateLoad.setFocusable(entry.occupied);
-        mStateLoad.setFocusableInTouchMode(entry.occupied);
-        mStateReview.setVisibility(View.VISIBLE);
-        focusPauseView(mPauseScrim.findViewById(R.id.btn_cancel_state));
-    }
-
-    private void saveSelectedState() {
-        SaveStateSlots.Entry entry = mSelectedState;
-        if (mArtifactBusy || entry == null) {
-            return;
-        }
-        int slot = entry.slot;
-        closeArtifactPanels();
-        runArtifactTask(R.string.state_saving, R.string.state_save_failed,
-                R.id.tab_states, () -> {
-                    if (!MesenNative.saveState(slot)) {
-                        throw new IllegalStateException("native save failed");
-                    }
-                    return slot;
-                }, savedSlot -> {
-                    showSaveStates();
-                    setArtifactStatus(getString(R.string.state_saved, savedSlot), true);
-                });
-    }
-
-    private void loadSelectedState() {
-        SaveStateSlots.Entry entry = mSelectedState;
-        if (mArtifactBusy || entry == null || !entry.occupied) {
-            return;
-        }
-        int slot = entry.slot;
-        closeArtifactPanels();
-        runArtifactTask(R.string.state_loading, R.string.state_load_failed,
-                R.id.tab_states, () -> {
-                    if (!MesenNative.loadState(slot)) {
-                        throw new IllegalStateException("native load failed");
-                    }
-                    return slot;
-                }, loadedSlot -> {
-                    showSaveStates();
-                    setArtifactStatus(getString(R.string.state_loaded, loadedSlot), true);
-                    refreshHud();
-                });
-    }
-
-    private void saveCheckpoint() {
-        if (mArtifactBusy) {
-            return;
-        }
-        closeArtifactPanels();
-        closeRomList();
-        runArtifactTask(R.string.artifact_saving, R.string.artifact_save_failed,
-                R.id.btn_checkpoint_save, () -> mArtifacts.saveCheckpoint(
-                        fieldText(mArtifactTitle), fieldText(mArtifactNote)), entry -> {
-                    setArtifactStatus(getString(R.string.artifact_saved,
-                            entry.title), true);
-                });
-    }
-
-    private Button artifactButton(String title) {
-        Button button = new Button(this, null, 0, R.style.OracleMenuButton);
-        button.setText(title);
-        button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        button.setFocusable(true);
-        button.setFocusableInTouchMode(true);
-        button.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        return button;
-    }
-
-    private void populateBugCategories() {
-        String[] categories = { "weather", "collision", "audio", "graphics", "other" };
-        int[] labels = { R.string.bug_weather, R.string.bug_collision, R.string.bug_audio,
-                R.string.bug_graphics, R.string.bug_other };
-        for (int i = 0; i < categories.length; i++) {
-            String category = categories[i];
-            Button row = artifactButton(getString(labels[i]));
-            row.setOnClickListener(v -> captureBug(category));
-            mBugCategories.addView(row);
-        }
-        Button cancel = artifactButton(getString(R.string.artifact_cancel));
-        cancel.setOnClickListener(v -> {
-            closeArtifactPanels();
-            focusPauseView(mPauseScrim.findViewById(R.id.btn_bug_capture));
-        });
-        mBugCategories.addView(cancel);
-    }
-
-    private void toggleBugCategories() {
-        if (mArtifactBusy) {
-            return;
-        }
-        boolean wasVisible = mBugCategories.getVisibility() == View.VISIBLE;
-        closeArtifactPanels();
-        closeRomList();
-        if (!wasVisible) {
-            mBugCategories.setVisibility(View.VISIBLE);
-            setArtifactStatus(getString(R.string.bug_choose_category), false);
-            restoreContentFocus();
-        }
-    }
-
-    private void captureBug(String category) {
-        if (mArtifactBusy) {
-            return;
-        }
-        closeArtifactPanels();
-        runArtifactTask(R.string.artifact_capturing, R.string.artifact_capture_failed,
-                R.id.btn_bug_capture, () -> mArtifacts.captureBug(
-                        category, fieldText(mArtifactTitle), fieldText(mArtifactNote)), entry -> {
-                    setArtifactStatus(getString(R.string.artifact_captured,
-                            entry.title), true);
-                });
-    }
-
-    private void toggleCheckpoints() {
-        if (mArtifactBusy) {
-            return;
-        }
-        boolean wasVisible = mCheckpointScroller.getVisibility() == View.VISIBLE
-                || mRestoreReview.getVisibility() == View.VISIBLE;
-        closeArtifactPanels();
-        closeRomList();
-        if (wasVisible) {
-            return;
-        }
-        runArtifactTask(R.string.artifact_listing, R.string.artifact_list_failed,
-                R.id.btn_checkpoints, () -> mArtifacts.listCheckpoints(), this::showCheckpoints);
-    }
-
-    private void showCheckpoints(List<WorkshopArtifacts.Entry> entries) {
-        mCheckpointList.removeAllViews();
-        if (entries.isEmpty()) {
-            setArtifactStatus(getString(R.string.checkpoints_empty), true);
-            return;
-        }
-        View firstCompatible = null;
-        for (WorkshopArtifacts.Entry entry : entries) {
-            boolean compatible = entry.compatibilityReason.isEmpty();
-            Button row = artifactButton(entry.title + (compatible ? ""
-                    : "\n" + getString(R.string.checkpoint_incompatible, entry.compatibilityReason)));
-            row.setEnabled(compatible);
-            row.setFocusable(compatible);
-            row.setFocusableInTouchMode(compatible);
-            if (compatible) {
-                row.setOnClickListener(v -> {
-                    focusPauseView(row);
-                    reviewCheckpoint(entry);
-                });
-                mCheckpointList.addView(row);
-            } else {
-                // Keep unavailable reasons reachable by D-pad without offering
-                // an actionable checkpoint or an enabled Restore control.
-                LinearLayout readOnlyRow = new LinearLayout(this);
-                readOnlyRow.setOrientation(LinearLayout.VERTICAL);
-                readOnlyRow.setFocusable(true);
-                readOnlyRow.setFocusableInTouchMode(true);
-                readOnlyRow.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-                readOnlyRow.setBackgroundResource(R.drawable.menu_row);
-                readOnlyRow.setContentDescription(row.getText());
-                row.setBackground(null);
-                row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                readOnlyRow.addView(row);
-                mCheckpointList.addView(readOnlyRow);
-            }
-            if (compatible && firstCompatible == null) {
-                firstCompatible = row;
-            }
-        }
-        mCheckpointScroller.setVisibility(View.VISIBLE);
-        setArtifactStatus(getString(firstCompatible == null
-                ? R.string.checkpoints_none_compatible : R.string.checkpoints_choose), false);
-        if (mMenuSelection.containsKey("checkpoints")) {
-            restoreContentFocus();
-        } else {
-            focusPauseView(firstCompatible != null ? firstCompatible : mCheckpointList.getChildAt(0));
-        }
-    }
-
-    private void reviewCheckpoint(WorkshopArtifacts.Entry entry) {
-        if (mArtifactBusy || !entry.compatibilityReason.isEmpty()) {
-            return;
-        }
-        closeArtifactPanels();
-        mSelectedCheckpoint = entry;
-        mRestoreDescription.setText(getString(R.string.checkpoint_restore_review, entry.title));
-        mRestoreReview.setVisibility(View.VISIBLE);
-        // Selecting a checkpoint only opens review; a second action restores it.
-        focusPauseView(mPauseScrim.findViewById(R.id.btn_cancel_restore));
-    }
-
-    private void restoreCheckpoint() {
-        WorkshopArtifacts.Entry entry = mSelectedCheckpoint;
-        if (mArtifactBusy || entry == null || !entry.compatibilityReason.isEmpty()) {
-            return;
-        }
-        closeArtifactPanels();
-        runArtifactTask(R.string.artifact_restoring, R.string.artifact_restore_failed,
-                R.id.btn_checkpoints, () -> {
-                    mArtifacts.restoreCheckpoint(entry);
-                    return entry;
-                }, restored -> {
-                    setArtifactStatus(getString(R.string.artifact_restored,
-                            restored.title), true);
-                    refreshHud();
-                });
-    }
-
-    private void focusPauseView(View view) {
-        syncMenuScreens();
-        if (view != null && view.isEnabled() && view.isShown()) {
-            view.requestFocus();
-            List<View> rows = contentFocusables();
-            int index = rows.indexOf(view);
-            if (index >= 0) mMenuSelection.put(menuScreenKey(), index);
-            view.post(() -> {
-                Rect bounds = new Rect();
-                view.getDrawingRect(bounds);
-                view.requestRectangleOnScreen(bounds, false);
-            });
-        }
-    }
-
-    private void setHomeStatus(int message) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-        if (mHomeStatus != null) {
-            mHomeStatus.setText(message);
-            mHomeStatus.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private void requestHomeShortcut() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            setHomeStatus(R.string.home_unsupported);
-            return;
-        }
-        try {
-            ShortcutManager shortcuts = getSystemService(ShortcutManager.class);
-            if (shortcuts == null || !shortcuts.isRequestPinShortcutSupported()) {
-                setHomeStatus(R.string.home_unsupported);
-                return;
-            }
-            if (!mHomeReceiverRegistered) {
-                IntentFilter filter = new IntentFilter(HOME_SHORTCUT_PINNED);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(mHomeReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-                } else {
-                    registerReceiver(mHomeReceiver, filter);
-                }
-                mHomeReceiverRegistered = true;
-            }
-            // Opening the app must preserve an existing session. A "rom" extra
-            // would instead load that ROM again through onNewIntent().
-            Intent open = new Intent(Intent.ACTION_MAIN, null, this, MesenActivity.class);
-            open.addCategory(Intent.CATEGORY_LAUNCHER);
-            ShortcutInfo shortcut = new ShortcutInfo.Builder(this, HOME_SHORTCUT_ID)
-                    .setShortLabel(getString(R.string.app_name))
-                    .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
-                    .setIntent(open)
-                    .build();
-            // Older Android versions cannot mark dynamic receivers unexported.
-            // Only the launcher holding this immutable callback knows the token.
-            mHomeRequestToken = UUID.randomUUID().toString();
-            Intent result = new Intent(HOME_SHORTCUT_PINNED).setPackage(getPackageName())
-                    .putExtra(HOME_REQUEST_TOKEN, mHomeRequestToken);
-            PendingIntent callback = PendingIntent.getBroadcast(this, 0, result,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-                            | PendingIntent.FLAG_ONE_SHOT);
-            // A true return means the launcher accepted the request. Only the
-            // callback confirms that the user actually pinned the shortcut.
-            if (shortcuts.requestPinShortcut(shortcut, callback.getIntentSender())) {
-                setHomeStatus(R.string.home_requested);
-            } else {
-                mHomeRequestToken = null;
-                setHomeStatus(R.string.home_unsupported);
-            }
-        } catch (RuntimeException e) {
-            mHomeRequestToken = null;
-            Log.w(TAG, "Home shortcut request failed", e);
-            setHomeStatus(R.string.home_failed);
-        }
     }
 
     private void refreshHud() {
@@ -1952,16 +876,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return;
         }
         try {
-            // Full pad/key scan only when the pause menu or Keep HUD needs it.
-            // Workshop telemetry still gets frames/render counters via the lite path.
-            JSONObject json = new JSONObject(MesenNative.statusJson(mPauseVisible || mKeepHud));
+            JSONObject json = new JSONObject(MesenNative.statusJson(mKeepHud));
             String rom = json.optString("rom", "");
             mHudRom.setText(rom.isEmpty() ? getString(R.string.hud_waiting) : rom);
-            String socket = json.optString("socket", "tcp:27015");
+            String socket = json.optString("socket", "tcp:" + StatusManifest.PORT);
             boolean pad = json.optBoolean("pad", false);
-            boolean mapped = json.optBoolean("mapped", false);
-            String padName = json.optString("padName", "");
-            String buttons = json.optString("buttons", "");
             String sha1 = json.optString("sha1", "");
             boolean paused = json.optBoolean("paused", false);
             Double observedFps = mFrameRateTracker.sample(
@@ -1990,49 +909,22 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             if (romId != null) {
                 performance += " · " + romId;
             }
-            json.put("observedFps",
-                    observedFps == null ? JSONObject.NULL : observedFps);
-            json.put("presentFps",
-                    presentFps == null ? JSONObject.NULL : presentFps);
+            json.put("observedFps", observedFps == null ? JSONObject.NULL : observedFps);
+            json.put("presentFps", presentFps == null ? JSONObject.NULL : presentFps);
             json.put("observedFpsState",
                     paused ? (observedFps == null ? "paused" : "last_running")
                             : (observedFps == null ? "measuring" : "live"));
-            if (mArtifactBuild != null) {
-                String shortSha = sha1.length() > 12 ? sha1.substring(0, 12) : sha1;
-                mArtifactBuild.setText(getString(R.string.artifact_current_build,
-                        rom.isEmpty() ? getString(R.string.artifact_no_rom) : rom,
-                        shortSha.isEmpty() ? getString(R.string.artifact_unknown_hash) : shortSha));
-            }
-            int agents = mWorkshop != null ? mWorkshop.agentCount() : 0;
-            String endpoint = mWorkshop != null ? mWorkshop.adbEndpoint() : socket;
+            int agents = mStatusManifest != null ? mStatusManifest.agentCount() : 0;
+            String endpoint = mStatusManifest != null ? mStatusManifest.adbEndpoint() : socket;
             String agentBit = agents > 0 ? (agents + " agents") : "ready";
             mHudSocket.setText(socket + (pad ? " · pad" : " · no pad"));
             if (mHudLink != null) {
                 mHudLink.setText(endpoint + "  ·  " + modeLabel(json)
                         + "  ·  " + performance + "  ·  " + agentBit);
-                mHudLink.setVisibility(mKeepHud || mPauseVisible ? View.VISIBLE : View.GONE);
+                mHudLink.setVisibility(mKeepHud ? View.VISIBLE : View.GONE);
             }
-            if (mWorkshopLink != null) {
-                mWorkshopLink.setText(endpoint);
-            }
-            if (mWorkshopMeta != null) {
-                String shortSha = sha1.length() > 12 ? sha1.substring(0, 12) : sha1;
-                mWorkshopMeta.setText(modeLabel(json)
-                        + "  ·  " + performance + "  ·  " + agentBit
-                        + (shortSha.isEmpty() ? "" : "  ·  " + shortSha));
-            }
-            if (mPauseStatus != null) {
-                String label = padName.isEmpty() ? "waiting for pad" : padName;
-                if (mapped) {
-                    label += " mapped";
-                }
-                mPauseStatus.setText(socket + "  ·  " + label);
-            }
-            if (mPausePad != null) {
-                mPausePad.setText(buttons.isEmpty() ? getString(R.string.pad_idle) : "pad: " + buttons);
-            }
-            if (mWorkshop != null) {
-                mWorkshop.writeManifest(json);
+            if (mStatusManifest != null) {
+                mStatusManifest.write(json);
             }
         } catch (Exception ignored) {
         }
@@ -2056,10 +948,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     private void startNativeIfNeeded() {
-        // NotificationShade / adb can clear focus on the RG353P. Force the
-        // resume flags so SDL's normal gate can proceed — but never start the
-        // native thread before SDLSurface reports ready. Creating the SDL
-        // window without an ANativeWindow leaves renderDriver=none forever.
         SDLActivity.mHasFocus = true;
         SDLActivity.mIsResumedCalled = true;
         if (SDLActivity.mSurface == null || !isSdlSurfaceReady()) {
@@ -2097,17 +985,15 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (path == null || path.isEmpty()) {
             return;
         }
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        prefs.edit().putString(PREF_LAST_ROM, path).apply();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LAST_ROM, path).apply();
     }
 
     private void setKeepHud(boolean keep) {
         mKeepHud = keep;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_HUD, keep).apply();
-        applyChipState();
-        if (keep) {
+        if (keep && !mUiVisible) {
             showHudBar();
-        } else if (!mPauseVisible) {
+        } else {
             hideHudBar();
         }
         refreshHud();
@@ -2116,14 +1002,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private void setFillScreen(boolean fill) {
         mFillScreen = fill;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_FIT, fill).apply();
-        applyChipState();
         applyPresentMode();
     }
 
     private void setSmoothPlay(boolean enabled) {
         mSmoothPlay = enabled;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_PLAY, enabled).apply();
-        applyChipState();
         applyPerformanceMode();
         refreshHud();
     }
@@ -2131,7 +1015,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private void setPreferGpu(boolean enabled) {
         mPreferGpu = enabled;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_GPU, enabled).apply();
-        applyChipState();
         applyPreferAccelerated();
         refreshHud();
     }
@@ -2153,7 +1036,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     private void updateFastForward() {
-        setFastForwardHeld(!mUiVisible && !mPauseVisible
+        setFastForwardHeld(!mUiVisible
                 && (mFastForwardKeyHeld || mFastForwardTriggerHeld || mStickyFast));
     }
 
@@ -2165,31 +1048,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (mNativeReady) {
             MesenNative.setFastForward(enabled);
         }
-        if (enabled) {
+        if (enabled && !mUiVisible) {
             showHudBar();
-        } else if (!mPauseVisible) {
+        } else if (!mUiVisible) {
             mHandler.postDelayed(this::hideHudBar, 800);
         }
         refreshHud();
-    }
-
-    private void applyChipState() {
-        if (mChipHud != null) {
-            mChipHud.setSelected(mKeepHud);
-            mChipHud.setTextColor(mKeepHud ? ACCENT : TEXT_PRIMARY);
-        }
-        if (mChipFit != null) {
-            mChipFit.setSelected(mFillScreen);
-            mChipFit.setTextColor(mFillScreen ? ACCENT : TEXT_PRIMARY);
-        }
-        if (mChipPlay != null) {
-            mChipPlay.setSelected(mSmoothPlay);
-            mChipPlay.setTextColor(mSmoothPlay ? ACCENT : TEXT_PRIMARY);
-        }
-        if (mChipGpu != null) {
-            mChipGpu.setSelected(mPreferGpu);
-            mChipGpu.setTextColor(mPreferGpu ? ACCENT : TEXT_PRIMARY);
-        }
     }
 
     private void applyIntentPrefs(Intent intent) {
@@ -2212,20 +1076,10 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             setPreferGpu(intent.getBooleanExtra("gpu_blit", true));
         }
         if (intent.hasExtra("fast_forward")) {
-            // Test hook: `--ez fast_forward true|false` = sticky fast-forward.
             setStickyFastForward(intent.getBooleanExtra("fast_forward", false));
             updateFastForward();
         }
     }
-
-    // Playtest note: `am start ... --es note "Test: ..." --ei note_secs 20`.
-    // A bottom banner over the game; an empty note hides it, note_secs <= 0 keeps it up.
-    private TextView mNoteView;
-    private final Runnable mHideNote = () -> {
-        if (mNoteView != null) {
-            mNoteView.setVisibility(View.GONE);
-        }
-    };
 
     private void showPlaytestNote(String text, int seconds) {
         if (mLayout == null) {
@@ -2280,23 +1134,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
-    private File savesDir() {
-        return new File(getFilesDir(), "Saves");
-    }
-
     /** Copies Name.srm beside the ROM into Saves/ once; never overwrites. */
     private BatterySaveSeed.Status seedBatterySave(String romPath) {
         BatterySaveSeed.Status status = BatterySaveSeed.seed(new File(romPath), savesDir());
         Log.v(TAG, "battery save seed " + status + " for " + romPath);
         return status;
-    }
-
-    private String saveTag(File rom) {
-        if (BatterySaveSeed.target(rom, savesDir()).isFile()) {
-            return "  ·  save";
-        }
-        File sidecar = BatterySaveSeed.sidecar(rom);
-        return sidecar != null && sidecar.isFile() ? "  ·  test save" : "";
     }
 
     private static String romSource(File rom) {
@@ -2348,189 +1190,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (paused) {
             return observedFps == null
                     ? "PAUSED"
-                    : String.format(Locale.US, "PAUSED · last %.1f fps",
-                            observedFps);
+                    : String.format(Locale.US, "PAUSED · last %.1f fps", observedFps);
         }
         return observedFps == null
                 ? "measuring"
                 : String.format(Locale.US, "%.1f fps", observedFps);
-    }
-
-    private List<View> railViews() {
-        return java.util.Arrays.asList(mTabPlay, mTabStates, mTabCheats, mTabSetup, mTabCapture);
-    }
-
-    private View selectedRailView() {
-        switch (mPauseTab) {
-            case TAB_STATES: return mTabStates;
-            case TAB_CHEATS: return mTabCheats;
-            case TAB_SETUP: return mTabSetup;
-            case TAB_CAPTURE: return mTabCapture;
-            default: return mTabPlay;
-        }
-    }
-
-    private void selectRailView(View view) {
-        int tab = view == mTabStates ? TAB_STATES : view == mTabCheats ? TAB_CHEATS
-                : view == mTabSetup ? TAB_SETUP : view == mTabCapture ? TAB_CAPTURE : TAB_PLAY;
-        selectPauseTab(tab, false);
-        focusPauseView(view);
-    }
-
-    private void movePauseFocus(boolean up) {
-        boolean onRail = railViews().contains(getCurrentFocus());
-        List<View> views = onRail ? railViews() : contentFocusables();
-        if (views.isEmpty()) return;
-        int index = views.indexOf(getCurrentFocus());
-        // Endpoints stop instead of wrapping into another screen. Content
-        // button rows (group tabs, dialog buttons) count as one vertical stop.
-        int next = onRail ? MenuNavigation.next(index, views.size(), up)
-                : MenuNavigation.nextAcrossRows(horizontalRowIds(views), index, up);
-        if (onRail) selectRailView(views.get(next));
-        else focusPauseView(views.get(next));
-    }
-
-    private void cyclePauseTab(boolean left) {
-        List<View> rail = railViews();
-        int next = MenuNavigation.next(rail.indexOf(selectedRailView()), rail.size(), left);
-        selectRailView(rail.get(next));
-    }
-
-    private void cycleCheatGroup(boolean left) {
-        List<String> groups = WorkshopCheats.groups();
-        if (groups.isEmpty()) {
-            return;
-        }
-        int idx = groups.indexOf(mCheatGroup);
-        if (idx < 0) {
-            idx = 0;
-        }
-        int next = idx + (left ? -1 : 1);
-        if (next < 0) {
-            next = groups.size() - 1;
-        } else if (next >= groups.size()) {
-            next = 0;
-        }
-        showCheatGroup(groups.get(next));
-    }
-
-    private void movePauseFocusHorizontal(boolean left) {
-        View focus = getCurrentFocus();
-        if (railViews().contains(focus)) {
-            if (!left) restoreContentFocus();
-            return;
-        }
-        // Button rows (e.g. the state slot dialog) move between their buttons first.
-        View sibling = horizontalRowNeighbor(focus, left);
-        if (sibling != null) {
-            focusPauseView(sibling);
-        } else if (left) {
-            focusPauseView(selectedRailView());
-        }
-    }
-
-    private int[] horizontalRowIds(List<View> views) {
-        int[] ids = new int[views.size()];
-        List<Object> rows = new ArrayList<>();
-        for (int i = 0; i < ids.length; i++) {
-            Object parent = views.get(i).getParent();
-            boolean row = parent instanceof android.widget.LinearLayout
-                    && ((android.widget.LinearLayout) parent).getOrientation()
-                    == android.widget.LinearLayout.HORIZONTAL;
-            if (!row) { ids[i] = -1; continue; }
-            int id = rows.indexOf(parent);
-            if (id < 0) { rows.add(parent); id = rows.size() - 1; }
-            ids[i] = id;
-        }
-        return ids;
-    }
-
-    private View horizontalRowNeighbor(View focus, boolean left) {
-        if (focus == null || !(focus.getParent() instanceof android.widget.LinearLayout)) return null;
-        android.widget.LinearLayout row = (android.widget.LinearLayout) focus.getParent();
-        if (row.getOrientation() != android.widget.LinearLayout.HORIZONTAL) return null;
-        int count = row.getChildCount();
-        boolean[] usable = new boolean[count];
-        int current = -1;
-        for (int i = 0; i < count; i++) {
-            View child = row.getChildAt(i);
-            usable[i] = child.isShown() && child.isEnabled() && child.isFocusable();
-            if (child == focus) current = i;
-        }
-        int next = MenuNavigation.sideways(usable, current, left);
-        return next < 0 ? null : row.getChildAt(next);
-    }
-
-    private static boolean visible(View view) {
-        return view != null && view.getVisibility() == View.VISIBLE;
-    }
-
-    private void syncMenuScreens() {
-        if (mPauseScrim == null) return;
-        boolean bug = visible(mBugCategories);
-        boolean workshopChild = bug || visible(mCheckpointScroller) || visible(mRestoreReview);
-        mPauseScrim.findViewById(R.id.workshop_actions).setVisibility(workshopChild ? View.GONE : View.VISIBLE);
-        mPauseScrim.findViewById(R.id.bug_scroller).setVisibility(bug ? View.VISIBLE : View.GONE);
-        mPauseScrim.findViewById(R.id.game_actions).setVisibility(visible(mRomScroller) ? View.GONE : View.VISIBLE);
-    }
-
-    private String menuScreenKey() {
-        if (mPauseTab == TAB_PLAY && visible(mRomScroller)) return "roms";
-        if (mPauseTab == TAB_STATES) return visible(mStateReview) ? "state-review" : "states";
-        if (mPauseTab == TAB_CHEATS) return "cheats-" + mCheatGroup;
-        if (mPauseTab == TAB_CAPTURE) {
-            if (visible(mRestoreReview)) return "restore-review";
-            if (visible(mCheckpointScroller)) return "checkpoints";
-            if (visible(mBugCategories)) return "bug-categories";
-        }
-        return "tab-" + mPauseTab;
-    }
-
-    private List<View> contentFocusables() {
-        List<View> views = new ArrayList<>();
-        if (mPauseScrim == null) return views;
-        View root;
-        switch (mPauseTab) {
-            case TAB_STATES: root = visible(mStateReview) ? mStateReview : mStateScroller; break;
-            case TAB_CHEATS: root = mPanelCheats; break;
-            case TAB_SETUP: root = mPanelSetup; break;
-            case TAB_CAPTURE:
-                root = visible(mRestoreReview) ? mRestoreReview
-                        : visible(mCheckpointScroller) ? mCheckpointScroller
-                        : visible(mBugCategories) ? mBugCategories
-                        : mPauseScrim.findViewById(R.id.workshop_actions);
-                break;
-            default: root = visible(mRomScroller) ? mRomScroller : mPauseScrim.findViewById(R.id.game_actions);
-        }
-        collectMenuRows(root, views);
-        return views;
-    }
-
-    private void collectMenuRows(View view, List<View> views) {
-        if (view == null || !view.isShown() || !view.isEnabled() || isArtifactEditor(view)) return;
-        if (view.isFocusable() && !(view instanceof ScrollView)
-                && !(view instanceof android.widget.HorizontalScrollView)) {
-            views.add(view);
-            return;
-        }
-        if (view instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) collectMenuRows(group.getChildAt(i), views);
-        }
-    }
-
-    private void restoreContentFocus() {
-        syncMenuScreens();
-        List<View> views = contentFocusables();
-        int remembered = mMenuSelection.getOrDefault(menuScreenKey(), 0);
-        focusPauseView(views.isEmpty() ? selectedRailView()
-                : views.get(Math.max(0, Math.min(remembered, views.size() - 1))));
-    }
-
-    private List<View> pauseFocusables() {
-        List<View> views = new ArrayList<>(railViews());
-        views.addAll(contentFocusables());
-        return views;
     }
 
     private void setSurfaceFocusable(boolean focusable) {

@@ -2,7 +2,6 @@ package ca.mesen.oos;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -13,7 +12,7 @@ import java.util.Map;
  * oracle_cheats apply_checkpoint rule: resolve the 'after' chain oldest first,
  * write the bytes to WRAM, copy $7EF000-$7EF4FF to the active SRAM slot (main +
  * mirror + inverse checksum), then warp. Bytes no checkpoint names keep their
- * current values. Data comes from ProgressionData (generated).
+ * current values. Data comes from CheckpointData (bundled checkpoints.json).
  */
 final class Progression {
     enum Kind { ENTRANCE, AREA }
@@ -112,10 +111,6 @@ final class Progression {
 
     private Progression() {}
 
-    static List<Checkpoint> checkpoints() {
-        return Collections.unmodifiableList(Arrays.asList(ProgressionData.CHECKPOINTS));
-    }
-
     static final class Failure extends Exception {
         Failure(String message) { super(message); }
     }
@@ -136,13 +131,18 @@ final class Progression {
         return null;
     }
 
-    /** Final byte per address after applying the chain to the current values, in write order. */
+    /** Final byte per address after applying a checkpoint's writes to current values. */
     static Map<Integer, Integer> resolveBytes(Checkpoint cp, Host host) throws Failure {
+        return resolveBytes(cp.writes, host);
+    }
+
+    /** Final byte per address after applying packed {addr, op, operand} triples. */
+    static Map<Integer, Integer> resolveBytes(int[] writes, Host host) throws Failure {
         Map<Integer, Integer> expected = new LinkedHashMap<>();
-        for (int i = 0; i + 2 < cp.writes.length; i += 3) {
-            int addr = cp.writes[i];
-            int op = cp.writes[i + 1];
-            int operand = cp.writes[i + 2] & 0xFF;
+        for (int i = 0; i + 2 < writes.length; i += 3) {
+            int addr = writes[i];
+            int op = writes[i + 1];
+            int operand = writes[i + 2] & 0xFF;
             Integer known = expected.get(addr);
             int current = known != null ? known : host.readByte(addr);
             if (current < 0) throw new Failure(String.format(Locale.ROOT, "Could not read $%06X", addr));
@@ -156,6 +156,28 @@ final class Progression {
             expected.put(addr, next);
         }
         return expected;
+    }
+
+    /**
+     * Write WRAM bytes in-place and sync SRAM (active slot + mirror + checksum)
+     * without changing pause state. Used when applying presets/edits from the
+     * paused menu overlay during normal play.
+     */
+    static String applyWrites(String label, int[] writes, Host host) {
+        try {
+            String idle = idleProblem(host);
+            if (idle != null) return idle;
+            Map<Integer, Integer> expected = resolveBytes(writes, host);
+            for (Map.Entry<Integer, Integer> e : expected.entrySet()) {
+                if (!host.writeByte(e.getKey(), e.getValue())) {
+                    throw new Failure(String.format(Locale.ROOT, "Write failed at $%06X", e.getKey()));
+                }
+            }
+            int slot = syncSram(host);
+            return String.format(Locale.ROOT, "Applied %s (WRAM + slot %d SRAM)", label, slot);
+        } catch (Failure f) {
+            return "Preset " + label + " failed: " + f.getMessage();
+        }
     }
 
     static int activeSlot(Host host) {

@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -70,15 +69,14 @@ private object Pal {
     val INK = Color(0xFF1A1405)
 }
 
-/** One playtest ROM on the Library shelf, with its states read from disk. */
+/** One channel card on the Library shelf, with its channel states read from disk. */
 private class RomCard(
-    val file: File,
-    val title: String,
-    val tag: String,
+    val entry: RomLibrary.Entry,
     val saveLabel: String,
     val source: String,
     val states: List<SaveStateSlots.Entry>,
 ) {
+    val file: File get() = entry.file
     val newest: SaveStateSlots.Entry? get() = states.filter { it.occupied }.maxByOrNull { it.modified }
     val stateCount: Int get() = states.count { it.occupied }
 }
@@ -91,45 +89,51 @@ enum class RailItem(val label: String) {
     RESUME("Resume"),
     SAVE("Save state"),
     LOAD("Load state"),
-    CHECKPOINTS("Checkpoints"),
+    ITEMS("Items & progress"),
     FAST("Fast forward"),
-    TOOLS("Oracle tools"),
     SETTINGS("Settings"),
     LIBRARY("Library"),
-    WORKSHOP("Workshop"),
 }
 
 private enum class Key { UP, DOWN, LEFT, RIGHT, A, B, X, Y, L, R, START }
 
 /**
- * Library launcher + in-game quick menu. The activity routes every pad key here
- * through [onKey]/[onBack]; Compose only draws the state below.
+ * Unified Compose UI: channel ROM library + in-game quick menu (save states,
+ * SRAM inventory + progression editor, bundled story presets, and settings).
+ * All screens are navigated by controller (D-pad / A / B / L1 / R1 / Y / Start).
  */
 class OracleUi(private val host: Host) {
     interface Host {
         fun nativeReady(): Boolean
-        fun romFiles(): List<File>
+        fun romRoots(): Array<File>
         fun currentRomPath(): String?
         fun batterySaveLabel(rom: File): String
         fun romSourceLabel(rom: File): String
         fun statesDir(): File
+        fun savesDir(): File
+        fun checkpointData(): CheckpointData
+        fun presetData(): PresetData
+        fun socketSummary(): String
         /** UI became visible (pause the game) or was closed (resume it). */
         fun uiOpened()
         fun uiClosed()
-        /** Hide this UI without resuming and show the legacy diagnostics panel. */
-        fun openWorkshop()
         /** Seeds the battery save, loads the ROM and remembers it. Main thread. */
         fun bootRom(path: String): Boolean
+        fun resetConsole()
+        fun requestHomeShortcut()
         fun isStickyFastForward(): Boolean
         fun setStickyFastForward(on: Boolean)
         fun setting(key: String): Boolean
         fun setSetting(key: String, on: Boolean)
-        /** Runs a checkpoint warp after the UI has closed. */
+        /** Runs a checkpoint or milestone preset warp after the UI has closed. */
         fun startCheckpoint(id: String)
+        fun startPreset(id: String)
+        fun toast(message: String)
     }
 
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "oracle-ui").apply { isDaemon = true } }
+    private val mismatchWarnings = SaveStateSlots.MismatchWarnings()
 
     var screen by mutableStateOf(Screen.CLOSED); private set
     private var status by mutableStateOf("")
@@ -150,19 +154,27 @@ class OracleUi(private val host: Host) {
     private var slotPage by mutableIntStateOf(0)
     private var slotIndex by mutableIntStateOf(0)
     private var listIndex by mutableIntStateOf(0)
-    private var toolTab by mutableIntStateOf(0)
-    private var toolLabels by mutableStateOf(listOf<String>())
+    private var itemTab by mutableIntStateOf(0)
+    private var bitIndex by mutableIntStateOf(0)
+    private var itemRows by mutableStateOf(listOf<Inventory.Row>())
+    private var itemValues by mutableStateOf(listOf<Int>())
     private var fastOn by mutableStateOf(false)
     private var settingsTick by mutableIntStateOf(0)
 
-    private val toolGroups: List<String> by lazy { WorkshopCheats.groups().filter { it != "Progress" } }
-    private val checkpoints: List<Progression.Checkpoint> by lazy { Progression.checkpoints() }
-    private val settings = listOf(
-        "hud" to "Keep status bar visible",
-        "fit" to "Fill screen",
-        "play" to "Smooth play",
-        "gpu" to "GPU blit",
+    private val itemTabs = listOf(TAB_PRESETS) + Inventory.tabs()
+    private val settingsRows = listOf(
+        SettingRow.Toggle("hud", "Keep status bar visible"),
+        SettingRow.Toggle("fit", "Fill screen"),
+        SettingRow.Toggle("play", "Smooth play"),
+        SettingRow.Toggle("gpu", "GPU blit"),
+        SettingRow.Action("reset", "Reset console", "Restart the emulated console"),
+        SettingRow.Action("home", "Add to Home", "Pin launcher shortcut"),
     )
+
+    private sealed class SettingRow(val key: String, val label: String) {
+        class Toggle(key: String, label: String) : SettingRow(key, label)
+        class Action(key: String, label: String, val tag: String) : SettingRow(key, label)
+    }
 
     val isOpen: Boolean get() = screen != Screen.CLOSED
 
@@ -194,6 +206,7 @@ class OracleUi(private val host: Host) {
         confirm = null
         fastOn = host.isStickyFastForward()
         refreshStates()
+        refreshItems()
         screen = Screen.MENU
         if (wasClosed) host.uiOpened()
     }
@@ -203,12 +216,6 @@ class OracleUi(private val host: Host) {
         screen = Screen.CLOSED
         confirm = null
         host.uiClosed()
-    }
-
-    private fun toWorkshop() {
-        screen = Screen.CLOSED
-        confirm = null
-        host.openWorkshop()
     }
 
     // ---- input -------------------------------------------------------------
@@ -282,6 +289,11 @@ class OracleUi(private val host: Host) {
 
     private fun slotName(slot: Int) = if (slot == SaveStateSlots.AUTO_SLOT) "auto-save" else "slot $slot"
 
+    private fun currentBuildId(): String {
+        val path = host.currentRomPath() ?: return ""
+        return RomLibrary.buildId(File(path))
+    }
+
     /** Native loadState() stops at slot 10, so the auto-save loads by file path. */
     private fun loadEntry(entry: SaveStateSlots.Entry): Boolean =
         if (entry.slot == SaveStateSlots.AUTO_SLOT) {
@@ -296,11 +308,15 @@ class OracleUi(private val host: Host) {
 
     private fun reloadCards() {
         val dir = host.statesDir()
-        cards = host.romFiles().map { rom ->
-            val base = rom.nameWithoutExtension
+        cards = RomLibrary.scan(host.romRoots()).map { entry ->
+            val base = RomLibrary.baseName(entry.file)
             val slots = slotList { slot -> File(dir, "${base}_$slot.mss").path }
-            val (title, tag) = romTitle(rom)
-            RomCard(rom, title, tag, host.batterySaveLabel(rom), host.romSourceLabel(rom), slots)
+            RomCard(entry, host.batterySaveLabel(entry.file), host.romSourceLabel(entry.file), slots)
+        }
+        if (cards.isEmpty()) {
+            libIndex = 0
+        } else {
+            libIndex = libIndex.coerceIn(0, cards.size - 1)
         }
     }
 
@@ -315,12 +331,23 @@ class OracleUi(private val host: Host) {
         if (newest != null) out.add(LibAction("Resume last state") { resumeState(card, newest) })
         if (current) {
             out.add(LibAction("Restart from save") {
-                ask("Restart ${card.title}?", "Progress since your last in-game save is lost. Save states stay.", "Restart") {
+                ask("Restart ${card.entry.channel}?", "Progress since your last in-game save is lost. Save states stay.", "Restart") {
                     boot(card)
                 }
             })
         } else {
             out.add(LibAction("Start from save") { boot(card) })
+        }
+        if (card.entry.previous != null) {
+            val prevLabel = if (card.entry.previousBuild.isNotEmpty()) {
+                "Roll back ${card.entry.previousBuild}"
+            } else {
+                "Roll back"
+            }
+            out.add(LibAction(prevLabel) { rollbackChannel(card) })
+        }
+        if (card.entry.olderCopies.isNotEmpty()) {
+            out.add(LibAction("Prune ${card.entry.olderCopies.size} old") { pruneOlderCopies(card) })
         }
         return out
     }
@@ -342,11 +369,43 @@ class OracleUi(private val host: Host) {
             status = "Could not load ${card.file.name}."
             return
         }
+        val warning = mismatchWarnings.check(entry, card.entry.build)
         val name = slotName(entry.slot)
         work("Loading $name…", {
             Thread.sleep(150)
             if (loadEntry(entry)) null else "The $name did not load."
-        }) { problem -> if (problem == null) close() else status = problem }
+        }) { problem ->
+            if (problem == null) {
+                if (warning != null) host.toast(warning)
+                close()
+            } else {
+                status = problem
+            }
+        }
+    }
+
+    private fun rollbackChannel(card: RomCard) {
+        val wasCurrent = isCurrent(card)
+        val problem = RomLibrary.rollback(card.entry)
+        if (problem != null) {
+            status = problem
+            return
+        }
+        reloadCards()
+        val updated = cards.firstOrNull { canonical(it.file.path) == canonical(card.file.path) }
+        val toBuild = updated?.entry?.build?.ifEmpty { "previous build" } ?: "previous build"
+        if (wasCurrent && host.nativeReady()) {
+            host.bootRom(card.file.path)
+        }
+        status = "Rolled back ${card.entry.channel} to $toBuild."
+        libAction = 0
+    }
+
+    private fun pruneOlderCopies(card: RomCard) {
+        val cleanup = RomLibrary.removeOlderCopies(card.entry, host.statesDir(), host.savesDir())
+        reloadCards()
+        libAction = 0
+        status = cleanup.summary(card.entry.channel)
     }
 
     private fun libraryKey(key: Key) {
@@ -355,13 +414,13 @@ class OracleUi(private val host: Host) {
         when (key) {
             Key.LEFT -> if (libRow == 0) libIndex = (libIndex - 1).coerceAtLeast(0) else libAction = (libAction - 1).coerceAtLeast(0)
             Key.RIGHT -> if (libRow == 0) libIndex = (libIndex + 1).coerceAtMost((cards.size - 1).coerceAtLeast(0))
-                else libAction = (libAction + 1).coerceAtMost(actions.size - 1)
+                else libAction = (libAction + 1).coerceAtMost((actions.size - 1).coerceAtLeast(0))
             Key.DOWN -> if (actions.isNotEmpty()) { libRow = 1; libAction = libAction.coerceIn(0, actions.size - 1) }
             Key.UP -> libRow = 0
             Key.A -> actions.getOrNull(if (libRow == 0) 0 else libAction)?.run?.invoke()
+            Key.START -> actions.firstOrNull()?.run?.invoke()
             Key.B -> if (libRow == 1) libRow = 0
                 else if (host.nativeReady() && host.currentRomPath() != null) close()
-            Key.START -> toWorkshop()
             else -> {}
         }
         if (key == Key.LEFT || key == Key.RIGHT) {
@@ -384,15 +443,28 @@ class OracleUi(private val host: Host) {
         }
     }
 
-    private fun refreshTools() {
-        val group = toolGroups.getOrNull(toolTab) ?: return
-        toolLabels = WorkshopCheats.forGroup(group).map { WorkshopCheats.rowLabel(it) }
+    private fun activeItemTabName(): String = itemTabs.getOrElse(itemTab) { TAB_PRESETS }
+
+    private fun refreshItems() {
+        val tab = activeItemTabName()
+        if (tab == TAB_PRESETS) {
+            itemRows = emptyList()
+            itemValues = emptyList()
+            return
+        }
+        val rows = Inventory.rows(tab, host.checkpointData().names)
+        itemRows = rows
+        itemValues = if (host.nativeReady()) {
+            rows.map { Inventory.read(it, Inventory.LIVE) }
+        } else {
+            rows.map { if (it.kind == Inventory.Kind.ACTION) 0 else -1 }
+        }
     }
 
     private val railItem: RailItem get() = RailItem.values()[rail]
 
     private fun hasPanel(item: RailItem) = when (item) {
-        RailItem.SAVE, RailItem.LOAD, RailItem.CHECKPOINTS, RailItem.TOOLS, RailItem.SETTINGS -> true
+        RailItem.SAVE, RailItem.LOAD, RailItem.ITEMS, RailItem.SETTINGS -> true
         else -> false
     }
 
@@ -400,7 +472,7 @@ class OracleUi(private val host: Host) {
         val item = railItem
         when (item) {
             RailItem.SAVE, RailItem.LOAD -> { refreshStates(); slotIndex = 0 }
-            RailItem.TOOLS -> { listIndex = 0; refreshTools() }
+            RailItem.ITEMS -> { listIndex = 0; bitIndex = 0; refreshItems() }
             else -> listIndex = 0
         }
         inPanel = true
@@ -416,12 +488,15 @@ class OracleUi(private val host: Host) {
                 status = if (fastOn) "Fast forward stays on after you resume." else "Fast forward off."
             }
             RailItem.LIBRARY -> openLibrary()
-            RailItem.WORKSHOP -> toWorkshop()
             else -> enterPanel()
         }
     }
 
     private fun menuKey(key: Key) {
+        if (key == Key.START) {
+            close()
+            return
+        }
         if (!inPanel) {
             val count = RailItem.values().size
             when (key) {
@@ -434,7 +509,9 @@ class OracleUi(private val host: Host) {
             }
             if (key == Key.UP || key == Key.DOWN) {
                 status = ""
-                if (railItem == RailItem.TOOLS) { toolTab = 0; refreshTools() }
+                if (railItem == RailItem.ITEMS) {
+                    refreshItems()
+                }
             }
             return
         }
@@ -444,21 +521,43 @@ class OracleUi(private val host: Host) {
         }
         when (railItem) {
             RailItem.SAVE, RailItem.LOAD -> slotKey(key)
-            RailItem.CHECKPOINTS -> listKey(key, checkpoints.size) { runCheckpoint(checkpoints[listIndex]) }
-            RailItem.TOOLS -> toolsKey(key)
-            RailItem.SETTINGS -> listKey(key, settings.size) {
-                val (k, _) = settings[listIndex]
-                host.setSetting(k, !host.setting(k))
-                settingsTick++
+            RailItem.ITEMS -> itemsKey(key)
+            RailItem.SETTINGS -> listKey(key, settingsRows.size) {
+                activateSetting(settingsRows[listIndex])
             }
             else -> {}
+        }
+    }
+
+    private fun activateSetting(row: SettingRow) {
+        when (row) {
+            is SettingRow.Toggle -> {
+                host.setSetting(row.key, !host.setting(row.key))
+                settingsTick++
+            }
+            is SettingRow.Action -> when (row.key) {
+                "reset" -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
+                    ask("Reset console?", "Unsaved progress since your last in-game save will be lost.", "Reset") {
+                        host.resetConsole()
+                        close()
+                    }
+                }
+                "home" -> {
+                    host.requestHomeShortcut()
+                    status = "Home shortcut requested."
+                }
+            }
         }
     }
 
     private fun listKey(key: Key, size: Int, onA: () -> Unit) {
         when (key) {
             Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
-            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost(size - 1)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((size - 1).coerceAtLeast(0))
             Key.LEFT -> inPanel = false
             Key.A -> if (size > 0) onA()
             else -> {}
@@ -489,10 +588,21 @@ class OracleUi(private val host: Host) {
             status = "The auto-save is written by the emulator. Pick slot 1–10."
             return
         }
+        val build = currentBuildId()
         val doSave = {
-            work("Saving slot $slot…", { if (MesenNative.saveState(slot)) null else "Slot $slot did not save." }) { problem ->
+            work("Saving slot $slot…", {
+                if (!MesenNative.saveState(slot)) {
+                    "Slot $slot did not save."
+                } else {
+                    val path = MesenNative.saveStatePath(slot)
+                    if (path != null && build.isNotEmpty()) {
+                        SaveStateSlots.writeBuild(File(path), build)
+                    }
+                    null
+                }
+            }) { problem ->
                 refreshStates()
-                status = problem ?: "Saved slot $slot."
+                status = problem ?: if (build.isNotEmpty()) "Saved slot $slot ($build)." else "Saved slot $slot."
             }
         }
         if (entry.occupied) ask("Overwrite slot $slot?", "Replaces ${caption(entry)}.", "Overwrite", doSave) else doSave()
@@ -503,9 +613,15 @@ class OracleUi(private val host: Host) {
             status = "Slot ${entry.slot} is empty."
             return
         }
+        val warning = mismatchWarnings.check(entry, currentBuildId())
         val name = slotName(entry.slot)
         work("Loading $name…", { if (loadEntry(entry)) null else "The $name did not load." }) { problem ->
-            if (problem == null) close() else status = problem
+            if (problem == null) {
+                if (warning != null) host.toast(warning)
+                close()
+            } else {
+                status = problem
+            }
         }
     }
 
@@ -513,8 +629,7 @@ class OracleUi(private val host: Host) {
         val file = entry.file
         if (!entry.occupied || file == null) return
         ask("Delete slot ${entry.slot}?", "Removes ${caption(entry)}. This cannot be undone.", "Delete") {
-            val ok = file.delete()
-            File(file.path + ".label").delete()
+            val ok = SaveStateSlots.delete(file)
             refreshStates()
             status = if (ok) "Deleted slot ${entry.slot}." else "Could not delete slot ${entry.slot}."
         }
@@ -528,7 +643,7 @@ class OracleUi(private val host: Host) {
         val slot = Progression.activeSlot(Progression.LIVE)
         ask(
             "Warp to ${cp.label}?",
-            "Replaces save slot $slot progress up to beat ${cp.beat}. Items not named by the checkpoint stay as they are.",
+            "Replaces save slot $slot progress up to beat ${cp.beat}. Items not named by the preset stay as they are.",
             "Warp",
         ) {
             val problem = Progression.idleProblem(Progression.LIVE)
@@ -541,20 +656,79 @@ class OracleUi(private val host: Host) {
         }
     }
 
-    private fun toolsKey(key: Key) {
-        val group = toolGroups.getOrNull(toolTab) ?: return
-        val rows = WorkshopCheats.forGroup(group)
+    private fun runPreset(preset: PresetData.Preset) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
+        if (preset.inPlace) {
+            status = PresetData.applyInPlace(preset, Progression.LIVE)
+            refreshItems()
+            return
+        }
+        val problem = Progression.idleProblem(Progression.LIVE)
+        if (problem != null) {
+            status = problem
+            return
+        }
+        close()
+        host.startPreset(preset.id)
+    }
+
+    private fun itemsKey(key: Key) {
+        if (key == Key.L || key == Key.R) {
+            val n = itemTabs.size
+            itemTab = if (key == Key.L) (itemTab - 1 + n) % n else (itemTab + 1) % n
+            listIndex = 0
+            bitIndex = 0
+            status = ""
+            refreshItems()
+            return
+        }
+        val tab = activeItemTabName()
+        if (tab == TAB_PRESETS) {
+            val presets = host.presetData().presets
+            val cps = host.checkpointData().checkpoints
+            val total = presets.size + cps.size
+            listKey(key, total) {
+                if (listIndex < presets.size) runPreset(presets[listIndex])
+                else runCheckpoint(cps[listIndex - presets.size])
+            }
+            return
+        }
+        val rows = itemRows
         when (key) {
-            Key.L, Key.R -> {
-                val n = toolGroups.size
-                toolTab = if (key == Key.L) (toolTab - 1 + n) % n else (toolTab + 1) % n
-                listIndex = 0
-                refreshTools()
+            Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((rows.size - 1).coerceAtLeast(0))
+            Key.LEFT, Key.RIGHT -> {
+                val row = rows.getOrNull(listIndex)
+                if (row == null || row.kind == Inventory.Kind.ACTION
+                        || row.kind == Inventory.Kind.FLAG || row.kind == Inventory.Kind.SONG) {
+                    if (key == Key.LEFT) inPanel = false
+                    return
+                }
+                if (row.kind == Inventory.Kind.BITS) {
+                    bitIndex = if (key == Key.LEFT) (bitIndex + 1).coerceAtMost(7) else (bitIndex - 1).coerceAtLeast(0)
+                    return
+                }
+                if (!host.nativeReady()) {
+                    status = "Emulator is still starting."
+                    return
+                }
+                val result = Inventory.step(row, Inventory.LIVE, if (key == Key.LEFT) -1 else 1)
+                if (result != null) status = result
+                refreshItems()
             }
-            else -> listKey(key, rows.size) {
-                status = WorkshopCheats.apply(rows[listIndex])
-                refreshTools()
+            Key.A -> {
+                val row = rows.getOrNull(listIndex) ?: return
+                if (!host.nativeReady()) {
+                    status = "Emulator is still starting."
+                    return
+                }
+                status = Inventory.toggle(row, Inventory.LIVE, bitIndex)
+                refreshItems()
             }
+            else -> {}
         }
     }
 
@@ -597,14 +771,14 @@ class OracleUi(private val host: Host) {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Txt("ORACLE OF SECRETS", 11.sp, Pal.GOLD, bold = true, italic = true)
-                    Txt("Playtest builds", 22.sp, Pal.TEXT, bold = true, italic = true)
+                    Txt("ROM library", 22.sp, Pal.TEXT, bold = true, italic = true)
                 }
-                Txt("${cards.size} builds · ${clock(System.currentTimeMillis())}", 12.sp, Pal.DIM, bold = true)
+                Txt("${cards.size} channels · ${clock(System.currentTimeMillis())}", 12.sp, Pal.DIM, bold = true)
             }
             Spacer(Modifier.height(10.dp))
             if (cards.isEmpty()) {
                 Box(Modifier.fillMaxWidth().height(232.dp).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL), Alignment.Center) {
-                    Txt("No ROMs found in OracleOfSecrets/ or the app files folder.", 13.sp, Pal.DIM)
+                    Txt("No ROMs found in files/Roms/, OracleOfSecrets/, or snes/.", 13.sp, Pal.DIM)
                 }
             } else {
                 LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(232.dp)) {
@@ -618,10 +792,14 @@ class OracleUi(private val host: Host) {
             ) {
                 if (card != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Txt(card.title, 16.sp, Pal.TEXT, bold = true, italic = true)
-                        if (card.tag.isNotEmpty()) {
+                        Txt(card.entry.channel, 16.sp, Pal.TEXT, bold = true, italic = true)
+                        if (card.entry.build.isNotEmpty()) {
                             Spacer(Modifier.width(6.dp))
-                            Txt(card.tag, 16.sp, Pal.GOLD, bold = true, italic = true)
+                            Txt(card.entry.build, 16.sp, Pal.GOLD, bold = true, italic = true)
+                        }
+                        if (card.entry.pinned) {
+                            Spacer(Modifier.width(8.dp))
+                            Badge("PINNED", Pal.GOLD)
                         }
                         if (isCurrent(card)) {
                             Spacer(Modifier.width(8.dp))
@@ -630,7 +808,7 @@ class OracleUi(private val host: Host) {
                     }
                     Txt(cardDetail(card), 11.sp, Pal.DIM, bold = true)
                     Spacer(Modifier.weight(1f))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         actions.forEachIndexed { i, a ->
                             val on = (libRow == 1 && i == libAction) || (libRow == 0 && i == 0)
                             ActionButton(a.label, on, libRow == 1 && i == libAction, Modifier.weight(1f))
@@ -640,7 +818,7 @@ class OracleUi(private val host: Host) {
             }
             HintBar(
                 if (status.isNotEmpty()) status else null,
-                listOf("A" to "Play", "D-PAD" to "Browse", "START" to "Workshop") +
+                listOf("A / START" to "Play", "D-PAD" to "Browse") +
                     if (host.nativeReady() && host.currentRomPath() != null) listOf("B" to "Back to game") else emptyList(),
             )
         }
@@ -659,8 +837,8 @@ class OracleUi(private val host: Host) {
             Thumb(preview, Modifier.fillMaxWidth().height(175.dp), "No states yet")
             Spacer(Modifier.height(5.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { Txt(card.title, 15.sp, Pal.TEXT, bold = true, italic = true) }
-                if (card.tag.isNotEmpty()) Txt(card.tag, 12.sp, Pal.GOLD, bold = true, italic = true)
+                Box(Modifier.weight(1f)) { Txt(card.entry.channel, 15.sp, Pal.TEXT, bold = true, italic = true) }
+                if (card.entry.build.isNotEmpty()) Txt(card.entry.build, 12.sp, Pal.GOLD, bold = true, italic = true)
             }
             Txt(cardSubtitle(card), 11.sp, Pal.DIM, bold = true)
         }
@@ -687,8 +865,7 @@ class OracleUi(private val host: Host) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when (item) {
                             RailItem.SAVE, RailItem.LOAD -> SlotGrid(item == RailItem.SAVE)
-                            RailItem.CHECKPOINTS -> CheckpointList()
-                            RailItem.TOOLS -> ToolsPanel()
+                            RailItem.ITEMS -> ItemsPanel()
                             RailItem.SETTINGS -> SettingsPanel()
                             else -> Txt(blurb(item), 13.sp, Pal.DIM)
                         }
@@ -747,33 +924,30 @@ class OracleUi(private val host: Host) {
         ) {
             Thumb(preview, Modifier.fillMaxWidth().height(146.dp), if (saving) "+" else "Empty", big = saving)
             Spacer(Modifier.height(6.dp))
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Txt(if (entry.slot == SaveStateSlots.AUTO_SLOT) "Auto  " else "${entry.slot}  ", 12.sp, Pal.GOLD, bold = true, italic = true)
-                Txt(caption(entry), 12.sp, if (entry.occupied) Pal.TEXT else Pal.DIM, bold = true)
+                Box(Modifier.weight(1f)) {
+                    Txt(caption(entry), 12.sp, if (entry.occupied) Pal.TEXT else Pal.DIM, bold = true)
+                }
+                if (entry.occupied && entry.build.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    Txt(entry.build, 11.sp, Pal.TEAL, bold = true)
+                }
             }
         }
     }
 
     @Composable
-    private fun CheckpointList() {
+    private fun ItemsPanel() {
         val state = rememberLazyListState()
-        LaunchedEffect(listIndex, inPanel) { if (inPanel) state.animateScrollToItem((listIndex - 3).coerceAtLeast(0)) }
-        LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            itemsIndexed(checkpoints) { i, cp ->
-                ListRow(cp.label, if (cp.kind == Progression.Kind.AREA) "area" else "door", inPanel && i == listIndex, lead = "${cp.beat}")
-            }
+        LaunchedEffect(listIndex, inPanel, itemTab) {
+            if (inPanel) state.animateScrollToItem((listIndex - 3).coerceAtLeast(0))
         }
-    }
-
-    @Composable
-    private fun ToolsPanel() {
-        val state = rememberLazyListState()
-        LaunchedEffect(listIndex, inPanel) { if (inPanel) state.animateScrollToItem((listIndex - 3).coerceAtLeast(0)) }
-        LaunchedEffect(toolTab) { refreshTools() }
+        val tab = activeItemTabName()
         Column {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                toolGroups.forEachIndexed { i, g ->
-                    val on = i == toolTab
+                itemTabs.forEachIndexed { i, g ->
+                    val on = i == itemTab
                     Box(
                         Modifier.clip(RoundedCornerShape(12.dp)).background(if (on) Pal.GOLD else Pal.PANEL2)
                             .padding(horizontal = 10.dp, vertical = 3.dp),
@@ -781,8 +955,79 @@ class OracleUi(private val host: Host) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                itemsIndexed(toolLabels) { i, label -> ListRow(label, "", inPanel && i == listIndex) }
+            if (tab == TAB_PRESETS) {
+                val presetData = host.presetData()
+                val data = host.checkpointData()
+                if (presetData.presets.isEmpty() && data.checkpoints.isEmpty()) {
+                    Txt(presetData.error ?: data.error ?: "No presets available.", 13.sp, Pal.DIM)
+                } else {
+                    val base = presetData.presets.size
+                    LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        itemsIndexed(presetData.presets) { i, preset ->
+                            ListRow(
+                                preset.label,
+                                preset.displayTag(),
+                                inPanel && i == listIndex,
+                                lead = "${preset.beat}",
+                                tagColor = if (preset.inPlace) Pal.TEAL else Pal.GOLD,
+                            )
+                        }
+                        itemsIndexed(data.checkpoints) { i, cp ->
+                            ListRow(
+                                cp.label,
+                                if (cp.kind == Progression.Kind.AREA) "area" else "door",
+                                inPanel && (base + i) == listIndex,
+                                lead = "${cp.beat}",
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    itemsIndexed(itemRows) { i, row ->
+                        val value = itemValues.getOrElse(i) { -1 }
+                        val selected = inPanel && i == listIndex
+                        if (row.kind == Inventory.Kind.BITS) {
+                            BitsRow(row, value, selected, bitIndex)
+                        } else {
+                            val tag = when (row.kind) {
+                                Inventory.Kind.ACTION -> "apply"
+                                else -> Inventory.valueText(row, value)
+                            }
+                            val color = if (row.kind != Inventory.Kind.ACTION && value > 0) Pal.TEAL else Pal.DIM
+                            ListRow(row.label, tag, selected, tagColor = color)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun BitsRow(row: Inventory.Row, value: Int, selected: Boolean, focusBit: Int) {
+        Row(
+            Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(8.dp))
+                .background(if (selected) Pal.PANEL2 else Pal.PANEL)
+                .border(2.dp, if (selected) Pal.GOLD else Color.Transparent, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.weight(1f)) { Txt(row.label, 13.sp, Pal.TEXT, bold = true) }
+            Txt(Inventory.valueText(row, value), 11.sp, if (value > 0) Pal.TEAL else Pal.DIM, bold = true)
+            Spacer(Modifier.width(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                for (bit in 7 downTo 0) {
+                    val on = value >= 0 && ((value shr bit) and 1) != 0
+                    val bitFocused = selected && bit == focusBit
+                    Box(
+                        Modifier.width(18.dp).height(20.dp).clip(RoundedCornerShape(4.dp))
+                            .background(if (on) Pal.TEAL else Pal.BG)
+                            .border(1.dp, if (bitFocused) Pal.GOLD else Pal.LINE, RoundedCornerShape(4.dp)),
+                        Alignment.Center,
+                    ) {
+                        Txt("$bit", 10.sp, if (on) Pal.INK else Pal.DIM, bold = true)
+                    }
+                }
             }
         }
     }
@@ -791,10 +1036,20 @@ class OracleUi(private val host: Host) {
     private fun SettingsPanel() {
         @Suppress("UNUSED_VARIABLE") val tick = settingsTick
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            settings.forEachIndexed { i, (key, label) ->
-                val on = host.setting(key)
-                ListRow(label, if (on) "ON" else "OFF", inPanel && i == listIndex, tagColor = if (on) Pal.TEAL else Pal.DIM)
+            settingsRows.forEachIndexed { i, row ->
+                val selected = inPanel && i == listIndex
+                when (row) {
+                    is SettingRow.Toggle -> {
+                        val on = host.setting(row.key)
+                        ListRow(row.label, if (on) "ON" else "OFF", selected, tagColor = if (on) Pal.TEAL else Pal.DIM)
+                    }
+                    is SettingRow.Action -> {
+                        ListRow(row.label, row.tag, selected, tagColor = Pal.DIM)
+                    }
+                }
             }
+            Spacer(Modifier.height(6.dp))
+            Txt("ADB socket: ${host.socketSummary()}", 11.sp, Pal.TEAL, bold = true)
         }
     }
 
@@ -841,7 +1096,7 @@ class OracleUi(private val host: Host) {
                 .background(if (filled) Pal.GOLD else Pal.PANEL2)
                 .border(2.dp, if (outlined) Pal.TEXT else Pal.LINE, RoundedCornerShape(8.dp)),
             Alignment.Center,
-        ) { Txt(label, 13.sp, if (filled) Pal.INK else Pal.TEXT, bold = true, italic = true) }
+        ) { Txt(label, 12.sp, if (filled) Pal.INK else Pal.TEXT, bold = true, italic = true) }
     }
 
     @Composable
@@ -903,8 +1158,14 @@ class OracleUi(private val host: Host) {
 
     private fun currentTitle(): String {
         val path = host.currentRomPath() ?: return "No ROM"
-        val (title, tag) = romTitle(File(path))
-        return if (tag.isEmpty()) title else "$title $tag"
+        val file = File(path)
+        val parsed = RomLibrary.parse(file)
+        val build = RomLibrary.buildId(file)
+        return when {
+            build.isNotEmpty() -> "${parsed.channel} $build"
+            parsed.tag.isNotEmpty() -> "${parsed.channel} ${parsed.tag}"
+            else -> parsed.channel
+        }
     }
 
     private fun panelMeta(item: RailItem): String = when (item) {
@@ -912,27 +1173,35 @@ class OracleUi(private val host: Host) {
             val used = states.count { it.occupied }
             "$used saved · page ${slotPage + 1} of $pageCount"
         }
-        RailItem.CHECKPOINTS -> "Save slot ${Progression.activeSlot(Progression.LIVE)}"
-        RailItem.TOOLS -> toolGroups.getOrNull(toolTab) ?: ""
+        RailItem.ITEMS -> {
+            val tab = activeItemTabName()
+            if (tab == TAB_PRESETS) {
+                "Save slot ${Progression.activeSlot(Progression.LIVE)}"
+            } else {
+                tab
+            }
+        }
+        RailItem.SETTINGS -> host.socketSummary()
         else -> ""
     }
 
     private fun blurb(item: RailItem): String = when (item) {
         RailItem.RESUME -> "Back to the game."
         RailItem.FAST -> "A toggles ×3 speed. It stays on after you resume. Holding R2 still works."
-        RailItem.LIBRARY -> "Switch builds, resume a state, or start from the battery save."
-        RailItem.WORKSHOP -> "The diagnostics panel: bug capture, voice notes, Workshop checkpoints, ROM list and status chips."
+        RailItem.LIBRARY -> "Switch channels, resume a state, roll back, or start from the battery save."
         else -> ""
     }
 
     private fun menuHints(item: RailItem): List<Pair<String, String>> {
-        if (!inPanel) return listOf("A" to "Select", "B" to "Resume", "D-PAD" to "Move")
+        if (!inPanel) return listOf("A" to "Select", "B / START" to "Resume", "D-PAD" to "Move")
         return when (item) {
             RailItem.SAVE -> listOf("A" to "Save here", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.LOAD -> listOf("A" to "Load", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
-            RailItem.CHECKPOINTS -> listOf("A" to "Warp", "B" to "Back")
-            RailItem.TOOLS -> listOf("A" to "Apply", "L1 R1" to "Tab", "B" to "Back")
-            else -> listOf("A" to "Toggle", "B" to "Back")
+            RailItem.ITEMS -> when (activeItemTabName()) {
+                TAB_PRESETS -> listOf("A" to "Apply preset", "L1 R1" to "Tab", "B" to "Back")
+                else -> listOf("A" to "Toggle / apply", "LEFT RIGHT" to "Adjust / bit", "L1 R1" to "Tab", "B" to "Back")
+            }
+            else -> listOf("A" to "Select", "B" to "Back")
         }
     }
 
@@ -946,8 +1215,25 @@ class OracleUi(private val host: Host) {
 
     private fun cardDetail(card: RomCard): String {
         val parts = ArrayList<String>()
-        parts.add("Built ${SimpleDateFormat("MMM d", Locale.US).format(Date(card.file.lastModified()))}")
-        card.newest?.let { parts.add("last state ${whenText(it.modified)}${if (it.label.isNotEmpty()) " · ${it.label}" else ""}") }
+        val dateStr = SimpleDateFormat("MMM d HH:mm", Locale.US).format(Date(card.entry.date))
+        if (card.entry.build.isNotEmpty()) {
+            parts.add("${card.entry.build} · $dateStr")
+        } else {
+            parts.add(dateStr)
+        }
+        card.newest?.let {
+            val buildBit = if (it.build.isNotEmpty()) " (${it.build})" else ""
+            val labelBit = if (it.label.isNotEmpty()) " · ${it.label}" else ""
+            parts.add("last state ${whenText(it.modified)}$buildBit$labelBit")
+        }
+        if (card.entry.previous != null) {
+            val prev = if (card.entry.previousBuild.isNotEmpty()) card.entry.previousBuild else "saved"
+            parts.add("prev: $prev")
+        }
+        if (card.entry.olderCopies.isNotEmpty()) {
+            val n = card.entry.olderCopies.size
+            parts.add(if (n == 1) "1 older copy" else "$n older copies")
+        }
         if (card.source.isNotEmpty()) parts.add(card.source)
         return parts.joinToString(" · ")
     }
@@ -958,6 +1244,8 @@ class OracleUi(private val host: Host) {
     }
 
     companion object {
+        private const val TAB_PRESETS = "Presets"
+
         private fun clock(ms: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(ms))
 
         private fun whenText(ms: Long): String {
@@ -966,24 +1254,6 @@ class OracleUi(private val host: Host) {
             val sameDay = then.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
                 then.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
             return if (sameDay) "today ${clock(ms)}" else SimpleDateFormat("MMM d HH:mm", Locale.US).format(Date(ms))
-        }
-
-        private val TAG_RE = Regex("^(b\\d+|[0-9a-f]{3,8}|v\\d[\\w.]*|dev)$", RegexOption.IGNORE_CASE)
-
-        /** "Oracle - HUD Two-Item c789.sfc" -> ("HUD Two-Item", "c789"). */
-        fun romTitle(rom: File): Pair<String, String> {
-            var name = rom.nameWithoutExtension.trim()
-            for (prefix in listOf("Oracle - ", "Oracle-", "Oracle ")) {
-                if (name.startsWith(prefix) && name.length > prefix.length) {
-                    name = name.substring(prefix.length).trim()
-                    break
-                }
-            }
-            val parts = name.split(' ').filter { it.isNotEmpty() }
-            if (parts.size > 1 && TAG_RE.matches(parts.last())) {
-                return parts.dropLast(1).joinToString(" ") to parts.last()
-            }
-            return name to ""
         }
 
         private fun canonical(path: String?): String? {

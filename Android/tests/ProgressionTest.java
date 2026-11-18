@@ -1,5 +1,8 @@
 package ca.mesen.oos;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -7,6 +10,7 @@ import java.util.Map;
 
 final class ProgressionTest {
     private static int checks;
+    private static CheckpointData data;
 
     /** Fake emulator: WRAM/SRAM maps plus a module state machine driven by warp pokes. */
     static final class Emu implements Progression.Host {
@@ -58,31 +62,53 @@ final class ProgressionTest {
         }
     }
 
-    public static void main(String[] args) {
-        testGeneratedData();
+    public static void main(String[] args) throws Exception {
+        data = loadBundledData();
+        testBundledData();
+        testBadJsonSafety();
         testResolveChain();
         testChecksumAndSlot();
         testRefusesOutsidePlay();
         testAreaCheckpointEndToEnd();
         testEntranceFromOverworldUsesDoor();
         testWarpTimeout();
+        testApplyWritesInPlace();
         System.out.println("ProgressionTest OK (" + checks + " checks)");
     }
 
-    static Progression.Checkpoint find(String id) {
-        for (Progression.Checkpoint cp : Progression.checkpoints()) {
-            if (cp.id.equals(id)) return cp;
+    private static CheckpointData loadBundledData() throws Exception {
+        String[] roots = {
+            "Android/app/src/main/assets/oracle",
+            "app/src/main/assets/oracle",
+            "../app/src/main/assets/oracle"
+        };
+        for (String root : roots) {
+            File cp = new File(root, "checkpoints.json");
+            File warps = new File(root, "warps.json");
+            if (cp.isFile() && warps.isFile()) {
+                return CheckpointData.parse(
+                        new String(Files.readAllBytes(cp.toPath()), StandardCharsets.UTF_8),
+                        new String(Files.readAllBytes(warps.toPath()), StandardCharsets.UTF_8));
+            }
         }
-        throw new AssertionError("missing checkpoint " + id);
+        throw new AssertionError("bundled checkpoints.json / warps.json not found");
     }
 
-    static void testGeneratedData() {
-        List<Progression.Checkpoint> all = Progression.checkpoints();
+    static Progression.Checkpoint find(String id) {
+        Progression.Checkpoint cp = data.find(id);
+        if (cp == null) throw new AssertionError("missing checkpoint " + id);
+        return cp;
+    }
+
+    static void testBundledData() {
+        check(data.error == null, "bundled data parsed without error: " + data.error);
+        List<Progression.Checkpoint> all = data.checkpoints;
         check(all.size() == 25, "25 checkpoints, got " + all.size());
+        check(data.skipped.contains("abyss-owl"), "abyss-owl skipped");
+        check("GameState".equals(data.names.get(0x7EF3C5)), "GameState name collected");
+        check("OOSPROG".equals(data.names.get(0x7EF3D6)), "OOSPROG name collected");
         for (Progression.Checkpoint cp : all) {
             check(!cp.id.equals("abyss-owl"), "abyss-owl has no warps.json area, so it is skipped");
-        }
-        for (Progression.Checkpoint cp : all) {
             check(cp.chain[0].equals("intro-bed"), cp.id + " chain starts at intro-bed");
             check(cp.chain[cp.chain.length - 1].equals(cp.id), cp.id + " chain ends at itself");
             check(cp.writes.length % 3 == 0, cp.id + " write triples");
@@ -91,6 +117,16 @@ final class ProgressionTest {
             }
         }
         check(find("d8-entrance").kind == Progression.Kind.ENTRANCE, "d8 is an entrance");
+    }
+
+    static void testBadJsonSafety() {
+        CheckpointData missing = CheckpointData.parse(null, "{}");
+        check(missing.error != null && missing.checkpoints.isEmpty(), "null json returns error cleanly");
+        CheckpointData bad = CheckpointData.parse("{not json", "{}");
+        check(bad.error != null && bad.checkpoints.isEmpty(), "bad json returns error cleanly");
+        String loop = "{\"checkpoints\":[{\"id\":\"a\",\"after\":\"a\",\"location\":{\"entrance\":\"0x01\"},\"writes\":[]}]}";
+        CheckpointData looped = CheckpointData.parse(loop, "{\"entrances\":[],\"areas\":[]}");
+        check(looped.error != null && looped.error.contains("loops"), "loop detected cleanly");
     }
 
     static void testResolveChain() {
@@ -188,6 +224,28 @@ final class ProgressionTest {
         check(result.contains("failed") && result.contains("did not finish") && result.contains("slot 1"),
                 "timeout reported with done steps: " + result);
         check(emu.paused == 0, "pause balanced after failure");
+    }
+
+    static void testApplyWritesInPlace() {
+        Emu emu = new Emu(0x09, 0);
+        emu.sram.put(0x1FFE, 4); // slot 2
+        emu.wram.put(0x7EF3D8, 0x01);
+        int[] ops = {
+            0x7EF3D8, 1, 0x02, // set_bits $02 -> $03
+            0x7EF3B2, 0, 0xA5, // SkySoaringLearned
+        };
+        String res = Progression.applyWrites("FULL", ops, emu);
+        check(res.contains("Applied FULL") && res.contains("slot 2"), "in-place status: " + res);
+        check(emu.paused == 0, "in-place keeps pause state untouched");
+        check(emu.wram.get(0x7EF3D8) == 0x03 && emu.sram.get(0x500 + 0x3D8) == 0x03,
+                "in-place writes WRAM + slot 2 SRAM");
+        check(emu.sram.get(0x500 + 0x3B2) == 0xA5 && emu.sram.get(0x500 + 0xF00 + 0x3B2) == 0xA5,
+                "mirror SRAM synced");
+        check(emu.sram.get(0x500 + 0x4FE).equals(emu.wram.get(0x7EF4FE)), "checksum updated");
+
+        Emu blocked = new Emu(0x01, 0);
+        check(Progression.applyWrites("FULL", ops, blocked).startsWith("Resume normal play"),
+                "in-place refused outside play");
     }
 
     static void check(boolean ok, String message) {
