@@ -618,9 +618,88 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
+    public File[] playtestRoots() {
+        File ext = getExternalFilesDir(null);
+        return new File[] {
+                ext != null ? new File(ext, PlaytestShortcuts.FOLDER_NAME) : null,
+                new File("/storage/emulated/0/Android/data/ca.mesen.oos/files", PlaytestShortcuts.FOLDER_NAME),
+                new File(getFilesDir(), PlaytestShortcuts.FOLDER_NAME)
+        };
+    }
+
+    @Override
+    public PlaytestShortcuts.LaunchResult launchPlaytestShortcut(PlaytestShortcuts.Card card) {
+        return PlaytestShortcuts.launchCard(card, new PlaytestShortcuts.Launcher() {
+            @Override
+            public String currentRomPath() {
+                return MesenActivity.this.currentRomPath();
+            }
+
+            @Override
+            public File[] romRoots() {
+                return MesenActivity.this.romRoots();
+            }
+
+            @Override
+            public File savesDir() {
+                return MesenActivity.this.savesDir();
+            }
+
+            @Override
+            public boolean bootRom(String path) {
+                return MesenActivity.this.bootRom(path);
+            }
+
+            @Override
+            public boolean loadStateFile(String path) {
+                return mNativeReady && !mDestroyed && path != null && MesenNative.loadStateFile(path);
+            }
+
+            @Override
+            public boolean writeSram(byte[] data) {
+                if (!mNativeReady || mDestroyed || data == null) {
+                    return false;
+                }
+                int written = 0;
+                for (int i = 0; i < data.length; i++) {
+                    if (!MesenNative.writeSram(i, data[i] & 0xFF)) {
+                        break;
+                    }
+                    written++;
+                }
+                return written > 0;
+            }
+
+            @Override
+            public void settleAfterRomLoad() {
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+    }
+
+    @Override
     public String currentRomPath() {
         String last = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_LAST_ROM, null);
-        return last != null && new File(last).isFile() ? last : null;
+        if (last != null && new File(last).isFile()) {
+            return last;
+        }
+        if (mNativeReady && !mDestroyed) {
+            try {
+                String raw = MesenNative.statusJson(false);
+                if (raw != null && !raw.isEmpty()) {
+                    String path = new JSONObject(raw).optString("romPath", "");
+                    if (!path.isEmpty() && new File(path).isFile()) {
+                        return path;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
     }
 
     @Override

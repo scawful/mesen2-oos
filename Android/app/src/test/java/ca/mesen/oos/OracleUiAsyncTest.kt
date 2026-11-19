@@ -18,11 +18,14 @@ class OracleUiAsyncTest {
         private val statesDirFile: File,
         private val savesDirFile: File,
         private val capturesDirFile: File = File(romDir.parentFile, "Captures"),
+        private val playtestDirFile: File = File(romDir.parentFile, "Playtest"),
     ) : OracleUi.Host {
         var ready = false
         var currentRom: String? = null
         var uiOpenedCalls = 0
         var uiClosedCalls = 0
+        var bootCalls = ArrayList<String>()
+        var loadedStates = ArrayList<String>()
         var recordingActive = false
         var replayActive = false
         var overlayMask = 0
@@ -55,11 +58,28 @@ class OracleUiAsyncTest {
         var screenshotHook: () -> String = { "Saved screenshot: test.png" }
         var bugSnapshotHook: (String) -> String = { cat -> "Saved bug_test ($cat)" }
         var recentCapturesHook: () -> List<MediaCapture.CaptureItem> = { emptyList() }
+        var launchShortcutHook: ((PlaytestShortcuts.Card) -> PlaytestShortcuts.LaunchResult)? = null
 
         override fun nativeReady(): Boolean = ready
         override fun romRoots(): Array<File> {
             romRootsHook()
             return arrayOf(romDir)
+        }
+        override fun playtestRoots(): Array<File> = arrayOf(playtestDirFile)
+        override fun launchPlaytestShortcut(card: PlaytestShortcuts.Card): PlaytestShortcuts.LaunchResult {
+            launchShortcutHook?.let { return it(card) }
+            return PlaytestShortcuts.launchCard(card, object : PlaytestShortcuts.Launcher {
+                override fun currentRomPath(): String? = currentRom
+                override fun romRoots(): Array<File> = arrayOf(romDir)
+                override fun savesDir(): File = savesDirFile
+                override fun bootRom(path: String): Boolean = this@TestHost.bootRom(path)
+                override fun loadStateFile(path: String): Boolean {
+                    loadedStates.add(path)
+                    return File(path).isFile
+                }
+                override fun writeSram(data: ByteArray): Boolean = true
+                override fun settleAfterRomLoad() {}
+            })
         }
         override fun currentRomPath(): String? = currentRom
         override fun batterySaveLabel(rom: File): String = ""
@@ -71,7 +91,11 @@ class OracleUiAsyncTest {
         override fun socketSummary(): String = socketSummaryHook()
         override fun uiOpened() { uiOpenedCalls++ }
         override fun uiClosed() { uiClosedCalls++ }
-        override fun bootRom(path: String): Boolean = true
+        override fun bootRom(path: String): Boolean {
+            bootCalls.add(path)
+            currentRom = path
+            return true
+        }
         override fun resetConsole() {}
         override fun requestHomeShortcut() {}
         override fun isStickyFastForward(): Boolean = false
@@ -198,11 +222,8 @@ class OracleUiAsyncTest {
         assertEquals(1, host.uiOpenedCalls)
         assertFalse(ui.isBusy)
 
-        // Move rail to ITEMS (index 4: RESUME, SAVE, LOAD, CAPTURE, ITEMS) and enter panel.
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        // Move rail to ITEMS and enter panel.
+        repeat(RailItem.ITEMS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         // Switch from Presets -> Warps -> Test cheats -> Items -> Songs rapidly via R1.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
@@ -242,10 +263,8 @@ class OracleUiAsyncTest {
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
-        // Move to CAPTURE (index 3) and enter panel (cursor at 0: Take screenshot).
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        // Move to CAPTURE and enter panel (cursor at 0: Take screenshot).
+        repeat(RailItem.CAPTURE.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
 
         val t0 = System.nanoTime()
@@ -283,8 +302,8 @@ class OracleUiAsyncTest {
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
-        // Enter ITEMS (index 4).
-        repeat(4) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        // Enter ITEMS.
+        repeat(RailItem.ITEMS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         // R1 once -> Warps, R1 twice -> Test cheats.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
@@ -301,5 +320,75 @@ class OracleUiAsyncTest {
         repeat(6) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && (host.overlayMask and 0x01) != 0 }
+    }
+
+    @Test
+    fun playtestShortcutsGridNavigatesAndLaunchesOffMainThread() {
+        val temp = Files.createTempDirectory("oracle-ui-shortcuts").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val playtest = File(temp, "Playtest").apply { mkdirs() }
+        val rom = File(roms, "Oracle - Main.sfc").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+
+        for (i in 1..5) {
+            val dir = File(playtest, "card_$i").apply { mkdirs() }
+            File(dir, "card.json").writeText(
+                "{\"title\":\"Card $i\",\"subtitle\":\"Area $i\",\"badge\":\"NEW\",\"order\":${i * 10}}"
+            )
+            File(dir, "state.mss").writeBytes(byteArrayOf(i.toByte(), 2, 3))
+        }
+
+        val host = TestHost(roms, states, saves, playtestDirFile = playtest).apply {
+            ready = true
+            currentRom = rom.path
+        }
+        val mainQueue = ConcurrentLinkedQueue<Runnable>()
+        val ui = OracleUi(host) { r -> mainQueue.add(r) }
+        ui.openMenu()
+        pump(mainQueue) { !ui.isLoadingShortcuts && ui.currentShortcuts.size == 5 }
+
+        // Move to SHORTCUTS (index 1) and enter 3-column grid.
+        repeat(RailItem.SHORTCUTS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertEquals(0, ui.currentShortcutIndex)
+
+        // Move right twice -> index 2 (row 0, col 2), then down -> clamps to index 4 (last card on partial row 1).
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        assertEquals(2, ui.currentShortcutIndex)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        assertEquals(4, ui.currentShortcutIndex)
+
+        // Launch Card 5 via A button -> runs off main thread, loads state, and closes menu.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertTrue(ui.isBusy)
+        pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
+        assertEquals(1, host.loadedStates.size)
+        assertTrue(host.loadedStates[0].endsWith("card_5/state.mss"))
+        assertEquals(1, host.uiClosedCalls)
+    }
+
+    @Test
+    fun reloadRomActionBootsCurrentRomOffMainThreadAndClosesMenu() {
+        val temp = Files.createTempDirectory("oracle-ui-reload").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val rom = File(roms, "Oracle - Main.sfc").apply { writeBytes(byteArrayOf(9, 8, 7)) }
+
+        val host = TestHost(roms, states, saves).apply {
+            ready = true
+            currentRom = rom.path
+        }
+        val mainQueue = ConcurrentLinkedQueue<Runnable>()
+        val ui = OracleUi(host) { r -> mainQueue.add(r) }
+        ui.openMenu()
+        repeat(RailItem.RELOAD.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertTrue(ui.isBusy)
+        pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
+        assertEquals(listOf(rom.path), host.bootCalls)
+        assertEquals(1, host.uiClosedCalls)
     }
 }

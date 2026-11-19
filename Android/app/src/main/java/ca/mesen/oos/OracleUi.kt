@@ -7,8 +7,11 @@ import android.view.KeyEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,11 +33,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -96,6 +101,8 @@ enum class Screen { CLOSED, LIBRARY, MENU }
 
 enum class RailItem(val label: String) {
     RESUME("Resume"),
+    SHORTCUTS("Playtest shortcuts"),
+    RELOAD("Reload ROM"),
     SAVE("Save state"),
     LOAD("Load state"),
     CAPTURE("Capture"),
@@ -108,9 +115,9 @@ enum class RailItem(val label: String) {
 private enum class Key { UP, DOWN, LEFT, RIGHT, A, B, X, Y, L, R, START }
 
 /**
- * Unified Compose UI: channel ROM library + in-game quick menu (save states,
- * SRAM inventory + progression editor, bundled story presets, and settings).
- * All screens are navigated by controller (D-pad / A / B / L1 / R1 / Y / Start).
+ * Unified Compose UI: channel ROM library + in-game quick menu (playtest shortcuts,
+ * save states, SRAM inventory + progression editor, bundled story presets, and settings).
+ * All screens are navigated by controller (D-pad / A / B / L1 / R1 / Y / Start) and touch.
  */
 class OracleUi internal constructor(
     private val host: Host,
@@ -121,6 +128,8 @@ class OracleUi internal constructor(
     interface Host {
         fun nativeReady(): Boolean
         fun romRoots(): Array<File>
+        fun playtestRoots(): Array<File>
+        fun launchPlaytestShortcut(card: PlaytestShortcuts.Card): PlaytestShortcuts.LaunchResult
         fun currentRomPath(): String?
         fun batterySaveLabel(rom: File): String
         fun romSourceLabel(rom: File): String
@@ -171,6 +180,7 @@ class OracleUi internal constructor(
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "oracle-ui").apply { isDaemon = true } }
     private val mismatchWarnings = SaveStateSlots.MismatchWarnings()
     private val cardsGen = AtomicLong(0)
+    private val shortcutsGen = AtomicLong(0)
     private val statesGen = AtomicLong(0)
     private val capturesGen = AtomicLong(0)
     private val itemsGen = AtomicLong(0)
@@ -195,6 +205,10 @@ class OracleUi internal constructor(
     // Quick menu
     private var rail by mutableIntStateOf(0)
     private var inPanel by mutableStateOf(false)
+    private var shortcuts by mutableStateOf(listOf<PlaytestShortcuts.Card>())
+    private var loadingShortcuts by mutableStateOf(false)
+    private var shortcutIndex by mutableIntStateOf(0)
+    private var shortcutCols by mutableIntStateOf(3)
     private var states by mutableStateOf(listOf<SaveStateSlots.Entry>())
     private var loadingStates by mutableStateOf(false)
     private var captures by mutableStateOf(listOf<MediaCapture.CaptureItem>())
@@ -237,6 +251,7 @@ class OracleUi internal constructor(
     val isOpen: Boolean get() = screen != Screen.CLOSED
     internal val isBusy: Boolean get() = busy
     internal val isLoadingLibrary: Boolean get() = loadingLibrary
+    internal val isLoadingShortcuts: Boolean get() = loadingShortcuts
     internal val isLoadingStates: Boolean get() = loadingStates
     internal val isLoadingCaptures: Boolean get() = loadingCaptures
     internal val isLoadingItems: Boolean get() = loadingItems
@@ -245,6 +260,8 @@ class OracleUi internal constructor(
     internal val currentSocketMeta: String get() = socketMeta
     internal val currentActiveSaveSlot: Int get() = activeSaveSlot
     internal val cardChannels: List<String> get() = cards.map { it.entry.channel }
+    internal val currentShortcuts: List<PlaytestShortcuts.Card> get() = shortcuts
+    internal val currentShortcutIndex: Int get() = shortcutIndex
     internal val stateSlotsCount: Int get() = states.size
     internal val currentCaptures: List<MediaCapture.CaptureItem> get() = captures
     internal val currentItemTabName: String get() = activeItemTabName()
@@ -284,6 +301,7 @@ class OracleUi internal constructor(
         screen = Screen.MENU
         if (wasClosed) host.uiOpened()
         refreshMenuMeta()
+        refreshShortcuts()
         refreshStates()
         refreshCaptures()
         refreshItems()
@@ -704,16 +722,128 @@ class OracleUi internal constructor(
         }
     }
 
+    private fun refreshShortcuts(announce: Boolean = false) {
+        val gen = shortcutsGen.incrementAndGet()
+        if (shortcuts.isEmpty()) {
+            loadingShortcuts = true
+        }
+        worker.execute {
+            val loaded = try {
+                PlaytestShortcuts.listCards(host.playtestRoots())
+            } catch (e: Exception) {
+                emptyList()
+            }
+            postMain(Runnable {
+                if (gen != shortcutsGen.get()) return@Runnable
+                shortcuts = loaded
+                loadingShortcuts = false
+                shortcutIndex = if (loaded.isEmpty()) 0 else shortcutIndex.coerceIn(0, loaded.size - 1)
+                if (announce) {
+                    status = if (loaded.isEmpty()) {
+                        "No playtest shortcuts found in ${PlaytestShortcuts.DISPLAY_PATH}"
+                    } else {
+                        val n = loaded.size
+                        "Found $n playtest ${if (n == 1) "shortcut" else "shortcuts"}."
+                    }
+                }
+            })
+        }
+    }
+
+    private fun reloadCurrentRom() {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
+        val path = host.currentRomPath()
+        if (path.isNullOrEmpty() || !File(path).isFile) {
+            status = "No ROM loaded to reload."
+            return
+        }
+        val file = File(path)
+        val canon = canonical(path)
+        work("Reloading ${file.name}…", {
+            if (host.bootRom(path)) null else "Could not reload ${file.name}."
+        }) { problem ->
+            if (problem == null) {
+                currentRomCanonical = canon
+                hasCurrentRom = true
+                host.toast("Reloaded ${file.name}")
+                close()
+            } else {
+                status = problem
+            }
+        }
+    }
+
+    private fun launchShortcut(card: PlaytestShortcuts.Card) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
+        var outcome: PlaytestShortcuts.LaunchResult? = null
+        work("Launching ${card.title}…", {
+            val res = host.launchPlaytestShortcut(card)
+            outcome = res
+            if (res.ok) null else res.message
+        }) { problem ->
+            val res = outcome
+            if (problem == null && res != null && res.ok) {
+                if (!res.romPath.isNullOrEmpty()) {
+                    currentRomCanonical = canonical(res.romPath)
+                    hasCurrentRom = true
+                }
+                host.toast(res.message)
+                close()
+            } else {
+                status = problem ?: "Could not launch ${card.title}."
+            }
+        }
+    }
+
+    private fun shortcutKey(key: Key) {
+        if (key == Key.Y) {
+            status = "Rescanning Playtest shortcuts…"
+            refreshShortcuts(announce = true)
+            return
+        }
+        val n = shortcuts.size
+        if (n == 0) {
+            if (key == Key.LEFT) inPanel = false
+            return
+        }
+        val cols = shortcutCols.coerceAtLeast(1)
+        val idx = shortcutIndex.coerceIn(0, n - 1)
+        when (key) {
+            Key.LEFT -> if (idx % cols == 0) inPanel = false else shortcutIndex = idx - 1
+            Key.RIGHT -> if ((idx % cols) < cols - 1 && idx + 1 < n) shortcutIndex = idx + 1
+            Key.UP -> if (idx >= cols) shortcutIndex = idx - cols
+            Key.DOWN -> {
+                if (idx + cols < n) {
+                    shortcutIndex = idx + cols
+                } else if (idx / cols < (n - 1) / cols) {
+                    shortcutIndex = n - 1
+                }
+            }
+            Key.A -> launchShortcut(shortcuts[idx])
+            else -> {}
+        }
+    }
+
     private val railItem: RailItem get() = RailItem.values()[rail]
 
     private fun hasPanel(item: RailItem) = when (item) {
-        RailItem.SAVE, RailItem.LOAD, RailItem.CAPTURE, RailItem.ITEMS, RailItem.SETTINGS -> true
+        RailItem.SHORTCUTS, RailItem.SAVE, RailItem.LOAD, RailItem.CAPTURE, RailItem.ITEMS, RailItem.SETTINGS -> true
         else -> false
     }
 
     private fun enterPanel() {
         val item = railItem
         when (item) {
+            RailItem.SHORTCUTS -> {
+                refreshShortcuts()
+                shortcutIndex = shortcutIndex.coerceIn(0, (shortcuts.size - 1).coerceAtLeast(0))
+            }
             RailItem.SAVE, RailItem.LOAD -> { refreshStates(); slotIndex = 0 }
             RailItem.CAPTURE -> { listIndex = 0; refreshCaptures() }
             RailItem.ITEMS -> { listIndex = 0; bitIndex = 0; refreshItems() }
@@ -727,6 +857,7 @@ class OracleUi internal constructor(
     private fun activateRail() {
         when (railItem) {
             RailItem.RESUME -> close()
+            RailItem.RELOAD -> reloadCurrentRom()
             RailItem.FAST -> {
                 fastOn = !fastOn
                 host.setStickyFastForward(fastOn)
@@ -755,6 +886,7 @@ class OracleUi internal constructor(
             if (key == Key.UP || key == Key.DOWN) {
                 status = ""
                 when (railItem) {
+                    RailItem.SHORTCUTS -> refreshShortcuts()
                     RailItem.CAPTURE -> refreshCaptures()
                     RailItem.ITEMS -> refreshItems()
                     RailItem.SAVE, RailItem.LOAD -> refreshStates()
@@ -769,6 +901,7 @@ class OracleUi internal constructor(
             return
         }
         when (railItem) {
+            RailItem.SHORTCUTS -> shortcutKey(key)
             RailItem.SAVE, RailItem.LOAD -> slotKey(key)
             RailItem.CAPTURE -> captureKey(key)
             RailItem.ITEMS -> itemsKey(key)
@@ -1452,14 +1585,34 @@ class OracleUi internal constructor(
     @Composable
     private fun MenuScreen() {
         val item = railItem
-        Column(Modifier.fillMaxSize().background(Pal.SCRIM)) {
+        val railState = rememberLazyListState()
+        LaunchedEffect(rail) { railState.animateScrollToItem((rail - 3).coerceAtLeast(0)) }
+        val menuTouch = remember { MutableInteractionSource() }
+        Column(
+            Modifier.fillMaxSize().background(Pal.SCRIM)
+                .clickable(interactionSource = menuTouch, indication = null) {},
+        ) {
             Row(Modifier.weight(1f)) {
-                Column(Modifier.width(206.dp).fillMaxHeight().background(Pal.PANEL).padding(horizontal = 10.dp)) {
+                Column(Modifier.width(214.dp).fillMaxHeight().background(Pal.PANEL).padding(horizontal = 10.dp)) {
                     Spacer(Modifier.height(10.dp))
                     Txt("PAUSED", 11.sp, Pal.GOLD, bold = true, italic = true)
                     Txt(menuTitle, 17.sp, Pal.TEXT, bold = true)
-                    Spacer(Modifier.height(8.dp))
-                    RailItem.values().forEachIndexed { i, r -> RailRow(r, i == rail) }
+                    Spacer(Modifier.height(6.dp))
+                    LazyColumn(
+                        state = railState,
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        itemsIndexed(RailItem.values()) { i, r ->
+                            RailRow(r, i == rail) {
+                                if (busy) return@RailRow
+                                rail = i
+                                status = ""
+                                activateRail()
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 14.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1469,11 +1622,12 @@ class OracleUi internal constructor(
                     Spacer(Modifier.height(8.dp))
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when (item) {
+                            RailItem.SHORTCUTS -> ShortcutsGrid()
                             RailItem.SAVE, RailItem.LOAD -> SlotGrid(item == RailItem.SAVE)
                             RailItem.CAPTURE -> CapturePanel()
                             RailItem.ITEMS -> ItemsPanel()
                             RailItem.SETTINGS -> SettingsPanel()
-                            else -> Txt(blurb(item), 13.sp, Pal.DIM)
+                            else -> Txt(blurb(item), 13.sp, Pal.DIM, maxLines = 4)
                         }
                     }
                 }
@@ -1483,27 +1637,33 @@ class OracleUi internal constructor(
     }
 
     @Composable
-    private fun RailRow(item: RailItem, selected: Boolean) {
+    private fun RailRow(item: RailItem, selected: Boolean, onClick: () -> Unit) {
         val focused = selected && !inPanel
+        val touch = remember { MutableInteractionSource() }
         @Suppress("UNUSED_VARIABLE") val tick = captureTick + cheatsTick
         Row(
-            Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(8.dp))
+            Modifier.fillMaxWidth().height(32.dp).clip(RoundedCornerShape(8.dp))
                 .background(if (selected) Pal.PANEL2 else Color.Transparent)
-                .border(2.dp, if (focused) Pal.GOLD else Color.Transparent, RoundedCornerShape(8.dp)),
+                .border(2.dp, if (focused) Pal.GOLD else Color.Transparent, RoundedCornerShape(8.dp))
+                .clickable(interactionSource = touch, indication = null, onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(4.dp).height(20.dp).background(if (selected) Pal.GOLD else Color.Transparent))
-            Spacer(Modifier.width(10.dp))
-            Box(Modifier.weight(1f)) { Txt(item.label, 14.sp, Pal.TEXT, bold = true, italic = selected) }
+            Box(Modifier.width(4.dp).height(18.dp).background(if (selected) Pal.GOLD else Color.Transparent))
+            Spacer(Modifier.width(9.dp))
+            Box(Modifier.weight(1f)) { Txt(item.label, 13.5.sp, Pal.TEXT, bold = true, italic = selected) }
             when (item) {
+                RailItem.SHORTCUTS -> if (shortcuts.isNotEmpty()) {
+                    Badge("${shortcuts.size}", Pal.GOLD)
+                    Spacer(Modifier.width(6.dp))
+                }
                 RailItem.CAPTURE -> when {
                     host.isVideoRecording() -> {
                         Badge("REC", Pal.RED)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                     }
                     host.isReplayBufferActive() -> {
                         Badge("20s", Pal.TEAL)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                     }
                 }
                 RailItem.ITEMS -> {
@@ -1512,14 +1672,178 @@ class OracleUi internal constructor(
                     val totalOn = activeCount + ovCount
                     if (totalOn > 0) {
                         Badge("$totalOn ON", Pal.TEAL)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                     }
                 }
                 RailItem.FAST -> {
                     Badge(if (fastOn) "×3" else "OFF", if (fastOn) Pal.TEAL else Pal.LINE)
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(6.dp))
                 }
                 else -> {}
+            }
+        }
+    }
+
+    @Composable
+    private fun ShortcutsGrid() {
+        if (shortcuts.isEmpty() && loadingShortcuts) {
+            Box(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Pal.PANEL),
+                Alignment.Center,
+            ) {
+                Txt("Scanning Playtest shortcuts…", 13.sp, Pal.DIM, bold = true)
+            }
+            return
+        }
+        if (shortcuts.isEmpty()) {
+            Box(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Pal.PANEL)
+                    .border(1.dp, Pal.LINE, RoundedCornerShape(10.dp)).padding(20.dp),
+                Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Txt("No playtest shortcuts yet", 16.sp, Pal.GOLD, bold = true, italic = true)
+                    Spacer(Modifier.height(8.dp))
+                    Txt(
+                        "Push card folders (card.json + thumb.png + state.mss) to:",
+                        12.sp,
+                        Pal.DIM,
+                        maxLines = 2,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        Modifier.clip(RoundedCornerShape(8.dp)).background(Pal.BG)
+                            .border(1.dp, Pal.LINE, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Txt(PlaytestShortcuts.DISPLAY_PATH, 12.sp, Pal.TEAL, bold = true)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Txt("Press Y to rescan after adb push.", 11.sp, Pal.DIM, bold = true)
+                }
+            }
+            return
+        }
+
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val cols = if (maxWidth >= 520.dp) 3 else 2
+            LaunchedEffect(cols) { shortcutCols = cols }
+            val rows = shortcuts.chunked(cols)
+            val gridState = rememberLazyListState()
+            LaunchedEffect(shortcutIndex, inPanel, cols, shortcuts.size) {
+                if (inPanel && shortcuts.isNotEmpty()) {
+                    val rowIdx = (shortcutIndex.coerceIn(0, shortcuts.size - 1)) / cols
+                    gridState.animateScrollToItem(rowIdx)
+                }
+            }
+            LazyColumn(
+                state = gridState,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                itemsIndexed(rows) { rowIdx, rowCards ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        for (col in 0 until cols) {
+                            val card = rowCards.getOrNull(col)
+                            if (card == null) {
+                                Spacer(Modifier.weight(1f))
+                            } else {
+                                val globalIdx = rowIdx * cols + col
+                                ShortcutCard(
+                                    card = card,
+                                    selected = inPanel && globalIdx == shortcutIndex,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    if (busy) return@ShortcutCard
+                                    inPanel = true
+                                    shortcutIndex = globalIdx
+                                    launchShortcut(card)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ShortcutCard(
+        card: PlaytestShortcuts.Card,
+        selected: Boolean,
+        modifier: Modifier,
+        onClick: () -> Unit,
+    ) {
+        val preview = rememberShortcutThumb(card)
+        val touch = remember { MutableInteractionSource() }
+        val borderWidth = if (selected) 2.5.dp else 1.dp
+        val borderColor = if (selected) Pal.GOLD else Pal.LINE
+        val cardBg = if (selected) Pal.PANEL2 else Pal.PANEL
+        val kindTag = when {
+            card.hasRom() && card.hasState() -> "ROM + STATE"
+            card.hasRom() && card.hasSrm() -> "ROM + SAVE"
+            card.hasRom() -> "ROM"
+            card.hasSrm() && !card.hasState() -> "SAVE"
+            else -> ""
+        }
+        Column(
+            modifier.height(186.dp).clip(RoundedCornerShape(10.dp)).background(cardBg)
+                .border(borderWidth, borderColor, RoundedCornerShape(10.dp))
+                .clickable(interactionSource = touch, indication = null, onClick = onClick)
+                .padding(6.dp),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().height(124.dp).clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF070B12))
+                    .border(1.dp, if (selected) Pal.GOLD.copy(alpha = 0.55f) else Pal.LINE, RoundedCornerShape(6.dp)),
+                Alignment.Center,
+            ) {
+                if (preview != null) {
+                    Image(
+                        bitmap = preview,
+                        contentDescription = card.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                        filterQuality = FilterQuality.None,
+                    )
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Txt(if (card.hasSrm() && !card.hasState()) "SAVE" else "SNES", 14.sp, Pal.LINE, bold = true)
+                        Txt(card.id, 10.sp, Pal.DIM)
+                    }
+                }
+                if (card.badge.isNotEmpty()) {
+                    val (bg, fg) = badgeColors(card.badge)
+                    Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                        Badge(card.badge.uppercase(Locale.ROOT), bg, fg)
+                    }
+                }
+                if (kindTag.isNotEmpty()) {
+                    Box(
+                        Modifier.align(Alignment.BottomStart).padding(4.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xCC0C121E))
+                            .border(1.dp, Pal.LINE, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    ) {
+                        Txt(kindTag, 9.sp, Pal.TEAL, bold = true)
+                    }
+                }
+            }
+            Spacer(Modifier.height(5.dp))
+            Txt(
+                card.title,
+                13.sp,
+                if (selected) Pal.GOLD else Pal.TEXT,
+                bold = true,
+                maxLines = 1,
+            )
+            if (card.subtitle.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Txt(card.subtitle, 10.5.sp, Pal.DIM, maxLines = 2)
             }
         }
     }
@@ -1885,7 +2209,12 @@ class OracleUi internal constructor(
 
     @Composable
     private fun ConfirmSheet(sheet: Confirm) {
-        Box(Modifier.fillMaxSize().background(Color(0xAA000000)), Alignment.Center) {
+        val touch = remember { MutableInteractionSource() }
+        Box(
+            Modifier.fillMaxSize().background(Color(0xAA000000))
+                .clickable(interactionSource = touch, indication = null) {},
+            Alignment.Center,
+        ) {
             Column(
                 Modifier.width(420.dp).clip(RoundedCornerShape(12.dp)).background(Pal.PANEL)
                     .border(2.dp, Pal.GOLD, RoundedCornerShape(12.dp)).padding(16.dp),
@@ -1895,21 +2224,40 @@ class OracleUi internal constructor(
                 Txt(sheet.body, 13.sp, Pal.DIM, maxLines = 4)
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionButton(sheet.yes, confirmYes, confirmYes, Modifier.weight(1f))
-                    ActionButton("Cancel", !confirmYes, !confirmYes, Modifier.weight(1f))
+                    ActionButton(sheet.yes, confirmYes, confirmYes, Modifier.weight(1f)) {
+                        if (!busy) {
+                            confirm = null
+                            sheet.action()
+                        }
+                    }
+                    ActionButton("Cancel", !confirmYes, !confirmYes, Modifier.weight(1f)) {
+                        if (!busy) confirm = null
+                    }
                 }
             }
         }
     }
 
     @Composable
-    private fun ActionButton(label: String, filled: Boolean, outlined: Boolean, modifier: Modifier) {
-        Box(
-            modifier.height(30.dp).clip(RoundedCornerShape(8.dp))
-                .background(if (filled) Pal.GOLD else Pal.PANEL2)
-                .border(2.dp, if (outlined) Pal.TEXT else Pal.LINE, RoundedCornerShape(8.dp)),
-            Alignment.Center,
-        ) { Txt(label, 12.sp, if (filled) Pal.INK else Pal.TEXT, bold = true, italic = true) }
+    private fun ActionButton(
+        label: String,
+        filled: Boolean,
+        outlined: Boolean,
+        modifier: Modifier,
+        onClick: (() -> Unit)? = null,
+    ) {
+        val touch = remember { MutableInteractionSource() }
+        val base = modifier.height(30.dp).clip(RoundedCornerShape(8.dp))
+            .background(if (filled) Pal.GOLD else Pal.PANEL2)
+            .border(2.dp, if (outlined) Pal.TEXT else Pal.LINE, RoundedCornerShape(8.dp))
+        val finalMod = if (onClick != null) {
+            base.clickable(interactionSource = touch, indication = null, onClick = onClick)
+        } else {
+            base
+        }
+        Box(finalMod, Alignment.Center) {
+            Txt(label, 12.sp, if (filled) Pal.INK else Pal.TEXT, bold = true, italic = true)
+        }
     }
 
     @Composable
@@ -1932,10 +2280,16 @@ class OracleUi internal constructor(
     }
 
     @Composable
-    private fun Badge(text: String, color: Color) {
-        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(color).padding(horizontal = 8.dp, vertical = 1.dp)) {
-            Txt(text, 11.sp, Pal.INK, bold = true)
+    private fun Badge(text: String, color: Color, textColor: Color = Pal.INK) {
+        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(color).padding(horizontal = 7.dp, vertical = 1.dp)) {
+            Txt(text, 10.sp, textColor, bold = true)
         }
+    }
+
+    private fun badgeColors(badge: String): Pair<Color, Color> = when (badge.uppercase(Locale.ROOT)) {
+        "NEW" -> Pal.TEAL to Pal.INK
+        "FIX", "BUGFIX", "BUG" -> Pal.RED to Color.White
+        else -> Pal.GOLD to Pal.INK
     }
 
     @Composable
@@ -1982,6 +2336,12 @@ class OracleUi internal constructor(
     }
 
     private fun panelMeta(item: RailItem): String = when (item) {
+        RailItem.SHORTCUTS -> {
+            val n = shortcuts.size
+            if (n == 0) PlaytestShortcuts.DISPLAY_PATH
+            else "$n ${if (n == 1) "card" else "cards"} · A or tap to launch"
+        }
+        RailItem.RELOAD -> menuTitle
         RailItem.SAVE, RailItem.LOAD -> {
             val used = states.count { it.occupied }
             "$used saved · page ${slotPage + 1} of $pageCount"
@@ -2011,14 +2371,22 @@ class OracleUi internal constructor(
 
     private fun blurb(item: RailItem): String = when (item) {
         RailItem.RESUME -> "Back to the game."
+        RailItem.RELOAD -> "Reloads the current ROM file from disk ($menuTitle). Great after pushing a new build over ADB — your battery save is preserved."
         RailItem.FAST -> "A toggles ×3 speed. It stays on after you resume. Holding R2 still works."
         RailItem.LIBRARY -> "Switch channels, resume a state, roll back, or start from the battery save."
         else -> ""
     }
 
     private fun menuHints(item: RailItem): List<Pair<String, String>> {
-        if (!inPanel) return listOf("A" to "Select", "B / START" to "Resume", "D-PAD" to "Move")
+        if (!inPanel) {
+            return when (item) {
+                RailItem.SHORTCUTS -> listOf("A / RIGHT" to "Open grid", "B / START" to "Resume", "D-PAD" to "Move")
+                RailItem.RELOAD -> listOf("A" to "Reload ROM now", "B / START" to "Resume", "D-PAD" to "Move")
+                else -> listOf("A" to "Select", "B / START" to "Resume", "D-PAD" to "Move")
+            }
+        }
         return when (item) {
+            RailItem.SHORTCUTS -> listOf("A / TAP" to "Launch", "D-PAD" to "Browse", "Y" to "Rescan", "B" to "Back")
             RailItem.SAVE -> listOf("A" to "Save here", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.LOAD -> listOf("A" to "Load", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.CAPTURE -> when (listIndex) {
@@ -2142,6 +2510,63 @@ class OracleUi internal constructor(
             val state = produceState<ImageBitmap?>(cached, file?.path, modified) {
                 if (!hit && file != null) {
                     value = withContext(Dispatchers.IO) { loadPreview(file, modified) }
+                } else if (hit) {
+                    value = cached
+                }
+            }
+            return state.value
+        }
+
+        private fun shortcutThumbKey(card: PlaytestShortcuts.Card): String? {
+            val source = card.thumbFile ?: card.stateFile ?: return null
+            val kind = if (card.thumbFile != null) "png" else "mss"
+            return "$kind:${source.path}@${card.thumbModified}"
+        }
+
+        private fun cachedShortcutThumb(key: String?): Pair<Boolean, ImageBitmap?> {
+            if (key == null) return true to null
+            synchronized(previewCache) {
+                if (previewCache.containsKey(key)) return true to previewCache[key]
+            }
+            return false to null
+        }
+
+        private fun loadShortcutThumb(card: PlaytestShortcuts.Card, key: String): ImageBitmap? {
+            synchronized(previewCache) { if (previewCache.containsKey(key)) return previewCache[key] }
+            val image = try {
+                val thumbFile = card.thumbFile
+                if (thumbFile != null && thumbFile.isFile) {
+                    val opts = BitmapFactory.Options().apply { inScaled = false }
+                    BitmapFactory.decodeFile(thumbFile.path, opts)?.asImageBitmap()
+                } else {
+                    val stateFile = card.stateFile
+                    if (stateFile != null && stateFile.isFile) {
+                        val png = MesenNative.statePreviewPng(stateFile.path)
+                        if (png == null) null else {
+                            val opts = BitmapFactory.Options().apply { inScaled = false }
+                            BitmapFactory.decodeByteArray(png, 0, png.size, opts)?.asImageBitmap()
+                        }
+                    } else {
+                        null
+                    }
+                }
+            } catch (e: Throwable) {
+                null
+            }
+            synchronized(previewCache) {
+                if (previewCache.size > 64) previewCache.clear()
+                previewCache[key] = image
+            }
+            return image
+        }
+
+        @Composable
+        private fun rememberShortcutThumb(card: PlaytestShortcuts.Card): ImageBitmap? {
+            val key = shortcutThumbKey(card)
+            val (hit, cached) = cachedShortcutThumb(key)
+            val state = produceState<ImageBitmap?>(cached, key) {
+                if (!hit && key != null) {
+                    value = withContext(Dispatchers.IO) { loadShortcutThumb(card, key) }
                 } else if (hit) {
                     value = cached
                 }

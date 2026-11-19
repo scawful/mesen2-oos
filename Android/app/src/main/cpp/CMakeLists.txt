@@ -7,6 +7,9 @@ set(CMAKE_C_STANDARD 11)
 
 get_filename_component(MESEN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 get_filename_component(YAZE_SDL "${MESEN_ROOT}/../yaze/ext/SDL" ABSOLUTE)
+if(NOT EXISTS "${YAZE_SDL}/CMakeLists.txt")
+    get_filename_component(YAZE_SDL "${MESEN_ROOT}/../../yaze/ext/SDL" ABSOLUTE)
+endif()
 
 message(STATUS "Mesen root: ${MESEN_ROOT}")
 message(STATUS "SDL root: ${YAZE_SDL}")

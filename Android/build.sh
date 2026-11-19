@@ -8,9 +8,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT}/Android"
-SDL_JAVA_SRC="${ROOT}/../yaze/ext/SDL/android-project/app/src/main/java/org/libsdl/app"
+YAZE_ROOT="${ROOT}/../yaze"
+if [[ ! -d "${YAZE_ROOT}/ext/SDL" && -d "${ROOT}/../../yaze/ext/SDL" ]]; then
+  YAZE_ROOT="${ROOT}/../../yaze"
+fi
+SDL_JAVA_SRC="${YAZE_ROOT}/ext/SDL/android-project/app/src/main/java/org/libsdl/app"
 SDL_JAVA_DST="${ANDROID_DIR}/app/src/main/java/org/libsdl/app"
-WRAPPER_SRC="${ROOT}/../yaze/ext/SDL/android-project"
+WRAPPER_SRC="${YAZE_ROOT}/ext/SDL/android-project"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -75,7 +79,22 @@ if [[ -n "${YAZE_ANDROID_PGO:-}" ]]; then
 fi
 cd "${ANDROID_DIR}"
 
-gradle_args=(:app:assembleDebug --quiet)
+build_type="${1:-${ANDROID_BUILD_TYPE:-debug}}"
+case "${build_type}" in
+  release|Release)
+    gradle_task=":app:assembleRelease"
+    apk="${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
+    ;;
+  debug|Debug)
+    gradle_task=":app:assembleDebug"
+    apk="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
+    ;;
+  *)
+    die "Unknown build type '${build_type}' (expected debug or release)"
+    ;;
+esac
+
+gradle_args=("${gradle_task}" --quiet)
 if [[ -n "${YAZE_ANDROID_PGO:-}" ]]; then
   gradle_args+=(-PYAZE_ANDROID_PGO="${YAZE_ANDROID_PGO}")
 fi
@@ -84,6 +103,5 @@ if [[ -n "${YAZE_PGO_PROFDATA:-}" ]]; then
 fi
 
 ./gradlew "${gradle_args[@]}"
-apk="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
 [[ -f "${apk}" ]] || die "APK missing after build: ${apk}"
 echo "apk: ${apk}"
