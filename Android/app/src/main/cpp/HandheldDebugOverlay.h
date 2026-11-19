@@ -36,9 +36,20 @@ inline uint32_t BlendPixel(uint32_t dst, uint32_t rgb, uint32_t alpha)
 	return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 
-inline void PlotScaled(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int x, int y, uint32_t rgb, uint32_t alpha)
+inline bool IsBlackRow(const uint32_t* buf, uint32_t w, uint32_t rowY)
 {
-	if(x < 0 || y < 0) {
+	const uint32_t* row = buf + static_cast<size_t>(rowY) * w;
+	for(uint32_t x = 0; x < w; ++x) {
+		if((row[x] & 0x00FFFFFFu) != 0u) {
+			return false;
+		}
+	}
+	return true;
+}
+
+inline void PlotScaled(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int minY, int maxY, int x, int y, uint32_t rgb, uint32_t alpha)
+{
+	if(x < 0 || y < minY || y >= maxY) {
 		return;
 	}
 	const uint32_t px0 = static_cast<uint32_t>(x) * sx;
@@ -56,33 +67,32 @@ inline void PlotScaled(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint3
 	}
 }
 
-inline void FillRect(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int x0, int y0, int rw, int rh, uint32_t rgb, uint32_t alpha)
+inline void FillRect(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int minY, int maxY, int x0, int y0, int rw, int rh, uint32_t rgb, uint32_t alpha)
 {
 	const int baseW = static_cast<int>(w / sx);
-	const int baseH = static_cast<int>(h / sy);
 	const int cx0 = std::max(0, x0);
-	const int cy0 = std::max(0, y0);
+	const int cy0 = std::max(minY, y0);
 	const int cx1 = std::min(baseW, x0 + rw);
-	const int cy1 = std::min(baseH, y0 + rh);
+	const int cy1 = std::min(maxY, y0 + rh);
 	for(int y = cy0; y < cy1; ++y) {
 		for(int x = cx0; x < cx1; ++x) {
-			PlotScaled(buf, w, h, sx, sy, x, y, rgb, alpha);
+			PlotScaled(buf, w, h, sx, sy, minY, maxY, x, y, rgb, alpha);
 		}
 	}
 }
 
-inline void DrawBox(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int x0, int y0, int rw, int rh, uint32_t rgb, uint32_t alpha = 230u)
+inline void DrawBox(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int minY, int maxY, int x0, int y0, int rw, int rh, uint32_t rgb, uint32_t alpha = 230u)
 {
 	if(rw <= 0 || rh <= 0) {
 		return;
 	}
 	for(int x = x0; x < x0 + rw; ++x) {
-		PlotScaled(buf, w, h, sx, sy, x, y0, rgb, alpha);
-		PlotScaled(buf, w, h, sx, sy, x, y0 + rh - 1, rgb, alpha);
+		PlotScaled(buf, w, h, sx, sy, minY, maxY, x, y0, rgb, alpha);
+		PlotScaled(buf, w, h, sx, sy, minY, maxY, x, y0 + rh - 1, rgb, alpha);
 	}
 	for(int y = y0 + 1; y < y0 + rh - 1; ++y) {
-		PlotScaled(buf, w, h, sx, sy, x0, y, rgb, alpha);
-		PlotScaled(buf, w, h, sx, sy, x0 + rw - 1, y, rgb, alpha);
+		PlotScaled(buf, w, h, sx, sy, minY, maxY, x0, y, rgb, alpha);
+		PlotScaled(buf, w, h, sx, sy, minY, maxY, x0 + rw - 1, y, rgb, alpha);
 	}
 }
 
@@ -110,9 +120,9 @@ inline uint16_t HexGlyph(uint8_t nibble)
 	return kGlyphs[nibble & 0x0Fu];
 }
 
-inline void DrawHexByte(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int x, int y, uint8_t value, uint32_t rgb)
+inline void DrawHexByte(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint32_t sy, int minY, int maxY, int x, int y, uint8_t value, uint32_t rgb)
 {
-	FillRect(buf, w, h, sx, sy, x - 1, y - 1, 9, 7, 0x000000u, 170u);
+	FillRect(buf, w, h, sx, sy, minY, maxY, x - 1, y - 1, 9, 7, 0x000000u, 170u);
 	const uint8_t digits[2] = { static_cast<uint8_t>((value >> 4) & 0x0Fu), static_cast<uint8_t>(value & 0x0Fu) };
 	for(int d = 0; d < 2; ++d) {
 		const uint16_t bits = HexGlyph(digits[d]);
@@ -120,7 +130,7 @@ inline void DrawHexByte(uint32_t* buf, uint32_t w, uint32_t h, uint32_t sx, uint
 			const int shift = (4 - row) * 3;
 			for(int col = 0; col < 3; ++col) {
 				if((bits >> (shift + (2 - col))) & 1u) {
-					PlotScaled(buf, w, h, sx, sy, x + d * 4 + col, y + row, rgb, 255u);
+					PlotScaled(buf, w, h, sx, sy, minY, maxY, x + d * 4 + col, y + row, rgb, 255u);
 				}
 			}
 		}
@@ -184,6 +194,16 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 	const uint32_t sy = (height >= 448) ? (height / 224u) : 1u;
 	const int baseW = static_cast<int>(width / sx);
 	const int baseH = static_cast<int>(height / sy);
+	// SnesPpu centers standard 224-line frames inside the 239-line output buffer
+	// at rows [7, 231) (scanline + 6 for 1-based scanlines). BG scrolling displays
+	// BGnVOFS + 1 on scanline 1, putting BG tiles at screenY + 6 and sprites at +7.
+	const bool centered224 = (baseH == 239) &&
+		detail::IsBlackRow(argb, width, 0) &&
+		detail::IsBlackRow(argb, width, 6u * sy);
+	const int viewTop = centered224 ? 7 : 0;
+	const int viewBottom = centered224 ? 231 : baseH;
+	const int bgYOff = centered224 ? 6 : 0;
+	const int sprYOff = centered224 ? 7 : 0;
 
 	const int camX = static_cast<int>(detail::ReadU16(wram, wramSize, 0x00E2));
 	const int camY = static_cast<int>(detail::ReadU16(wram, wramSize, 0x00E8));
@@ -197,10 +217,10 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 			const int startTileX = camX >> 3;
 			const int startTileY = camY >> 3;
 			const int tilesX = (baseW / 8) + 2;
-			const int tilesY = (baseH / 8) + 2;
+			const int tilesY = ((viewBottom - viewTop) / 8) + 3;
 			for(int ty = 0; ty < tilesY; ++ty) {
 				const int worldTileY = (startTileY + ty) & 63;
-				const int screenY = ((startTileY + ty) * 8) - camY;
+				const int screenY = ((startTileY + ty) * 8) - camY + bgYOff;
 				for(int tx = 0; tx < tilesX; ++tx) {
 					const int worldTileX = (startTileX + tx) & 63;
 					const uint8_t attr = colMap[worldTileY * 64 + worldTileX];
@@ -208,7 +228,7 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 					uint32_t alpha = 0;
 					if(detail::CollisionColor(attr, rgb, alpha)) {
 						const int screenX = ((startTileX + tx) * 8) - camX;
-						detail::FillRect(argb, width, height, sx, sy, screenX, screenY, 8, 8, rgb, alpha);
+						detail::FillRect(argb, width, height, sx, sy, viewTop, viewBottom, screenX, screenY, 8, 8, rgb, alpha);
 					}
 				}
 			}
@@ -224,17 +244,21 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 			const bool seam = (worldX & 0xFF) == 0;
 			const uint32_t color = seam ? 0xFF55FFu : 0xFFFFFFu;
 			const uint32_t alpha = seam ? 160u : 42u;
-			for(int y = 0; y < baseH; ++y) {
-				detail::PlotScaled(argb, width, height, sx, sy, x, y, color, alpha);
+			for(int y = viewTop; y < viewBottom; ++y) {
+				detail::PlotScaled(argb, width, height, sx, sy, viewTop, viewBottom, x, y, color, alpha);
 			}
 		}
-		for(int y = offY; y < baseH; y += 16) {
-			const int worldY = camY + y;
+		for(int relY = offY; relY + bgYOff < viewBottom; relY += 16) {
+			const int y = relY + bgYOff;
+			if(y < viewTop) {
+				continue;
+			}
+			const int worldY = camY + relY;
 			const bool seam = (worldY & 0xFF) == 0;
 			const uint32_t color = seam ? 0xFF55FFu : 0xFFFFFFu;
 			const uint32_t alpha = seam ? 160u : 42u;
 			for(int x = 0; x < baseW; ++x) {
-				detail::PlotScaled(argb, width, height, sx, sy, x, y, color, alpha);
+				detail::PlotScaled(argb, width, height, sx, sy, viewTop, viewBottom, x, y, color, alpha);
 			}
 		}
 	}
@@ -244,10 +268,12 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 		const int linkX = static_cast<int>(detail::ReadU16(wram, wramSize, 0x0022));
 		const int linkY = static_cast<int>(detail::ReadU16(wram, wramSize, 0x0020));
 		const int lScrX = linkX - camX;
-		const int lScrY = linkY - camY;
+		// ALTTP Link's 16x16 tile-collision footprint sits at (POSX, POSY + 8);
+		// inner 8x8 damage box sits at (POSX + 4, POSY + 12).
+		const int lFootY = (linkY - camY) + 8 + bgYOff;
 		const uint32_t linkColor = (linkLayer == 0) ? 0x38F2FFu : 0xFFD94Au;
-		detail::DrawBox(argb, width, height, sx, sy, lScrX, lScrY, 16, 16, linkColor, 240u);
-		detail::DrawBox(argb, width, height, sx, sy, lScrX + 4, lScrY + 8, 8, 8, 0xFFFFFFu, 220u);
+		detail::DrawBox(argb, width, height, sx, sy, viewTop, viewBottom, lScrX, lFootY, 16, 16, linkColor, 240u);
+		detail::DrawBox(argb, width, height, sx, sy, viewTop, viewBottom, lScrX + 4, lFootY + 4, 8, 8, 0xFFFFFFu, 220u);
 
 		for(int i = 0; i < 16; ++i) {
 			const uint8_t state = wram[0x0DD0 + i];
@@ -260,8 +286,8 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 			const uint8_t props = wram[0x0E60 + i];
 			const uint8_t colProp = wram[0x0F60 + i];
 			const int sScrX = sprX - camX;
-			const int sScrY = sprY - camY;
-			if(sScrX < -24 || sScrX > baseW + 8 || sScrY < -24 || sScrY > baseH + 8) {
+			const int sScrY = (sprY - camY) + sprYOff;
+			if(sScrX < -24 || sScrX > baseW + 8 || sScrY < viewTop - 24 || sScrY > viewBottom + 8) {
 				continue;
 			}
 			uint32_t sprColor = 0xFF4848u; // Active enemy
@@ -272,8 +298,8 @@ inline void Render(uint32_t* argb, uint32_t width, uint32_t height, const uint8_
 			} else if((colProp & 0x40u) != 0) {
 				sprColor = 0xFF66EEu; // Impervious
 			}
-			detail::DrawBox(argb, width, height, sx, sy, sScrX, sScrY, 16, 16, sprColor, 235u);
-			detail::DrawHexByte(argb, width, height, sx, sy, sScrX + 1, std::max(1, sScrY - 7), sprId, sprColor);
+			detail::DrawBox(argb, width, height, sx, sy, viewTop, viewBottom, sScrX, sScrY, 16, 16, sprColor, 235u);
+			detail::DrawHexByte(argb, width, height, sx, sy, viewTop, viewBottom, sScrX + 1, std::max(viewTop + 1, sScrY - 7), sprId, sprColor);
 		}
 	}
 }

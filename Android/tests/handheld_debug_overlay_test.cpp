@@ -34,9 +34,12 @@ static void TestDrawsLinkAndSpriteHitboxes()
 	wram[0x0D20 + 2] = 0x01;
 
 	Render(fb.data(), 256, 239, wram.data(), wram.size(), kMaskHitboxes);
-	assert(fb[50 * 256 + 40] != 0xFF000000u); // Link top-left corner drawn
-	assert(fb[60 * 256 + 80] != 0xFF000000u); // Sprite top-left corner drawn
-	assert(fb[5 * 256 + 5] == 0xFF000000u);   // Untouched background pixel
+	// 239-line buffer with black top overscan: bgYOff=+6, sprYOff=+7.
+	// Link's 16x16 floor hitbox sits at (40, 50 + 8 + 6 = 64); sprite at (80, 60 + 7 = 67).
+	assert(fb[64 * 256 + 40] != 0xFF000000u); // Link hitbox top-left drawn
+	assert(fb[50 * 256 + 40] == 0xFF000000u); // Old unshifted Y untouched
+	assert(fb[67 * 256 + 80] != 0xFF000000u); // Sprite top-left drawn
+	assert(fb[5 * 256 + 5] == 0xFF000000u);   // Overscan bar untouched
 }
 
 static void TestUnderworldCollisionAndGrid()
@@ -46,12 +49,15 @@ static void TestUnderworldCollisionAndGrid()
 	wram[0x0010] = 0x07; // Dungeon
 	wram[0x00E2] = 0; wram[0x00E8] = 0;
 	wram[0x00EE] = 0; // Layer 0 -> COLMAPA ($7F2000 -> offset 0x12000)
-	// Tile (2, 3) -> pixel (16..23, 24..31) set to pit $20
+	// Tile (2, 3) -> raw Y=24..31 -> centered 239-line Y=30..37 (bgYOff=+6)
 	wram[0x12000 + 3 * 64 + 2] = 0x20;
 
 	Render(fb.data(), 256, 239, wram.data(), wram.size(), kMaskCollision | kMaskGrid);
-	assert(fb[26 * 256 + 18] != 0xFF000000u); // Pit tile shaded
-	assert(fb[0 * 256 + 0] != 0xFF000000u);   // Grid seam at (0,0) drawn
+	assert(fb[32 * 256 + 18] != 0xFF000000u); // Pit tile shaded at aligned Y
+	assert(fb[25 * 256 + 18] == 0xFF000000u); // Old unshifted Y not shaded
+	assert(fb[7 * 256 + 0] != 0xFF000000u);   // Grid seam drawn inside visible viewport
+	assert(fb[0 * 256 + 0] == 0xFF000000u);   // Top black overscan bar untouched
+	assert(fb[235 * 256 + 0] == 0xFF000000u); // Bottom black overscan bar untouched
 }
 
 int main()
