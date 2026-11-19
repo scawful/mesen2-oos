@@ -55,6 +55,13 @@ extern "C" {
 	void HandheldStopVideoRecording();
 	bool HandheldIsVideoRecording();
 	void HandheldGetVideoRecordingPath(char* outBuffer, uint32_t maxLength);
+	bool HandheldStartReplayBuffer(uint32_t windowSeconds, bool recordInputHud);
+	void HandheldStopReplayBuffer();
+	bool HandheldIsReplayBufferActive();
+	uint32_t HandheldGetReplayBufferedSeconds();
+	bool HandheldDumpReplayBuffer(const char* path);
+	void HandheldSetDebugOverlayMask(uint32_t mask);
+	uint32_t HandheldGetDebugOverlayMask();
 	void HandheldSetRamCheats(const uint32_t* addrs, const uint8_t* values, uint32_t count);
 	bool HandheldStepFrames(uint32_t frames);
 	void Pause();
@@ -990,6 +997,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
 		+ ",\"performanceMode\":" + (HandheldIsPerformanceMode() ? "true" : "false")
 		+ ",\"recording\":" + (isRecording ? "true" : "false")
 		+ ",\"recordingPath\":\"" + jsonEscape(recPath) + "\""
+		+ ",\"replayActive\":" + (HandheldIsReplayBufferActive() ? "true" : "false")
+		+ ",\"replaySeconds\":" + std::to_string(HandheldGetReplayBufferedSeconds())
+		+ ",\"overlayMask\":" + std::to_string(HandheldGetDebugOverlayMask())
 		+ ",\"sha1\":\"" + jsonEscape(runtime.RomSha1)
 		+ "\",\"frames\":" + std::to_string(runtime.FrameCount)
 		+ ",\"mode\":" + std::to_string(runtime.Mode)
@@ -1123,6 +1133,61 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_videoRecordin
 	char path[4096] = {};
 	HandheldGetVideoRecordingPath(path, sizeof(path));
 	return env->NewStringUTF(path);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_startReplayBuffer(
+	JNIEnv*,
+	jclass,
+	jint windowSeconds,
+	jboolean recordInputHud
+) {
+	return HandheldStartReplayBuffer(
+		static_cast<uint32_t>(std::max<jint>(5, windowSeconds)),
+		recordInputHud == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_stopReplayBuffer(JNIEnv*, jclass)
+{
+	HandheldStopReplayBuffer();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isReplayBufferActive(JNIEnv*, jclass)
+{
+	return HandheldIsReplayBufferActive() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_replayBufferedSeconds(JNIEnv*, jclass)
+{
+	return static_cast<jint>(HandheldGetReplayBufferedSeconds());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_dumpReplayBuffer(
+	JNIEnv* env,
+	jclass,
+	jstring path
+) {
+	if(!env || !path) {
+		return JNI_FALSE;
+	}
+	const char* utf = env->GetStringUTFChars(path, nullptr);
+	std::string target = utf ? utf : "";
+	if(utf) {
+		env->ReleaseStringUTFChars(path, utf);
+	}
+	return !target.empty() && HandheldDumpReplayBuffer(target.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setDebugOverlayMask(
+	JNIEnv*,
+	jclass,
+	jint mask
+) {
+	HandheldSetDebugOverlayMask(static_cast<uint32_t>(mask));
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_debugOverlayMask(JNIEnv*, jclass)
+{
+	return static_cast<jint>(HandheldGetDebugOverlayMask());
 }
 
 extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setRamCheats(

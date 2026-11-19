@@ -322,6 +322,7 @@ private:
 	static SocketResponse HandleExecLua(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRecord(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleOverlay(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleGetCpuState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleStateInspector(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSetInput(Emulator* emu, const SocketCommand& cmd);

@@ -18,6 +18,7 @@
 #include "Core/Netplay/GameServer.h"
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
+#include "Utilities/PNGHelper.h"
 #include "Utilities/StringUtilities.h"
 #include "Utilities/Video/AviWriter.h"
 #include "HandheldRuntimeSnapshot.h"
@@ -783,7 +784,15 @@ extern "C" {
 			return false;
 		}
 		std::stringstream pngStream;
-		_emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+		vector<uint32_t> overlayPixels;
+		uint32_t overlayW = 0;
+		uint32_t overlayH = 0;
+		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->GetDebugOverlayMask() != 0
+			&& _emu->GetVideoRenderer()->CopyLastFrame(overlayPixels, overlayW, overlayH)) {
+			PNGHelper::WritePNG(pngStream, overlayPixels.data(), overlayW, overlayH, 24);
+		} else {
+			_emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+		}
 		string pngData = pngStream.str();
 		if(pngData.empty()) {
 			return false;
@@ -816,7 +825,7 @@ extern "C" {
 		if(!path || path[0] == '\0' || !_emu->IsRunning() || !_emu->GetVideoRenderer()) {
 			return false;
 		}
-		if(_emu->GetVideoRenderer()->IsRecording()) {
+		if(_emu->GetVideoRenderer()->IsFileRecording()) {
 			return false;
 		}
 		RecordAviOptions options = {};
@@ -830,7 +839,7 @@ extern "C" {
 	DllExport void __stdcall HandheldStopVideoRecording()
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
-		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsRecording()) {
+		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsFileRecording()) {
 			_emu->GetVideoRenderer()->StopRecording();
 		}
 	}
@@ -838,17 +847,77 @@ extern "C" {
 	DllExport bool __stdcall HandheldIsVideoRecording()
 	{
 		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
-		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsRecording();
+		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsFileRecording();
 	}
 
 	DllExport void __stdcall HandheldGetVideoRecordingPath(char* outBuffer, uint32_t maxLength)
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
-		if(!_emu->GetVideoRenderer() || !_emu->GetVideoRenderer()->IsRecording()) {
+		if(!_emu->GetVideoRenderer() || !_emu->GetVideoRenderer()->IsFileRecording()) {
 			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
 			return;
 		}
 		StringUtilities::CopyToBuffer(_emu->GetVideoRenderer()->GetRecordingFile(), outBuffer, maxLength);
+	}
+
+	DllExport bool __stdcall HandheldStartReplayBuffer(uint32_t windowSeconds, bool recordInputHud)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		if(_emu->GetVideoRenderer()->IsFileRecording()) {
+			return false;
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordInputHud = recordInputHud;
+		options.RecordSystemHud = false;
+		return _emu->GetVideoRenderer()->StartReplayBuffer(windowSeconds, options);
+	}
+
+	DllExport void __stdcall HandheldStopReplayBuffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->StopReplayBuffer();
+		}
+	}
+
+	DllExport bool __stdcall HandheldIsReplayBufferActive()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsReplayBufferActive();
+	}
+
+	DllExport uint32_t __stdcall HandheldGetReplayBufferedSeconds()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetVideoRenderer() ? _emu->GetVideoRenderer()->GetReplayBufferedSeconds() : 0;
+	}
+
+	DllExport bool __stdcall HandheldDumpReplayBuffer(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		return _emu->GetVideoRenderer()->DumpReplayBuffer(string(path));
+	}
+
+	DllExport void __stdcall HandheldSetDebugOverlayMask(uint32_t mask)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->SetDebugOverlayMask(mask);
+		}
+	}
+
+	DllExport uint32_t __stdcall HandheldGetDebugOverlayMask()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetVideoRenderer() ? _emu->GetVideoRenderer()->GetDebugOverlayMask() : 0;
 	}
 
 	DllExport void __stdcall HandheldSetRamCheats(const uint32_t* addrs, const uint8_t* values, uint32_t count)

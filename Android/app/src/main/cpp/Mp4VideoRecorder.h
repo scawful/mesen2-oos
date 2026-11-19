@@ -2,6 +2,7 @@
 
 #include "pch.h"
 #include "Utilities/Video/IVideoRecorder.h"
+#include "ReplayRingBuffer.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -12,6 +13,8 @@
 #include <thread>
 #include <vector>
 
+struct AMediaFormat;
+
 class Mp4VideoRecorder final : public IVideoRecorder
 {
 public:
@@ -19,6 +22,7 @@ public:
 	~Mp4VideoRecorder() override;
 
 	bool Init(string filename) override;
+	bool InitReplay(uint32_t windowSeconds);
 	bool StartRecording(uint32_t width, uint32_t height, uint32_t bpp, uint32_t audioSampleRate, double fps) override;
 	void StopRecording() override;
 
@@ -27,6 +31,10 @@ public:
 
 	bool IsRecording() override;
 	string GetOutputFile() override;
+
+	bool IsReplayMode() const { return _replayMode; }
+	uint32_t GetReplayBufferedSeconds() const;
+	bool DumpReplay(string outputFile);
 
 private:
 	struct PendingFrame
@@ -42,11 +50,13 @@ private:
 
 	string _outputFile;
 	int _fd = -1;
+	bool _replayMode = false;
+	int64_t _replayWindowUs = 20000000LL;
 
 	uint32_t _videoWidth = 512;
-	uint32_t _videoHeight = 448;
+	uint32_t _videoHeight = 480;
 	uint32_t _videoStride = 512;
-	uint32_t _videoSliceHeight = 448;
+	uint32_t _videoSliceHeight = 480;
 	bool _videoSemiPlanar = true;
 	uint32_t _audioSampleRate = 48000;
 	double _fps = 60.0988;
@@ -63,6 +73,12 @@ private:
 	std::deque<int16_t> _audioQueue;
 	uint64_t _videoFrameCount = 0;
 	uint64_t _audioFramesQueued = 0;
+
+	mutable std::mutex _replayMutex;
+	HandheldCapture::ReplayRingBuffer _replayRing;
+	std::mutex _replayFmtMutex;
+	AMediaFormat* _replayVideoFmt = nullptr;
+	AMediaFormat* _replayAudioFmt = nullptr;
 
 	std::thread _worker;
 };

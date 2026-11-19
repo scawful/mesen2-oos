@@ -13,6 +13,7 @@
 #include "Utilities/Video/AviRecorder.h"
 #include "Utilities/Video/GifRecorder.h"
 #include "Utilities/FolderUtilities.h"
+#include "Android/app/src/main/cpp/HandheldDebugOverlay.h"
 #ifdef __ANDROID__
 #include "Android/app/src/main/cpp/Mp4VideoRecorder.h"
 #endif
@@ -209,15 +210,37 @@ void VideoRenderer::UpdateFrame(RenderedFrame& frame)
 		_systemHud->UpdateHud();
 	}
 
-	ProcessAviRecording(frame);
-
-	{
+	RenderedFrame activeFrame = frame;
+	const uint32_t overlayMask = _debugOverlayMask.load(std::memory_order_relaxed);
+	if(overlayMask != 0 && frame.FrameBuffer && frame.Width >= 256 && frame.Height >= 224) {
+		ConsoleMemoryInfo wram = _emu->GetMemory(MemoryType::SnesWorkRam);
+		if(wram.Memory && wram.Size >= 0x1000) {
+			auto lock = _frameLock.AcquireSafe();
+			const size_t pixelCount = static_cast<size_t>(frame.Width) * frame.Height;
+			_debugOverlayBuffer.resize(pixelCount);
+			memcpy(_debugOverlayBuffer.data(), frame.FrameBuffer, pixelCount * sizeof(uint32_t));
+			HandheldOverlay::Render(
+				_debugOverlayBuffer.data(),
+				frame.Width,
+				frame.Height,
+				static_cast<const uint8_t*>(wram.Memory),
+				wram.Size,
+				overlayMask);
+			activeFrame.FrameBuffer = _debugOverlayBuffer.data();
+			_lastFrame = activeFrame;
+		} else {
+			auto lock = _frameLock.AcquireSafe();
+			_lastFrame = activeFrame;
+		}
+	} else {
 		auto lock = _frameLock.AcquireSafe();
-		_lastFrame = frame;
+		_lastFrame = activeFrame;
 	}
 
+	ProcessAviRecording(activeFrame);
+
 	if(_renderer) {
-		_renderer->UpdateFrame(frame);
+		_renderer->UpdateFrame(activeFrame);
 		_needRedraw = true;
 		_waitForRender.Signal();
 	}
@@ -295,6 +318,7 @@ void VideoRenderer::ProcessAviRecording(RenderedFrame& frame)
 
 bool VideoRenderer::StartRecording(string filename, RecordAviOptions options)
 {
+	StopRecording();
 	_recorderOptions = options;
 
 	shared_ptr<IVideoRecorder> recorder;
@@ -314,6 +338,7 @@ bool VideoRenderer::StartRecording(string filename, RecordAviOptions options)
 	}
 
 	if(recorder->Init(filename)) {
+		_replayRecorder.reset();
 		_recorder.reset(recorder);
 		
 		if(!options.RecordSystemHud) {
@@ -340,11 +365,15 @@ void VideoRenderer::AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount
 void VideoRenderer::StopRecording()
 {
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+	bool wasReplay = _replayRecorder != nullptr;
+	_replayRecorder.reset();
 	_recorder.reset();
 	_aviRecorderSurface.UpdateSize(0, 0);
 	if(recorder) {
 		recorder->StopRecording();
-		MessageManager::DisplayMessage("VideoRecorder", "VideoRecorderStopped", recorder->GetOutputFile());
+		if(!wasReplay) {
+			MessageManager::DisplayMessage("VideoRecorder", "VideoRecorderStopped", recorder->GetOutputFile());
+		}
 	}
 }
 
@@ -353,8 +382,94 @@ bool VideoRenderer::IsRecording()
 	return _recorder != nullptr;
 }
 
+bool VideoRenderer::IsFileRecording()
+{
+	return _recorder != nullptr && _replayRecorder == nullptr;
+}
+
 string VideoRenderer::GetRecordingFile()
 {
+	if(_replayRecorder != nullptr) {
+		return "";
+	}
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
 	return recorder ? recorder->GetOutputFile() : "";
+}
+
+bool VideoRenderer::StartReplayBuffer(uint32_t windowSeconds, RecordAviOptions options)
+{
+#ifdef __ANDROID__
+	StopRecording();
+	_recorderOptions = options;
+	shared_ptr<Mp4VideoRecorder> recorder(new Mp4VideoRecorder());
+	if(!recorder->InitReplay(windowSeconds)) {
+		return false;
+	}
+	_replayRecorder.reset(recorder);
+	_recorder.reset(recorder);
+	return true;
+#else
+	(void)windowSeconds;
+	(void)options;
+	return false;
+#endif
+}
+
+void VideoRenderer::StopReplayBuffer()
+{
+	if(_replayRecorder != nullptr) {
+		StopRecording();
+	}
+}
+
+bool VideoRenderer::IsReplayBufferActive()
+{
+	return _replayRecorder != nullptr;
+}
+
+uint32_t VideoRenderer::GetReplayBufferedSeconds()
+{
+#ifdef __ANDROID__
+	shared_ptr<Mp4VideoRecorder> replay = _replayRecorder.lock();
+	return replay ? replay->GetReplayBufferedSeconds() : 0;
+#else
+	return 0;
+#endif
+}
+
+bool VideoRenderer::DumpReplayBuffer(string filename)
+{
+#ifdef __ANDROID__
+	shared_ptr<Mp4VideoRecorder> replay = _replayRecorder.lock();
+	return replay ? replay->DumpReplay(std::move(filename)) : false;
+#else
+	(void)filename;
+	return false;
+#endif
+}
+
+void VideoRenderer::SetDebugOverlayMask(uint32_t mask)
+{
+	_debugOverlayMask.store(mask & HandheldOverlay::kMaskAll, std::memory_order_relaxed);
+	_needRedraw = true;
+	_waitForRender.Signal();
+}
+
+uint32_t VideoRenderer::GetDebugOverlayMask()
+{
+	return _debugOverlayMask.load(std::memory_order_relaxed);
+}
+
+bool VideoRenderer::CopyLastFrame(vector<uint32_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight)
+{
+	auto lock = _frameLock.AcquireSafe();
+	if(!_lastFrame.FrameBuffer || _lastFrame.Width == 0 || _lastFrame.Height == 0) {
+		return false;
+	}
+	const size_t count = static_cast<size_t>(_lastFrame.Width) * _lastFrame.Height;
+	outWidth = _lastFrame.Width;
+	outHeight = _lastFrame.Height;
+	outPixels.resize(count);
+	memcpy(outPixels.data(), _lastFrame.FrameBuffer, count * sizeof(uint32_t));
+	return true;
 }

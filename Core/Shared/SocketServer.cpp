@@ -27,6 +27,7 @@
 #include "Shared/Video/DebugHud.h"
 #include "Shared/Audio/SoundMixer.h"
 #include "Utilities/Video/AviWriter.h"
+#include "Utilities/PNGHelper.h"
 #include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
 #include "Utilities/FolderUtilities.h"
@@ -343,6 +344,7 @@ void SocketServer::InitializeValidationRules() {
 	SocketServer::_validationRules["GAMESTATE"] = defaultRule;
 	SocketServer::_validationRules["SPRITES"] = defaultRule;
 	SocketServer::_validationRules["RECORD"] = defaultRule;
+	SocketServer::_validationRules["OVERLAY"] = defaultRule;
 }
 
 SocketServer::~SocketServer() {
@@ -372,6 +374,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["HELP"] = HandleHelp;
 	_handlers["SCREENSHOT"] = HandleScreenshot;
 	_handlers["RECORD"] = HandleRecord;
+	_handlers["OVERLAY"] = HandleOverlay;
 	_handlers["CPU"] = HandleGetCpuState;
 	_handlers["STATEINSPECT"] = HandleStateInspector;
 	_handlers["INPUT"] = HandleSetInput;
@@ -2369,9 +2372,17 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 		return resp;
 	}
 
-	// Capture screenshot to PNG stream
+	// Capture screenshot to PNG stream (include active zero-debugger overlay when enabled)
 	std::stringstream pngStream;
-	emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+	vector<uint32_t> overlayPixels;
+	uint32_t overlayW = 0;
+	uint32_t overlayH = 0;
+	if (emu->GetVideoRenderer() && emu->GetVideoRenderer()->GetDebugOverlayMask() != 0
+		&& emu->GetVideoRenderer()->CopyLastFrame(overlayPixels, overlayW, overlayH)) {
+		PNGHelper::WritePNG(pngStream, overlayPixels.data(), overlayW, overlayH, 24);
+	} else {
+		emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+	}
 
 	string pngData = pngStream.str();
 	if (pngData.empty()) {
@@ -2508,8 +2519,10 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 	};
 	auto buildStatusJson = [&]() {
 		stringstream ss;
-		ss << "{\"video\":{\"active\":" << (renderer->IsRecording() ? "true" : "false");
+		ss << "{\"video\":{\"active\":" << (renderer->IsFileRecording() ? "true" : "false");
 		ss << ",\"path\":\"" << JsonEscape(renderer->GetRecordingFile()) << "\"}";
+		ss << ",\"replay\":{\"active\":" << (renderer->IsReplayBufferActive() ? "true" : "false");
+		ss << ",\"seconds\":" << renderer->GetReplayBufferedSeconds() << "}";
 		ss << ",\"audio\":{\"active\":" << (mixer->IsRecording() ? "true" : "false");
 		ss << ",\"path\":\"" << JsonEscape(mixer->IsRecording() ? wavPath : "") << "\"}}";
 		return ss.str();
@@ -2523,6 +2536,89 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 		return resp;
 	}
 
+	if (action == "replay_start") {
+		if (!emu->IsRunning()) {
+			resp.success = false;
+			resp.error = "No ROM loaded";
+			resp.errorCode = SocketErrorCode::EmulatorNotRunning;
+			return resp;
+		}
+		if (renderer->IsFileRecording()) {
+			resp.success = false;
+			resp.error = "Stop active file recording before starting replay buffer";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return resp;
+		}
+		uint32_t seconds = 20;
+		if (cmd.HasParam("seconds")) {
+			try {
+				seconds = static_cast<uint32_t>(std::stoul(cmd.GetParam("seconds")));
+			} catch (...) {
+				seconds = 20;
+			}
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordInputHud = cmd.HasParam("input_hud") && ParseBoolValue(cmd.GetParam("input_hud"));
+		if (!renderer->StartReplayBuffer(seconds, options)) {
+			resp.success = false;
+			resp.error = "Replay buffer unavailable on this platform";
+			resp.errorCode = SocketErrorCode::InternalError;
+			return resp;
+		}
+		resp.success = true;
+		resp.data = buildStatusJson();
+		return resp;
+	}
+
+	if (action == "replay_stop") {
+		renderer->StopReplayBuffer();
+		resp.success = true;
+		resp.data = buildStatusJson();
+		return resp;
+	}
+
+	if (action == "replay_dump") {
+		if (!renderer->IsReplayBufferActive()) {
+			resp.success = false;
+			resp.error = "Replay buffer is not active";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return resp;
+		}
+		string path = cmd.GetParam("path");
+		bool overwrite = cmd.HasParam("overwrite") && ParseBoolValue(cmd.GetParam("overwrite"));
+		bool isAbsolute = (!path.empty() && (path[0] == '/' || path[0] == '\\')) || (path.size() > 1 && path[1] == ':');
+		if (path.empty() || !isAbsolute) {
+			resp.success = false;
+			resp.error = "path must be an absolute file path";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		string folder = FolderUtilities::GetFolderName(path);
+		if (folder.empty() || !fs::is_directory(folder)) {
+			resp.success = false;
+			resp.error = "Folder does not exist: " + folder;
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		if (fs::exists(path) && !overwrite) {
+			resp.success = false;
+			resp.error = "File exists (pass overwrite=true to replace): " + path;
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+		if (!renderer->DumpReplayBuffer(path)) {
+			resp.success = false;
+			resp.error = "Replay buffer has no complete keyframe yet";
+			resp.errorCode = SocketErrorCode::InvalidState;
+			return resp;
+		}
+		resp.success = true;
+		resp.data = "{\"dumped\":true,\"path\":\"" + JsonEscape(path) + "\",\"seconds\":" + std::to_string(renderer->GetReplayBufferedSeconds()) + "}";
+		return resp;
+	}
+
 	if (action == "stop") {
 		string kind = lowerCopy(cmd.GetParam("kind", "all"));
 		if (kind != "all" && kind != "video" && kind != "audio") {
@@ -2531,7 +2627,7 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 			resp.errorCode = SocketErrorCode::InvalidParameter;
 			return resp;
 		}
-		if (kind != "audio" && renderer->IsRecording()) {
+		if (kind != "audio" && renderer->IsFileRecording()) {
 			renderer->StopRecording();
 		}
 		if (kind != "video" && mixer->IsRecording()) {
@@ -2545,7 +2641,7 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 
 	if (action != "start") {
 		resp.success = false;
-		resp.error = "Unknown action: " + action + " (start/stop/status)";
+		resp.error = "Unknown action: " + action + " (start/stop/status/replay_start/replay_stop/replay_dump)";
 		resp.errorCode = SocketErrorCode::InvalidParameter;
 		return resp;
 	}
@@ -2602,7 +2698,7 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 		resp.errorCode = SocketErrorCode::InvalidParameter;
 		return resp;
 	}
-	if (renderer->IsRecording()) {
+	if (renderer->IsFileRecording()) {
 		resp.success = false;
 		resp.error = "A video recording is already active";
 		resp.errorCode = SocketErrorCode::InvalidState;
@@ -2651,6 +2747,51 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 
 	resp.success = true;
 	resp.data = buildStatusJson();
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOverlay(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	VideoRenderer* renderer = emu ? emu->GetVideoRenderer() : nullptr;
+	if (!renderer) {
+		resp.success = false;
+		resp.error = "Video renderer unavailable";
+		resp.errorCode = SocketErrorCode::InternalError;
+		return resp;
+	}
+
+	uint32_t mask = renderer->GetDebugOverlayMask();
+	if (cmd.HasParam("mask")) {
+		try {
+			mask = static_cast<uint32_t>(std::stoul(cmd.GetParam("mask"), nullptr, 0)) & 0x07u;
+		} catch (...) {
+			resp.success = false;
+			resp.error = "Invalid overlay mask";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+	}
+	if (cmd.HasParam("hitboxes")) {
+		if (ParseBoolValue(cmd.GetParam("hitboxes"))) mask |= 0x01u;
+		else mask &= ~0x01u;
+	}
+	if (cmd.HasParam("collision")) {
+		if (ParseBoolValue(cmd.GetParam("collision"))) mask |= 0x02u;
+		else mask &= ~0x02u;
+	}
+	if (cmd.HasParam("grid")) {
+		if (ParseBoolValue(cmd.GetParam("grid"))) mask |= 0x04u;
+		else mask &= ~0x04u;
+	}
+	renderer->SetDebugOverlayMask(mask);
+
+	stringstream ss;
+	ss << "{\"mask\":" << mask
+	   << ",\"hitboxes\":" << ((mask & 0x01u) ? "true" : "false")
+	   << ",\"collision\":" << ((mask & 0x02u) ? "true" : "false")
+	   << ",\"grid\":" << ((mask & 0x04u) ? "true" : "false") << "}";
+	resp.success = true;
+	resp.data = ss.str();
 	return resp;
 }
 
@@ -5118,6 +5259,7 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "LOADSTATE") subResp = HandleLoadState(emu, subCmd);
 		else if (subCmd.type == "SCREENSHOT") subResp = HandleScreenshot(emu, subCmd);
 		else if (subCmd.type == "RECORD") subResp = HandleRecord(emu, subCmd);
+		else if (subCmd.type == "OVERLAY") subResp = HandleOverlay(emu, subCmd);
 		else if (subCmd.type == "CPU") subResp = HandleGetCpuState(emu, subCmd);
 		else if (subCmd.type == "EVAL") subResp = HandleEval(emu, subCmd);
 		else if (subCmd.type == "SET_PC") subResp = HandleSetPc(emu, subCmd);
@@ -6857,7 +6999,8 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"TRACE", "Get or control execution trace log", "action (start/stop/status/clear) or count/offset; format/condition/labels/indent", "{\"type\":\"TRACE\",\"action\":\"start\",\"clear\":\"true\"}"},
 			{"BATCH", "Execute multiple commands at once", "commands (JSON array as string)", "{\"type\":\"BATCH\",\"commands\":\"[{\\\"type\\\":\\\"PING\\\"}]\"}"},
 			{"SCREENSHOT", "Capture screen as base64 PNG or write PNG to absolute path", "path (optional), overwrite (optional)", "{\"type\":\"SCREENSHOT\"}"},
-			{"RECORD", "Record video (.mp4 on Android, .avi, .gif) or audio (.wav)", "action (start/stop/status), path, kind, codec, input_hud, system_hud, overwrite", "{\"type\":\"RECORD\",\"action\":\"status\"}"},
+			{"RECORD", "Record video (.mp4 on Android, .avi, .gif), replay ring, or audio (.wav)", "action (start/stop/status/replay_start/replay_stop/replay_dump), path, seconds, kind, codec, input_hud, system_hud, overwrite", "{\"type\":\"RECORD\",\"action\":\"status\"}"},
+			{"OVERLAY", "Toggle zero-debugger WRAM debug overlay (hitboxes, dungeon collision, 16x16 grid)", "mask (0-7), hitboxes, collision, grid", "{\"type\":\"OVERLAY\",\"hitboxes\":\"true\"}"},
 			{"SAVESTATE", "Save state to slot or file", "slot or path, label (optional), pause (optional), allow_external (optional)", "{\"type\":\"SAVESTATE\",\"slot\":\"1\",\"label\":\"Boss room\",\"pause\":\"true\"}"},
 			{"SAVESTATE_LABEL", "Get/set save state labels", "action (get/set/clear), slot or path, label (set only)", "{\"type\":\"SAVESTATE_LABEL\",\"action\":\"set\",\"slot\":\"1\",\"label\":\"Boss room\"}"},
 			{"LOADSTATE", "Load state from slot or file", "slot or path, pause (optional), allow_external (optional)", "{\"type\":\"LOADSTATE\",\"slot\":\"1\",\"pause\":\"true\"}"},
@@ -6915,7 +7058,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",
-		"SCREENSHOT", "RECORD", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
+		"SCREENSHOT", "RECORD", "OVERLAY", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
 		"SNAPSHOT", "DIFF", "SEARCH", "LABELS",
 		"P_WATCH", "P_LOG", "P_ASSERT",
 		"DEBUG_LOG",

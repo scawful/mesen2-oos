@@ -77,6 +77,16 @@ public final class MediaCaptureTest {
             }
 
             @Override
+            public boolean saveReplayVideo(File mp4File) {
+                try {
+                    Files.write(mp4File.toPath(), new byte[]{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p'});
+                    return true;
+                } catch (Exception e) {
+                    return false;
+                }
+            }
+
+            @Override
             public String statusJson() {
                 return "{\"rom\":\"Oracle - Main.sfc\",\"sha1\":\"abc123\",\"frames\":9001,"
                         + "\"mode\":7,\"sub\":0,\"indoor\":1,\"area\":0,\"room\":36,"
@@ -101,6 +111,7 @@ public final class MediaCaptureTest {
         check(res.ok, "snapshot ok: " + res.message);
         check(res.screenshotFile != null && res.screenshotFile.isFile(), "screenshot.png created");
         check(res.stateFile != null && res.stateFile.isFile(), "state.mss created");
+        check(res.replayFile != null && res.replayFile.isFile(), "replay.mp4 created");
         check(res.reportFile != null && res.reportFile.isFile(), "report.json created");
 
         String raw = new String(Files.readAllBytes(res.reportFile.toPath()), StandardCharsets.UTF_8);

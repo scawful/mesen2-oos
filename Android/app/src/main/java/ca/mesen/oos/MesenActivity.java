@@ -61,6 +61,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String PREF_GPU = "gpu_blit";
     private static final String PREF_HOTKEYS = "capture_hotkeys";
     private static final String PREF_REC_HUD = "record_input_hud";
+    private static final String PREF_REPLAY_BUF = "replay_buffer";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -134,6 +135,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private volatile boolean mPreferGpu;
     private volatile boolean mCaptureHotkeys = true;
     private volatile boolean mRecordInputHud;
+    private volatile boolean mReplayBufferEnabled;
+    private volatile int mOverlayMask;
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
@@ -157,6 +160,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     };
     private boolean mPendingStartVideo;
     private boolean mPendingScreenshot;
+    private boolean mPendingDumpReplay;
+    private Boolean mPendingReplayBuffer;
+    private Integer mPendingOverlayMask;
     private String mPendingBugSnapshotCategory;
 
     private boolean mHomeReceiverRegistered;
@@ -240,6 +246,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
         mCaptureHotkeys = prefs.getBoolean(PREF_HOTKEYS, true);
         mRecordInputHud = prefs.getBoolean(PREF_REC_HUD, false);
+        mReplayBufferEnabled = prefs.getBoolean(PREF_REPLAY_BUF, false);
         attachHud();
         attachOracleUi();
         applyIntentPrefs(getIntent());
@@ -305,6 +312,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mHandler.postDelayed(this::collapseNotificationShade, 400);
         if (mComposeHost != null) {
             mComposeHost.onResume();
+        }
+        if (mNativeReady && mReplayBufferEnabled && !mBgExecutor.isShutdown()) {
+            mBgExecutor.execute(this::syncReplayBuffer);
         }
     }
 
@@ -737,6 +747,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                         }
 
                         @Override
+                        public boolean saveReplayVideo(File mp4File) {
+                            return MesenNative.isReplayBufferActive()
+                                    && MesenNative.dumpReplayBuffer(mp4File.getAbsolutePath());
+                        }
+
+                        @Override
                         public String statusJson() {
                             return MesenNative.statusJson(true);
                         }
@@ -754,6 +770,59 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                     System.currentTimeMillis());
             return res.message;
         }
+    }
+
+    @Override
+    public boolean isReplayBufferActive() {
+        return mNativeReady && !mDestroyed && MesenNative.isReplayBufferActive();
+    }
+
+    @Override
+    public int replayBufferedSeconds() {
+        return mNativeReady && !mDestroyed ? MesenNative.replayBufferedSeconds() : 0;
+    }
+
+    @Override
+    public String dumpReplayClip() {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            if (!MesenNative.isReplayBufferActive()) {
+                return "Replay buffer is off — enable Replay buffer (20s) first";
+            }
+            File dir = MediaCapture.videosDir(capturesDir());
+            File out = MediaCapture.nextMediaFile(dir, "replay_" + romDisplayName(), "mp4", System.currentTimeMillis());
+            if (out == null || !MesenNative.dumpReplayBuffer(out.getAbsolutePath()) || !out.isFile() || out.length() == 0) {
+                return "Replay buffer has no complete keyframe yet (wait ~2s)";
+            }
+            MediaGallery.publish(this, out, true);
+            return "Saved 20s replay: " + out.getName();
+        }
+    }
+
+    @Override
+    public int debugOverlayMask() {
+        return mNativeReady && !mDestroyed ? MesenNative.debugOverlayMask() : mOverlayMask;
+    }
+
+    @Override
+    public String toggleDebugOverlayBit(int bit) {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        int cur = MesenNative.debugOverlayMask();
+        int next = (cur ^ bit) & 0x07;
+        mOverlayMask = next;
+        MesenNative.setDebugOverlayMask(next);
+        String name;
+        switch (bit) {
+            case 0x01: name = "Hitboxes & sprites"; break;
+            case 0x02: name = "Dungeon collision"; break;
+            case 0x04: name = "16x16 grid & seams"; break;
+            default: name = "Overlay"; break;
+        }
+        return name + ": " + ((next & bit) != 0 ? "ON" : "OFF");
     }
 
     @Override
@@ -892,6 +961,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (mTestingTools.activeCheatCount() > 0) {
             mTestingTools.syncCheats(Inventory.LIVE);
         }
+        if (mReplayBufferEnabled) {
+            syncReplayBuffer();
+        }
+        if (mOverlayMask != 0) {
+            MesenNative.setDebugOverlayMask(mOverlayMask);
+        }
         // Warm ROM SHA1 cache off the main thread before refreshHud() runs.
         MesenNative.statusJson(false);
         mHandler.post(() -> {
@@ -928,6 +1003,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "gpu": return mPreferGpu;
             case "hotkeys": return mCaptureHotkeys;
             case "rec_hud": return mRecordInputHud;
+            case "replay": return mReplayBufferEnabled;
             default: return false;
         }
     }
@@ -947,6 +1023,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "gpu": setPreferGpu(on); break;
             case "hotkeys": setCaptureHotkeys(on); break;
             case "rec_hud": setRecordInputHud(on); break;
+            case "replay": setReplayBufferEnabled(on); break;
             default: break;
         }
     }
@@ -1105,7 +1182,19 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (mUi != null && !romFromIntent && !mUiVisible) {
             mUi.openLibrary();
         }
-        if (mPendingStartVideo || mPendingScreenshot || mPendingBugSnapshotCategory != null) {
+        if (mOverlayMask != 0) {
+            MesenNative.setDebugOverlayMask(mOverlayMask);
+        }
+        if (mReplayBufferEnabled && !mBgExecutor.isShutdown()) {
+            mHandler.postDelayed(() -> {
+                if (!mDestroyed && !mBgExecutor.isShutdown()) {
+                    mBgExecutor.execute(this::syncReplayBuffer);
+                }
+            }, 350);
+        }
+        if (mPendingStartVideo || mPendingScreenshot || mPendingDumpReplay
+                || mPendingReplayBuffer != null || mPendingOverlayMask != null
+                || mPendingBugSnapshotCategory != null) {
             mHandler.postDelayed(this::dispatchPendingCaptureActions, 400);
         }
     }
@@ -1442,6 +1531,29 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_REC_HUD, enabled).apply();
     }
 
+    private void setReplayBufferEnabled(boolean enabled) {
+        mReplayBufferEnabled = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_REPLAY_BUF, enabled).apply();
+        if (mNativeReady && !mDestroyed && !mBgExecutor.isShutdown()) {
+            mBgExecutor.execute(this::syncReplayBuffer);
+        }
+    }
+
+    private void syncReplayBuffer() {
+        if (!mNativeReady || mDestroyed) {
+            return;
+        }
+        synchronized (mCaptureLock) {
+            if (mReplayBufferEnabled) {
+                if (!MesenNative.isVideoRecording() && !MesenNative.isReplayBufferActive()) {
+                    MesenNative.startReplayBuffer(20, mRecordInputHud);
+                }
+            } else if (MesenNative.isReplayBufferActive()) {
+                MesenNative.stopReplayBuffer();
+            }
+        }
+    }
+
     private String romDisplayName() {
         String path = currentRomPath();
         return (path != null && !path.isEmpty()) ? new File(path).getName() : "oracle";
@@ -1486,6 +1598,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (publishGallery && out.isFile() && out.length() > 0) {
             MediaGallery.publish(this, out, true);
         }
+        if (publishGallery && mReplayBufferEnabled && !mDestroyed) {
+            MesenNative.startReplayBuffer(20, mRecordInputHud);
+        }
         return "Saved video: " + out.getName();
     }
 
@@ -1496,6 +1611,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         synchronized (mCaptureLock) {
             if (MesenNative.isVideoRecording()) {
                 stopRecordingLocked(publishGallery);
+            }
+            if (MesenNative.isReplayBufferActive()) {
+                MesenNative.stopReplayBuffer();
             }
         }
     }
@@ -1569,22 +1687,40 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         final boolean startVideo = mPendingStartVideo;
         final boolean screenshot = mPendingScreenshot;
+        final boolean dumpReplay = mPendingDumpReplay;
+        final Boolean replayBuf = mPendingReplayBuffer;
+        final Integer overlayMask = mPendingOverlayMask;
         final String bugCat = mPendingBugSnapshotCategory;
         mPendingStartVideo = false;
         mPendingScreenshot = false;
+        mPendingDumpReplay = false;
+        mPendingReplayBuffer = null;
+        mPendingOverlayMask = null;
         mPendingBugSnapshotCategory = null;
-        if (!startVideo && !screenshot && bugCat == null) {
+        if (!startVideo && !screenshot && !dumpReplay && replayBuf == null && overlayMask == null && bugCat == null) {
             return;
         }
         mBgExecutor.execute(() -> {
             if (mDestroyed) {
                 return;
             }
+            if (overlayMask != null) {
+                mOverlayMask = overlayMask & 0x07;
+                MesenNative.setDebugOverlayMask(mOverlayMask);
+            }
+            if (replayBuf != null) {
+                mReplayBufferEnabled = replayBuf;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_REPLAY_BUF, replayBuf).apply();
+                syncReplayBuffer();
+            }
             if (startVideo && !MesenNative.isVideoRecording()) {
                 toast(toggleVideoRecording());
             }
             if (screenshot) {
                 toast(takeScreenshot());
+            }
+            if (dumpReplay) {
+                toast(dumpReplayClip());
             }
             if (bugCat != null) {
                 toast(captureBugSnapshot(bugCat));
@@ -1674,13 +1810,24 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (intent.getBooleanExtra("screenshot", false)) {
             mPendingScreenshot = true;
         }
+        if (intent.hasExtra("replay_buffer")) {
+            mPendingReplayBuffer = intent.getBooleanExtra("replay_buffer", false);
+        }
+        if (intent.getBooleanExtra("dump_replay", false)) {
+            mPendingDumpReplay = true;
+        }
+        if (intent.hasExtra("overlay_mask")) {
+            mPendingOverlayMask = intent.getIntExtra("overlay_mask", 0);
+        }
         if (intent.hasExtra("bug_snapshot")) {
             String cat = intent.getStringExtra("bug_snapshot");
             mPendingBugSnapshotCategory = (cat == null || cat.trim().isEmpty())
                     ? MediaCapture.BUG_CATEGORIES[0]
                     : cat;
         }
-        if (mNativeReady && (mPendingStartVideo || mPendingScreenshot || mPendingBugSnapshotCategory != null)) {
+        if (mNativeReady && (mPendingStartVideo || mPendingScreenshot || mPendingDumpReplay
+                || mPendingReplayBuffer != null || mPendingOverlayMask != null
+                || mPendingBugSnapshotCategory != null)) {
             dispatchPendingCaptureActions();
         }
     }

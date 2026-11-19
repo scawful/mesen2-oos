@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -93,7 +94,27 @@ bool Mp4VideoRecorder::Init(string filename)
 	}
 	::close(testFd);
 	::unlink(filename.c_str());
+	_replayMode = false;
 	_outputFile = std::move(filename);
+	{
+		std::lock_guard<std::mutex> rlock(_replayMutex);
+		_replayRing.Clear();
+	}
+	return true;
+}
+
+bool Mp4VideoRecorder::InitReplay(uint32_t windowSeconds)
+{
+	std::lock_guard<std::mutex> lock(_lifecycleMutex);
+	const uint32_t clamped = std::clamp<uint32_t>(windowSeconds, 5, 60);
+	_replayMode = true;
+	_replayWindowUs = static_cast<int64_t>(clamped) * 1000000LL;
+	_outputFile.clear();
+	{
+		std::lock_guard<std::mutex> rlock(_replayMutex);
+		_replayRing.SetWindowUs(_replayWindowUs);
+		_replayRing.Clear();
+	}
 	return true;
 }
 
@@ -103,7 +124,7 @@ bool Mp4VideoRecorder::StartRecording(uint32_t /*width*/, uint32_t /*height*/, u
 	if(_recording.load(std::memory_order_acquire)) {
 		return true;
 	}
-	if(_outputFile.empty()) {
+	if(!_replayMode && _outputFile.empty()) {
 		return false;
 	}
 
@@ -124,11 +145,16 @@ bool Mp4VideoRecorder::StartRecording(uint32_t /*width*/, uint32_t /*height*/, u
 		_videoFrameCount = 0;
 		_audioFramesQueued = 0;
 	}
-
-	_fd = ::open(_outputFile.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644);
-	if(_fd < 0) {
-		__android_log_print(ANDROID_LOG_ERROR, kLogTag, "Failed to create MP4 file %s: %s", _outputFile.c_str(), strerror(errno));
-		return false;
+	if(_replayMode) {
+		std::lock_guard<std::mutex> rlock(_replayMutex);
+		_replayRing.SetWindowUs(_replayWindowUs);
+		_replayRing.Clear();
+	} else {
+		_fd = ::open(_outputFile.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644);
+		if(_fd < 0) {
+			__android_log_print(ANDROID_LOG_ERROR, kLogTag, "Failed to create MP4 file %s: %s", _outputFile.c_str(), strerror(errno));
+			return false;
+		}
 	}
 
 	_hasAudio = true;
@@ -236,6 +262,95 @@ string Mp4VideoRecorder::GetOutputFile()
 	return _outputFile;
 }
 
+uint32_t Mp4VideoRecorder::GetReplayBufferedSeconds() const
+{
+	if(!_replayMode || !_recording.load(std::memory_order_acquire)) {
+		return 0;
+	}
+	std::lock_guard<std::mutex> lock(_replayMutex);
+	return static_cast<uint32_t>(_replayRing.BufferedDurationUs() / 1000000LL);
+}
+
+bool Mp4VideoRecorder::DumpReplay(string outputFile)
+{
+	if(!_replayMode || !_recording.load(std::memory_order_acquire) || outputFile.empty()) {
+		return false;
+	}
+	std::vector<HandheldCapture::EncodedPacket> packets;
+	{
+		std::lock_guard<std::mutex> rlock(_replayMutex);
+		packets = _replayRing.Snapshot(_replayWindowUs);
+	}
+	if(packets.empty()) {
+		return false;
+	}
+
+	std::lock_guard<std::mutex> flock(_replayFmtMutex);
+	if(!_replayVideoFmt) {
+		return false;
+	}
+
+	const string tmpFile = outputFile + ".tmp";
+	int fd = ::open(tmpFile.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644);
+	if(fd < 0) {
+		__android_log_print(ANDROID_LOG_ERROR, kLogTag, "DumpReplay open failed %s: %s", tmpFile.c_str(), strerror(errno));
+		return false;
+	}
+
+	AMediaMuxer* muxer = AMediaMuxer_new(fd, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
+	if(!muxer) {
+		::close(fd);
+		::unlink(tmpFile.c_str());
+		return false;
+	}
+
+	ssize_t vTrack = AMediaMuxer_addTrack(muxer, _replayVideoFmt);
+	ssize_t aTrack = -1;
+	bool hasAudioPkt = false;
+	for(const auto& pkt : packets) {
+		if(!pkt.IsVideo) {
+			hasAudioPkt = true;
+			break;
+		}
+	}
+	if(hasAudioPkt && _replayAudioFmt) {
+		aTrack = AMediaMuxer_addTrack(muxer, _replayAudioFmt);
+	}
+
+	bool ok = false;
+	if(vTrack >= 0 && AMediaMuxer_start(muxer) == AMEDIA_OK) {
+		uint32_t writtenVideo = 0;
+		for(const auto& pkt : packets) {
+			ssize_t track = pkt.IsVideo ? vTrack : aTrack;
+			if(track < 0 || pkt.Data.empty()) {
+				continue;
+			}
+			AMediaCodecBufferInfo info{};
+			info.offset = 0;
+			info.size = static_cast<int32_t>(pkt.Data.size());
+			info.presentationTimeUs = pkt.PtsUs;
+			info.flags = pkt.Flags;
+			if(AMediaMuxer_writeSampleData(muxer, static_cast<size_t>(track), pkt.Data.data(), &info) == AMEDIA_OK && pkt.IsVideo) {
+				++writtenVideo;
+			}
+		}
+		ok = (AMediaMuxer_stop(muxer) == AMEDIA_OK) && (writtenVideo > 0);
+	}
+	AMediaMuxer_delete(muxer);
+	::fsync(fd);
+	::close(fd);
+
+	if(!ok) {
+		::unlink(tmpFile.c_str());
+		return false;
+	}
+	if(std::rename(tmpFile.c_str(), outputFile.c_str()) != 0) {
+		::unlink(tmpFile.c_str());
+		return false;
+	}
+	return true;
+}
+
 void Mp4VideoRecorder::EncoderLoop()
 {
 	const int32_t fpsInt = std::max<int32_t>(1, static_cast<int32_t>(std::llround(_fps)));
@@ -317,18 +432,21 @@ void Mp4VideoRecorder::EncoderLoop()
 		_hasAudio = false;
 	}
 
-	AMediaMuxer* muxer = AMediaMuxer_new(_fd, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
-	if(!muxer) {
-		__android_log_print(ANDROID_LOG_ERROR, kLogTag, "AMediaMuxer_new failed");
-		AMediaCodec_stop(videoCodec);
-		AMediaCodec_delete(videoCodec);
-		if(audioCodec) {
-			AMediaCodec_stop(audioCodec);
-			AMediaCodec_delete(audioCodec);
+	AMediaMuxer* muxer = nullptr;
+	if(!_replayMode) {
+		muxer = AMediaMuxer_new(_fd, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
+		if(!muxer) {
+			__android_log_print(ANDROID_LOG_ERROR, kLogTag, "AMediaMuxer_new failed");
+			AMediaCodec_stop(videoCodec);
+			AMediaCodec_delete(videoCodec);
+			if(audioCodec) {
+				AMediaCodec_stop(audioCodec);
+				AMediaCodec_delete(audioCodec);
+			}
+			_failed.store(true, std::memory_order_release);
+			_recording.store(false, std::memory_order_release);
+			return;
 		}
-		_failed.store(true, std::memory_order_release);
-		_recording.store(false, std::memory_order_release);
-		return;
 	}
 
 	AMediaFormat* videoOutFmt = nullptr;
@@ -346,7 +464,7 @@ void Mp4VideoRecorder::EncoderLoop()
 	bool stopStoppingAudio = false;
 
 	auto maybeStartMuxer = [&](bool forceVideoOnly) {
-		if(muxerStarted || !videoOutFmt) {
+		if(_replayMode || muxerStarted || !videoOutFmt) {
 			return;
 		}
 		if(audioCodec && _hasAudio && !audioOutFmt && !forceVideoOnly) {
@@ -399,11 +517,22 @@ void Mp4VideoRecorder::EncoderLoop()
 				continue;
 			}
 			if(outIdx == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
-				if(outFmt) {
-					AMediaFormat_delete(outFmt);
+				AMediaFormat* nextFmt = AMediaCodec_getOutputFormat(codec);
+				if(_replayMode) {
+					std::lock_guard<std::mutex> flock(_replayFmtMutex);
+					AMediaFormat*& slot = isVideo ? _replayVideoFmt : _replayAudioFmt;
+					if(slot) {
+						AMediaFormat_delete(slot);
+					}
+					slot = nextFmt;
+					outFmt = nextFmt;
+				} else {
+					if(outFmt) {
+						AMediaFormat_delete(outFmt);
+					}
+					outFmt = nextFmt;
+					maybeStartMuxer(false);
 				}
-				outFmt = AMediaCodec_getOutputFormat(codec);
-				maybeStartMuxer(false);
 				continue;
 			}
 			if(outIdx < 0) {
@@ -417,7 +546,16 @@ void Mp4VideoRecorder::EncoderLoop()
 			if(buf && info.size > 0 && !isConfig) {
 				const uint8_t* ptr = buf + std::max<int32_t>(0, info.offset);
 				const uint32_t cleanFlags = info.flags & (AMEDIACODEC_BUFFER_FLAG_KEY_FRAME | AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-				if(muxerStarted) {
+				if(_replayMode) {
+					HandheldCapture::EncodedPacket pkt;
+					pkt.IsVideo = isVideo;
+					pkt.IsKeyFrame = isVideo && ((info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) != 0);
+					pkt.PtsUs = info.presentationTimeUs;
+					pkt.Flags = cleanFlags;
+					pkt.Data.assign(ptr, ptr + info.size);
+					std::lock_guard<std::mutex> rlock(_replayMutex);
+					_replayRing.Push(std::move(pkt));
+				} else if(muxerStarted) {
 					ssize_t track = isVideo ? videoTrackIdx : audioTrackIdx;
 					if(track >= 0) {
 						AMediaCodecBufferInfo writeInfo{};
@@ -579,19 +717,34 @@ void Mp4VideoRecorder::EncoderLoop()
 		}
 	}
 
-	if(!muxerStarted && videoOutFmt) {
-		maybeStartMuxer(true);
-	}
-	if(muxerStarted) {
-		AMediaMuxer_stop(muxer);
-	}
-	AMediaMuxer_delete(muxer);
-
-	if(videoOutFmt) {
-		AMediaFormat_delete(videoOutFmt);
-	}
-	if(audioOutFmt) {
-		AMediaFormat_delete(audioOutFmt);
+	if(_replayMode) {
+		std::lock_guard<std::mutex> flock(_replayFmtMutex);
+		if(_replayVideoFmt) {
+			AMediaFormat_delete(_replayVideoFmt);
+			_replayVideoFmt = nullptr;
+		}
+		if(_replayAudioFmt) {
+			AMediaFormat_delete(_replayAudioFmt);
+			_replayAudioFmt = nullptr;
+		}
+		videoOutFmt = nullptr;
+		audioOutFmt = nullptr;
+	} else {
+		if(!muxerStarted && videoOutFmt) {
+			maybeStartMuxer(true);
+		}
+		if(muxerStarted) {
+			AMediaMuxer_stop(muxer);
+		}
+		if(muxer) {
+			AMediaMuxer_delete(muxer);
+		}
+		if(videoOutFmt) {
+			AMediaFormat_delete(videoOutFmt);
+		}
+		if(audioOutFmt) {
+			AMediaFormat_delete(audioOutFmt);
+		}
 	}
 
 	AMediaCodec_stop(videoCodec);
@@ -601,7 +754,7 @@ void Mp4VideoRecorder::EncoderLoop()
 		AMediaCodec_delete(audioCodec);
 	}
 
-	if(!muxerStarted) {
+	if(!_replayMode && !muxerStarted) {
 		::unlink(_outputFile.c_str());
 		_failed.store(true, std::memory_order_release);
 	}
@@ -612,12 +765,15 @@ void Mp4VideoRecorder::EncoderLoop()
 Mp4VideoRecorder::Mp4VideoRecorder() = default;
 Mp4VideoRecorder::~Mp4VideoRecorder() = default;
 bool Mp4VideoRecorder::Init(string) { return false; }
+bool Mp4VideoRecorder::InitReplay(uint32_t) { return false; }
 bool Mp4VideoRecorder::StartRecording(uint32_t, uint32_t, uint32_t, uint32_t, double) { return false; }
 void Mp4VideoRecorder::StopRecording() {}
 bool Mp4VideoRecorder::AddFrame(void*, uint32_t, uint32_t, double) { return false; }
 bool Mp4VideoRecorder::AddSound(int16_t*, uint32_t, uint32_t) { return false; }
 bool Mp4VideoRecorder::IsRecording() { return false; }
 string Mp4VideoRecorder::GetOutputFile() { return {}; }
+uint32_t Mp4VideoRecorder::GetReplayBufferedSeconds() const { return 0; }
+bool Mp4VideoRecorder::DumpReplay(string) { return false; }
 void Mp4VideoRecorder::EncoderLoop() {}
 void Mp4VideoRecorder::CleanupLocked() {}
 

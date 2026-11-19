@@ -24,22 +24,26 @@ static void Check(bool condition, const char* message)
 static void TestPlacementVariants()
 {
 	FramePlacement p256 = ComputePlacement(256, 224, kDefaultRecordWidth, kDefaultRecordHeight);
-	Check(p256.DstX == 0 && p256.DstY == 0 && p256.DrawW == 512 && p256.DrawH == 448,
-		"256x224 should scale 2x cleanly to 512x448");
+	Check(p256.DstX == 0 && p256.DstY == 16 && p256.DrawW == 512 && p256.DrawH == 448,
+		"256x224 should scale 2x cleanly to 512x448 centered inside 512x480");
 
 	FramePlacement pHires = ComputePlacement(512, 224, kDefaultRecordWidth, kDefaultRecordHeight);
-	Check(pHires.DstX == 0 && pHires.DstY == 0 && pHires.DrawW == 512 && pHires.DrawH == 448,
+	Check(pHires.DstX == 0 && pHires.DstY == 16 && pHires.DrawW == 512 && pHires.DrawH == 448,
 		"512x224 hi-res should map 1x horizontally and 2x vertically to 512x448");
 
 	FramePlacement pInterlaced = ComputePlacement(512, 448, kDefaultRecordWidth, kDefaultRecordHeight);
-	Check(pInterlaced.DstX == 0 && pInterlaced.DstY == 0 && pInterlaced.DrawW == 512 && pInterlaced.DrawH == 448,
-		"512x448 should map 1:1 to 512x448");
+	Check(pInterlaced.DstX == 0 && pInterlaced.DstY == 16 && pInterlaced.DrawW == 512 && pInterlaced.DrawH == 448,
+		"512x448 should map 1:1 centered inside 512x480");
 
 	FramePlacement pOverscan = ComputePlacement(256, 239, kDefaultRecordWidth, kDefaultRecordHeight);
-	Check(pOverscan.DrawW == 256 && pOverscan.DrawH == 239 && pOverscan.DstX == 128 && pOverscan.DstY == 104,
-		"256x239 should center cleanly with integer 1x scale");
+	Check(pOverscan.DrawW == 512 && pOverscan.DrawH == 478 && pOverscan.DstX == 0 && pOverscan.DstY == 0,
+		"256x239 overscan should scale 2x cleanly to 512x478 inside 512x480");
 	Check((pOverscan.DstX & 1u) == 0 && (pOverscan.DstY & 1u) == 0,
-		"centered placement must keep even offsets for 4:2:0 alignment");
+		"placement must keep even offsets for 4:2:0 alignment");
+
+	FramePlacement pHiresOverscan = ComputePlacement(512, 239, kDefaultRecordWidth, kDefaultRecordHeight);
+	Check(pHiresOverscan.DrawW == 512 && pHiresOverscan.DrawH == 478 && pHiresOverscan.DstX == 0 && pHiresOverscan.DstY == 0,
+		"512x239 hi-res overscan should scale 1x2 cleanly to 512x478");
 }
 
 static void TestZeroChromaBleed2xUpscaleNv12()

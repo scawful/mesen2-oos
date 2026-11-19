@@ -150,6 +150,11 @@ class OracleUi internal constructor(
         fun isVideoRecording(): Boolean
         fun videoRecordingElapsedSeconds(): Long
         fun toggleVideoRecording(): String
+        fun isReplayBufferActive(): Boolean
+        fun replayBufferedSeconds(): Int
+        fun dumpReplayClip(): String
+        fun debugOverlayMask(): Int
+        fun toggleDebugOverlayBit(bit: Int): String
         fun captureBugSnapshot(category: String): String
         fun testingTools(): TestingTools
         fun activeSaveSlot(): Int
@@ -781,7 +786,7 @@ class OracleUi internal constructor(
             Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
             Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((total - 1).coerceAtLeast(0))
             Key.LEFT -> {
-                if (listIndex == 2) {
+                if (listIndex == 4) {
                     val cats = MediaCapture.BUG_CATEGORIES
                     bugCategoryIndex = (bugCategoryIndex - 1 + cats.size) % cats.size
                     captureTick++
@@ -790,7 +795,7 @@ class OracleUi internal constructor(
                 }
             }
             Key.RIGHT -> {
-                if (listIndex == 2) {
+                if (listIndex == 4) {
                     val cats = MediaCapture.BUG_CATEGORIES
                     bugCategoryIndex = (bugCategoryIndex + 1) % cats.size
                     captureTick++
@@ -846,6 +851,34 @@ class OracleUi internal constructor(
                         status = "Emulator is still starting."
                         return
                     }
+                    val gen = capturesGen.incrementAndGet()
+                    var msg = ""
+                    var loaded: List<MediaCapture.CaptureItem>? = null
+                    work("Saving 20s instant replay…", {
+                        msg = host.dumpReplayClip()
+                        loaded = host.recentCaptures()
+                        null
+                    }) { problem ->
+                        val items = loaded
+                        if (items != null && gen == capturesGen.get()) {
+                            captures = items
+                            loadingCaptures = false
+                        }
+                        captureTick++
+                        status = problem ?: msg
+                    }
+                }
+                3 -> {
+                    val next = !host.setting("replay")
+                    host.setSetting("replay", next)
+                    captureTick++
+                    status = if (next) "20s instant replay buffer armed." else "Instant replay buffer off."
+                }
+                4 -> {
+                    if (!host.nativeReady()) {
+                        status = "Emulator is still starting."
+                        return
+                    }
                     val category = MediaCapture.BUG_CATEGORIES.getOrElse(bugCategoryIndex) { "Bug" }
                     val gen = capturesGen.incrementAndGet()
                     var msg = ""
@@ -864,7 +897,7 @@ class OracleUi internal constructor(
                         status = problem ?: msg
                     }
                 }
-                3 -> {
+                5 -> {
                     host.setSetting("rec_hud", !host.setting("rec_hud"))
                     captureTick++
                 }
@@ -1161,12 +1194,14 @@ class OracleUi internal constructor(
             val cheats = TestingTools.Cheat.values()
             val actions = TestingTools.LiveAction.values()
             val clearIdx = cheats.size
-            val total = cheats.size + 1 + actions.size
+            val overlayStart = clearIdx + 1
+            val actionsStart = overlayStart + OVERLAY_ROWS.size
+            val total = actionsStart + actions.size
             when (key) {
                 Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
                 Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((total - 1).coerceAtLeast(0))
                 Key.LEFT, Key.RIGHT -> {
-                    val action = if (listIndex > clearIdx) actions.getOrNull(listIndex - clearIdx - 1) else null
+                    val action = if (listIndex >= actionsStart) actions.getOrNull(listIndex - actionsStart) else null
                     if (action == TestingTools.LiveAction.SPAWN_SPRITE) {
                         host.testingTools().stepSpawnSpriteId(if (key == Key.LEFT) -1 else 1)
                         cheatsTick++
@@ -1201,8 +1236,19 @@ class OracleUi internal constructor(
                                 status = problem ?: msg
                             }
                         }
+                        listIndex < actionsStart -> {
+                            val (label, bit) = OVERLAY_ROWS[listIndex - overlayStart]
+                            var msg = ""
+                            work("Updating $label…", {
+                                msg = host.toggleDebugOverlayBit(bit)
+                                null
+                            }) { problem ->
+                                cheatsTick++
+                                status = problem ?: msg
+                            }
+                        }
                         else -> {
-                            val action = actions.getOrNull(listIndex - clearIdx - 1) ?: return
+                            val action = actions.getOrNull(listIndex - actionsStart) ?: return
                             var msg = ""
                             work("${action.label}…", {
                                 msg = host.runLiveAction(action)
@@ -1450,14 +1496,22 @@ class OracleUi internal constructor(
             Spacer(Modifier.width(10.dp))
             Box(Modifier.weight(1f)) { Txt(item.label, 14.sp, Pal.TEXT, bold = true, italic = selected) }
             when (item) {
-                RailItem.CAPTURE -> if (host.isVideoRecording()) {
-                    Badge("REC", Pal.RED)
-                    Spacer(Modifier.width(8.dp))
+                RailItem.CAPTURE -> when {
+                    host.isVideoRecording() -> {
+                        Badge("REC", Pal.RED)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    host.isReplayBufferActive() -> {
+                        Badge("20s", Pal.TEAL)
+                        Spacer(Modifier.width(8.dp))
+                    }
                 }
                 RailItem.ITEMS -> {
                     val activeCount = host.testingTools().activeCheatCount()
-                    if (activeCount > 0) {
-                        Badge("$activeCount ON", Pal.TEAL)
+                    val ovCount = Integer.bitCount(host.debugOverlayMask() and 0x07)
+                    val totalOn = activeCount + ovCount
+                    if (totalOn > 0) {
+                        Badge("$totalOn ON", Pal.TEAL)
                         Spacer(Modifier.width(8.dp))
                     }
                 }
@@ -1479,6 +1533,9 @@ class OracleUi internal constructor(
         }
         val recording = host.isVideoRecording()
         val elapsed = host.videoRecordingElapsedSeconds()
+        val replayOn = host.setting("replay")
+        val replayActive = host.isReplayBufferActive()
+        val replaySecs = host.replayBufferedSeconds()
         val category = MediaCapture.BUG_CATEGORIES.getOrElse(bugCategoryIndex) { "Bug" }
         val hudOn = host.setting("rec_hud")
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1494,13 +1551,29 @@ class OracleUi internal constructor(
                 )
             }
             item {
-                ListRow("Save bug snapshot", category, inPanel && listIndex == 2, tagColor = Pal.GOLD)
+                ListRow(
+                    "Save last 20s instant replay",
+                    if (replayActive) "${replaySecs}s ready" else "buffer off",
+                    inPanel && listIndex == 2,
+                    tagColor = if (replayActive && replaySecs > 0) Pal.TEAL else Pal.DIM,
+                )
+            }
+            item {
+                ListRow(
+                    "Replay buffer (20s ring)",
+                    if (replayOn) "ON" else "OFF",
+                    inPanel && listIndex == 3,
+                    tagColor = if (replayOn) Pal.TEAL else Pal.DIM,
+                )
+            }
+            item {
+                ListRow("Save bug snapshot", category, inPanel && listIndex == 4, tagColor = Pal.GOLD)
             }
             item {
                 ListRow(
                     "Input HUD overlay in video",
                     if (hudOn) "ON" else "OFF",
-                    inPanel && listIndex == 3,
+                    inPanel && listIndex == 5,
                     tagColor = if (hudOn) Pal.TEAL else Pal.DIM,
                 )
             }
@@ -1666,6 +1739,9 @@ class OracleUi internal constructor(
                     val cheats = TestingTools.Cheat.values()
                     val actions = TestingTools.LiveAction.values()
                     val clearIdx = cheats.size
+                    val overlayStart = clearIdx + 1
+                    val actionsStart = overlayStart + OVERLAY_ROWS.size
+                    val ovMask = host.debugOverlayMask()
                     LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         itemsIndexed(cheats) { i, cheat ->
                             val active = tools.isCheatActive(cheat)
@@ -1686,8 +1762,18 @@ class OracleUi internal constructor(
                                 tagColor = Pal.DIM,
                             )
                         }
+                        itemsIndexed(OVERLAY_ROWS) { i, pair ->
+                            val on = (ovMask and pair.second) != 0
+                            ListRow(
+                                pair.first,
+                                if (on) "ON" else "OFF",
+                                inPanel && (overlayStart + i) == listIndex,
+                                lead = "HUD",
+                                tagColor = if (on) Pal.TEAL else Pal.DIM,
+                            )
+                        }
                         itemsIndexed(actions) { i, action ->
-                            val rowIdx = clearIdx + 1 + i
+                            val rowIdx = actionsStart + i
                             val tag = when (action) {
                                 TestingTools.LiveAction.SPAWN_SPRITE -> tools.spawnSpriteText()
                                 TestingTools.LiveAction.TIME_OF_DAY -> tools.timePhaseText()
@@ -1936,7 +2022,7 @@ class OracleUi internal constructor(
             RailItem.SAVE -> listOf("A" to "Save here", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.LOAD -> listOf("A" to "Load", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.CAPTURE -> when (listIndex) {
-                2 -> listOf("A" to "Save bug bundle", "LEFT RIGHT" to "Category", "B" to "Back")
+                4 -> listOf("A" to "Save bug bundle", "LEFT RIGHT" to "Category", "B" to "Back")
                 in CAPTURE_CONTROLS..Int.MAX_VALUE -> listOf("A" to "Inspect / load bug state", "B" to "Back")
                 else -> listOf("A" to "Capture / toggle", "B" to "Back")
             }
@@ -1992,7 +2078,12 @@ class OracleUi internal constructor(
         private const val TAB_PRESETS = "Presets"
         private const val TAB_WARPS = "Warps"
         private const val TAB_TEST_CHEATS = "Test cheats"
-        private const val CAPTURE_CONTROLS = 4
+        private const val CAPTURE_CONTROLS = 6
+        private val OVERLAY_ROWS = listOf(
+            "Overlay: Hitboxes & sprites" to 0x01,
+            "Overlay: Dungeon collision" to 0x02,
+            "Overlay: 16x16 grid & seams" to 0x04,
+        )
 
         private fun mainPoster(): (Runnable) -> Unit {
             val main = Handler(Looper.getMainLooper())

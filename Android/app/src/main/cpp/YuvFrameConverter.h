@@ -9,7 +9,7 @@
 namespace HandheldCapture {
 
 constexpr uint32_t kDefaultRecordWidth = 512;
-constexpr uint32_t kDefaultRecordHeight = 448;
+constexpr uint32_t kDefaultRecordHeight = 480;
 
 struct FramePlacement
 {

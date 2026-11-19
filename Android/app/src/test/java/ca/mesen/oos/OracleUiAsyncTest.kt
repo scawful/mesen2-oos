@@ -24,6 +24,8 @@ class OracleUiAsyncTest {
         var uiOpenedCalls = 0
         var uiClosedCalls = 0
         var recordingActive = false
+        var replayActive = false
+        var overlayMask = 0
         var steppedFrames = 0
         val toggleValues = HashMap<String, Boolean>()
         val activeCheatAddrs = HashMap<Int, Int>()
@@ -87,6 +89,14 @@ class OracleUiAsyncTest {
         override fun toggleVideoRecording(): String {
             recordingActive = !recordingActive
             return if (recordingActive) "Recording MP4: test.mp4" else "Saved video: test.mp4"
+        }
+        override fun isReplayBufferActive(): Boolean = replayActive
+        override fun replayBufferedSeconds(): Int = if (replayActive) 12 else 0
+        override fun dumpReplayClip(): String = "Saved 20s replay: replay_test.mp4"
+        override fun debugOverlayMask(): Int = overlayMask
+        override fun toggleDebugOverlayBit(bit: Int): String {
+            overlayMask = (overlayMask xor bit) and 0x07
+            return "Overlay mask: $overlayMask"
         }
         override fun captureBugSnapshot(category: String): String = bugSnapshotHook(category)
         override fun testingTools(): TestingTools = tools
@@ -249,7 +259,12 @@ class OracleUiAsyncTest {
         assertEquals(1, ui.currentCaptures.size)
         assertEquals("oracle_test.png", ui.currentCaptures[0].name)
 
-        // Move down twice to Save bug snapshot, cycle category, and fire.
+        // Move down 2 to Save last 20s instant replay, then 2 more to Save bug snapshot (row 4).
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("replay_test.mp4") }
+
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
@@ -277,9 +292,14 @@ class OracleUiAsyncTest {
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         assertEquals("Test cheats", ui.currentItemTabName)
 
-        // Move to INF_HEALTH (row 0) -> A doesn't need to wait on anything but host.testingTools() runs on worker.
+        // Move to INF_HEALTH (row 0) -> toggles cheat off main thread.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.INF_HEALTH) }
         assertTrue(host.activeCheatAddrs.containsKey(Inventory.HEALTH_CURRENT))
+
+        // Move down 6 rows (past 5 cheats + Clear all) to Overlay: Hitboxes & sprites (bit 0x01).
+        repeat(6) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && (host.overlayMask and 0x01) != 0 }
     }
 }

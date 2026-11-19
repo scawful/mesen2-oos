@@ -29,6 +29,13 @@ public final class MesenNative {
     public static native void stopVideoRecording();
     public static native boolean isVideoRecording();
     public static native String videoRecordingPath();
+    public static native boolean startReplayBuffer(int windowSeconds, boolean recordInputHud);
+    public static native void stopReplayBuffer();
+    public static native boolean isReplayBufferActive();
+    public static native int replayBufferedSeconds();
+    public static native boolean dumpReplayBuffer(String path);
+    public static native void setDebugOverlayMask(int mask);
+    public static native int debugOverlayMask();
     public static native void setRamCheats(int[] addrs, int[] values);
     public static native boolean stepFrames(int frames);
     public static native boolean loadRom(String path);

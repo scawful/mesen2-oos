@@ -48,6 +48,7 @@ public final class MediaCapture {
     public interface SnapshotHooks {
         boolean saveScreenshot(File pngFile);
         boolean saveState(File stateFile);
+        default boolean saveReplayVideo(File mp4File) { return false; }
         String statusJson();
         int readByte(int addr);
         String romPath();
@@ -58,15 +59,17 @@ public final class MediaCapture {
         public final File bundleDir;
         public final File screenshotFile;
         public final File stateFile;
+        public final File replayFile;
         public final File reportFile;
         public final String message;
 
         private BugSnapshotResult(boolean ok, File bundleDir, File screenshotFile,
-                                  File stateFile, File reportFile, String message) {
+                                  File stateFile, File replayFile, File reportFile, String message) {
             this.ok = ok;
             this.bundleDir = bundleDir;
             this.screenshotFile = screenshotFile;
             this.stateFile = stateFile;
+            this.replayFile = replayFile;
             this.reportFile = reportFile;
             this.message = message;
         }
@@ -194,20 +197,22 @@ public final class MediaCapture {
                                                      String category, String note,
                                                      SnapshotHooks hooks, long epochMs) {
         if (reportsDir == null || hooks == null) {
-            return new BugSnapshotResult(false, null, null, null, null, "Capture hooks unavailable");
+            return new BugSnapshotResult(false, null, null, null, null, null, "Capture hooks unavailable");
         }
         File bundleDir = nextBundleDir(reportsDir, romName, epochMs);
         if (!bundleDir.mkdirs() && !bundleDir.isDirectory()) {
-            return new BugSnapshotResult(false, null, null, null, null,
+            return new BugSnapshotResult(false, null, null, null, null, null,
                     "Failed to create bug bundle folder: " + bundleDir.getAbsolutePath());
         }
 
         File pngFile = new File(bundleDir, "screenshot.png");
         File stateFile = new File(bundleDir, "state.mss");
+        File replayFile = new File(bundleDir, "replay.mp4");
         File reportFile = new File(bundleDir, "report.json");
 
         boolean pngOk = hooks.saveScreenshot(pngFile) && pngFile.isFile() && pngFile.length() > 0;
         boolean stateOk = hooks.saveState(stateFile) && stateFile.isFile() && stateFile.length() > 0;
+        boolean replayOk = hooks.saveReplayVideo(replayFile) && replayFile.isFile() && replayFile.length() > 0;
 
         String rawStatus = hooks.statusJson();
         Map<String, Object> status = parseObjectSafe(rawStatus);
@@ -275,8 +280,10 @@ public final class MediaCapture {
         json.append("  \"artifacts\": {\n");
         json.append("    \"screenshot\": ").append(pngOk ? "\"screenshot.png\"" : "null").append(",\n");
         json.append("    \"saveState\": ").append(stateOk ? "\"state.mss\"" : "null").append(",\n");
+        json.append("    \"replayVideo\": ").append(replayOk ? "\"replay.mp4\"" : "null").append(",\n");
         json.append("    \"screenshotOk\": ").append(pngOk).append(",\n");
-        json.append("    \"saveStateOk\": ").append(stateOk).append("\n");
+        json.append("    \"saveStateOk\": ").append(stateOk).append(",\n");
+        json.append("    \"replayOk\": ").append(replayOk).append("\n");
         json.append("  },\n");
         json.append("  \"emulator\": {\n");
         json.append("    \"frames\": ").append(frames).append(",\n");
@@ -309,8 +316,8 @@ public final class MediaCapture {
         json.append("  ]\n");
         json.append("}\n");
 
-        if (!pngOk && !stateOk && mode < 0 && status.isEmpty()) {
-            return new BugSnapshotResult(false, bundleDir, null, null, null,
+        if (!pngOk && !stateOk && !replayOk && mode < 0 && status.isEmpty()) {
+            return new BugSnapshotResult(false, bundleDir, null, null, null, null,
                     "No emulator state or capture available to snapshot");
         }
 
@@ -318,13 +325,17 @@ public final class MediaCapture {
             writeUtf8(reportFile, json.toString());
         } catch (IOException e) {
             return new BugSnapshotResult(false, bundleDir, pngOk ? pngFile : null,
-                    stateOk ? stateFile : null, null, "Failed to write report.json: " + e.getMessage());
+                    stateOk ? stateFile : null, replayOk ? replayFile : null, null,
+                    "Failed to write report.json: " + e.getMessage());
         }
 
-        String summary = String.format(Locale.US, "Saved %s (png=%s state=%s)",
-                bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no");
+        String summary = replayOk
+                ? String.format(Locale.US, "Saved %s (png=%s state=%s + replay.mp4)",
+                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no")
+                : String.format(Locale.US, "Saved %s (png=%s state=%s)",
+                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no");
         return new BugSnapshotResult(true, bundleDir, pngOk ? pngFile : null,
-                stateOk ? stateFile : null, reportFile, summary);
+                stateOk ? stateFile : null, replayOk ? replayFile : null, reportFile, summary);
     }
 
     public static List<CaptureItem> listRecent(File capturesRoot, int limit) {
@@ -364,14 +375,17 @@ public final class MediaCapture {
                 File report = new File(dir, "report.json");
                 File png = new File(dir, "screenshot.png");
                 File state = new File(dir, "state.mss");
+                File replay = new File(dir, "replay.mp4");
                 if (!report.isFile() && !png.isFile() && !state.isFile()) continue;
                 long mod = report.isFile() ? report.lastModified() : dir.lastModified();
                 long totalBytes = (report.isFile() ? report.length() : 0)
                         + (png.isFile() ? png.length() : 0)
-                        + (state.isFile() ? state.length() : 0);
+                        + (state.isFile() ? state.length() : 0)
+                        + (replay.isFile() ? replay.length() : 0);
                 String detail = state.isFile()
                         ? (png.isFile() ? "PNG + .mss + JSON" : ".mss + JSON")
                         : (report.isFile() ? "JSON" : "PNG");
+                if (replay.isFile()) detail += " + MP4";
                 items.add(new CaptureItem(Kind.BUG_SNAPSHOT, dir,
                         png.isFile() ? png : null,
                         state.isFile() ? state : null,
