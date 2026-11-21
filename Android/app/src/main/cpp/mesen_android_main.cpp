@@ -35,6 +35,8 @@ extern "C" {
 	void ApplyHandheldSnesDefaults();
 	void HandheldSetFastForward(bool enabled);
 	bool HandheldIsFastForward();
+	void HandheldSetTurboSpeed(uint32_t percent);
+	uint32_t HandheldGetTurboSpeed();
 	void HandheldSetPerformanceMode(bool enabled);
 	bool HandheldIsPerformanceMode();
 	bool HandheldSaveState(uint32_t stateIndex);
@@ -753,6 +755,20 @@ extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setFastForward(
 extern "C" JNIEXPORT jboolean JNICALL Java_ca_mesen_oos_MesenNative_isFastForward(JNIEnv*, jclass)
 {
 	return HandheldIsFastForward() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setTurboSpeed(
+	JNIEnv*,
+	jclass,
+	jint percent
+) {
+	uint32_t value = percent < 0 ? 0u : static_cast<uint32_t>(percent);
+	HandheldSetTurboSpeed(value);
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_ca_mesen_oos_MesenNative_getTurboSpeed(JNIEnv*, jclass)
+{
+	return static_cast<jint>(HandheldGetTurboSpeed());
 }
 
 extern "C" JNIEXPORT void JNICALL Java_ca_mesen_oos_MesenNative_setPerformanceMode(

@@ -100,6 +100,10 @@ class OracleUiAsyncTest {
         override fun requestHomeShortcut() {}
         override fun isStickyFastForward(): Boolean = false
         override fun setStickyFastForward(on: Boolean) {}
+        override fun turboSpeedPercent(): Int = 300
+        override fun turboSpeedLabel(): String = "×3"
+        override fun setTurboSpeedPercent(percent: Int) {}
+        override fun cycleTurboSpeed(delta: Int): Int = 300
         override fun setting(key: String): Boolean = toggleValues[key] ?: false
         override fun setSetting(key: String, on: Boolean) { toggleValues[key] = on }
         override fun startCheckpoint(id: String) {}

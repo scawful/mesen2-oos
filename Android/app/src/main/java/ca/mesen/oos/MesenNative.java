@@ -8,6 +8,9 @@ public final class MesenNative {
     public static native void resetEmu();
     public static native void setFastForward(boolean enabled);
     public static native boolean isFastForward();
+    /** TurboSpeed percent while R2 / sticky FF is active. 0 = maximum. */
+    public static native void setTurboSpeed(int percent);
+    public static native int getTurboSpeed();
     public static native void setPerformanceMode(boolean enabled);
     public static native boolean isPerformanceMode();
     public static native boolean writeByte(int addr, int value);

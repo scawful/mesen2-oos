@@ -77,6 +77,25 @@ public final class FrameRateTrackerTest {
         check(!FrameRateTracker.shouldPreferAccelerated(false, false),
                 "disabled GPU chip stays on software");
 
+        check(FrameRateTracker.sanitizeTurboSpeed(300) == 300,
+                "known ×3 turbo preset is kept");
+        check(FrameRateTracker.sanitizeTurboSpeed(0) == 0,
+                "MAX turbo preset (0) is kept");
+        check(FrameRateTracker.sanitizeTurboSpeed(999) == FrameRateTracker.DEFAULT_TURBO_SPEED,
+                "unknown turbo percent falls back to default ×3");
+        check(FrameRateTracker.cycleTurboSpeed(300, 1) == 400,
+                "cycling ×3 advances to ×4");
+        check(FrameRateTracker.cycleTurboSpeed(400, 1) == 0,
+                "cycling ×4 advances to MAX");
+        check(FrameRateTracker.cycleTurboSpeed(0, 1) == 200,
+                "cycling MAX wraps to ×2");
+        check(FrameRateTracker.cycleTurboSpeed(200, -1) == 0,
+                "cycling ×2 backward wraps to MAX");
+        check("×3".equals(FrameRateTracker.turboSpeedLabel(300)),
+                "×3 label formats from percent");
+        check("MAX".equals(FrameRateTracker.turboSpeedLabel(0)),
+                "MAX label formats from uncapped turbo");
+
         System.out.println("FrameRateTrackerTest: " + checks + " checks passed");
     }
 }

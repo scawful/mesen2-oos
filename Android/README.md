@@ -1,6 +1,17 @@
 # Oracle Android host
 
-The RG353P Android app runs Mesen with the Workshop overlay. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
+The RG353P / Retroid Android app runs Mesen with the Compose OracleUi. The APK and the game ROM are separate updates; installing an APK does not select a new Oracle ROM or migrate save RAM.
+
+## 0.1.50 — controllable R2 speed
+
+Fast-forward speed is no longer hardcoded to uncapped turbo. Open **Fast forward**
+in the pause menu (or **Settings → R2 / fast-forward speed**) and cycle
+**×2 → ×3 → ×4 → MAX** with Left/Right or A. Sticky FF uses the same preset.
+Hold R2 while playing to apply it. The choice persists in app prefs and survives
+ROM reloads; `ApplyHandheldSnesDefaults` no longer overwrites `TurboSpeed`.
+
+Default remains **×3** (300%). Intent extra `turbo_speed` accepts the same
+percent values (`200` / `300` / `400` / `0` for MAX).
 
 ## Playtest drop — 0.1.43-playtest-note (device run 2026-11-15)
 

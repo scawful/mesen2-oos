@@ -62,6 +62,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String PREF_HOTKEYS = "capture_hotkeys";
     private static final String PREF_REC_HUD = "record_input_hud";
     private static final String PREF_REPLAY_BUF = "replay_buffer";
+    private static final String PREF_TURBO_SPEED = "turbo_speed";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -140,6 +141,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private boolean mFastForwardHeld;
     private boolean mFastForwardKeyHeld;
     private boolean mFastForwardTriggerHeld;
+    private volatile int mTurboSpeed = FrameRateTracker.DEFAULT_TURBO_SPEED;
 
     private final Object mCaptureLock = new Object();
     private final TestingTools mTestingTools = new TestingTools((addrs, vals) -> {
@@ -247,6 +249,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mCaptureHotkeys = prefs.getBoolean(PREF_HOTKEYS, true);
         mRecordInputHud = prefs.getBoolean(PREF_REC_HUD, false);
         mReplayBufferEnabled = prefs.getBoolean(PREF_REPLAY_BUF, false);
+        mTurboSpeed = FrameRateTracker.sanitizeTurboSpeed(
+                prefs.getInt(PREF_TURBO_SPEED, FrameRateTracker.DEFAULT_TURBO_SPEED));
         attachHud();
         attachOracleUi();
         applyIntentPrefs(getIntent());
@@ -1036,6 +1040,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return false;
         }
         rememberRom(path);
+        applyTurboSpeed();
         applyPerformanceMode();
         if (mTestingTools.activeCheatCount() > 0) {
             mTestingTools.syncCheats(Inventory.LIVE);
@@ -1071,6 +1076,38 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     public void setStickyFastForward(boolean on) {
         mStickyFast = on;
+        updateFastForward();
+    }
+
+    @Override
+    public int turboSpeedPercent() {
+        return mTurboSpeed;
+    }
+
+    @Override
+    public String turboSpeedLabel() {
+        return FrameRateTracker.turboSpeedLabel(mTurboSpeed);
+    }
+
+    @Override
+    public void setTurboSpeedPercent(int percent) {
+        int next = FrameRateTracker.sanitizeTurboSpeed(percent);
+        if (next == mTurboSpeed && mNativeReady) {
+            // Still push through in case ApplyHandheld reset the core value.
+            applyTurboSpeed();
+            return;
+        }
+        mTurboSpeed = next;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_TURBO_SPEED, next).apply();
+        applyTurboSpeed();
+        refreshHud();
+    }
+
+    @Override
+    public int cycleTurboSpeed(int delta) {
+        int next = FrameRateTracker.cycleTurboSpeed(mTurboSpeed, delta);
+        setTurboSpeedPercent(next);
+        return next;
     }
 
     @Override
@@ -1248,6 +1285,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private void markNativeReady() {
         mNativeReady = true;
         applyPresentMode();
+        applyTurboSpeed();
         applyPerformanceMode();
         applyPreferAccelerated();
         refreshHud();
@@ -1385,7 +1423,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                     SystemClock.elapsedRealtime());
             String performance = performanceLabel(paused, observedFps);
             if (json.optBoolean("fastForward", mFastForwardHeld)) {
-                performance += " · " + FrameRateTracker.formatFastForwardLabel(observedFps);
+                performance += " · " + FrameRateTracker.formatFastForwardLabel(observedFps)
+                        + " " + FrameRateTracker.turboSpeedLabel(mTurboSpeed);
             }
             if (json.optBoolean("performanceMode", mSmoothPlay)) {
                 performance += " · SMOOTH";
@@ -1865,7 +1904,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         if (intent.hasExtra("fast_forward")) {
             setStickyFastForward(intent.getBooleanExtra("fast_forward", false));
-            updateFastForward();
+        }
+        if (intent.hasExtra("turbo_speed")) {
+            setTurboSpeedPercent(intent.getIntExtra("turbo_speed", FrameRateTracker.DEFAULT_TURBO_SPEED));
         }
         if (intent.hasExtra("record_video")) {
             boolean wantRec = intent.getBooleanExtra("record_video", false);
@@ -1949,6 +1990,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private void applyPresentMode() {
         if (mNativeReady) {
             MesenNative.setPresentMode(mFillScreen ? 1 : 0);
+        }
+    }
+
+    private void applyTurboSpeed() {
+        if (mNativeReady) {
+            MesenNative.setTurboSpeed(mTurboSpeed);
         }
     }
 

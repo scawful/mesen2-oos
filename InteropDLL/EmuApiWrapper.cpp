@@ -484,11 +484,9 @@ extern "C" {
 		audio.ReduceSoundInFastForward = false;
 		_emu->GetSettings()->SetAudioConfig(audio);
 
-		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
-		// Unlimited turbo while R2 is held. The PPU presents at display rate
-		// (~15 ms skip window); audio plays sped up (see SoundMixer).
-		emulation.TurboSpeed = 0;
-		_emu->GetSettings()->SetEmulationConfig(emulation);
+		// TurboSpeed is owned by the Android host (R2 / sticky FF preference).
+		// Leave the current EmulationConfig.TurboSpeed alone so ApplyHandheld
+		// does not wipe a user-selected ×2/×3/×4/MAX preset.
 
 		VideoConfig video = _emu->GetSettings()->GetVideoConfig();
 		video.VideoFilter = VideoFilterType::None;
@@ -543,6 +541,21 @@ extern "C" {
 	{
 		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
 		return _emu->GetSettings()->CheckFlag(EmulationFlags::Turbo);
+	}
+
+	DllExport void __stdcall HandheldSetTurboSpeed(uint32_t percent)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
+		// 0 = maximum / uncapped, matching desktop EmulationConfig.TurboSpeed.
+		emulation.TurboSpeed = percent > 5000 ? 5000 : percent;
+		_emu->GetSettings()->SetEmulationConfig(emulation);
+	}
+
+	DllExport uint32_t __stdcall HandheldGetTurboSpeed()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(300);
+		return _emu->GetSettings()->GetEmulationConfig().TurboSpeed;
 	}
 
 	DllExport void __stdcall HandheldSetPerformanceMode(bool enabled)

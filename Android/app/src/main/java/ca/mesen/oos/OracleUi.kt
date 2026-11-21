@@ -147,6 +147,10 @@ class OracleUi internal constructor(
         fun requestHomeShortcut()
         fun isStickyFastForward(): Boolean
         fun setStickyFastForward(on: Boolean)
+        fun turboSpeedPercent(): Int
+        fun turboSpeedLabel(): String
+        fun setTurboSpeedPercent(percent: Int)
+        fun cycleTurboSpeed(delta: Int): Int
         fun setting(key: String): Boolean
         fun setSetting(key: String, on: Boolean)
         /** Runs a checkpoint or milestone preset warp after the UI has closed. */
@@ -234,6 +238,7 @@ class OracleUi internal constructor(
 
     private val itemTabs = listOf(TAB_PRESETS, TAB_WARPS, TAB_TEST_CHEATS) + Inventory.tabs()
     private val settingsRows = listOf(
+        SettingRow.Cycle("turbo", "R2 / fast-forward speed"),
         SettingRow.Toggle("hud", "Keep status bar visible"),
         SettingRow.Toggle("fit", "Fill screen"),
         SettingRow.Toggle("play", "Smooth play"),
@@ -245,6 +250,7 @@ class OracleUi internal constructor(
 
     private sealed class SettingRow(val key: String, val label: String) {
         class Toggle(key: String, label: String) : SettingRow(key, label)
+        class Cycle(key: String, label: String) : SettingRow(key, label)
         class Action(key: String, label: String, val tag: String) : SettingRow(key, label)
     }
 
@@ -833,7 +839,7 @@ class OracleUi internal constructor(
     private val railItem: RailItem get() = RailItem.values()[rail]
 
     private fun hasPanel(item: RailItem) = when (item) {
-        RailItem.SHORTCUTS, RailItem.SAVE, RailItem.LOAD, RailItem.CAPTURE, RailItem.ITEMS, RailItem.SETTINGS -> true
+        RailItem.SHORTCUTS, RailItem.SAVE, RailItem.LOAD, RailItem.CAPTURE, RailItem.ITEMS, RailItem.FAST, RailItem.SETTINGS -> true
         else -> false
     }
 
@@ -847,6 +853,10 @@ class OracleUi internal constructor(
             RailItem.SAVE, RailItem.LOAD -> { refreshStates(); slotIndex = 0 }
             RailItem.CAPTURE -> { listIndex = 0; refreshCaptures() }
             RailItem.ITEMS -> { listIndex = 0; bitIndex = 0; refreshItems() }
+            RailItem.FAST -> {
+                listIndex = 0
+                fastOn = host.isStickyFastForward()
+            }
             RailItem.SETTINGS -> { listIndex = 0; refreshMenuMeta() }
             else -> listIndex = 0
         }
@@ -858,11 +868,6 @@ class OracleUi internal constructor(
         when (railItem) {
             RailItem.RESUME -> close()
             RailItem.RELOAD -> reloadCurrentRom()
-            RailItem.FAST -> {
-                fastOn = !fastOn
-                host.setStickyFastForward(fastOn)
-                status = if (fastOn) "Fast forward stays on after you resume." else "Fast forward off."
-            }
             RailItem.LIBRARY -> openLibrary()
             else -> enterPanel()
         }
@@ -905,9 +910,74 @@ class OracleUi internal constructor(
             RailItem.SAVE, RailItem.LOAD -> slotKey(key)
             RailItem.CAPTURE -> captureKey(key)
             RailItem.ITEMS -> itemsKey(key)
-            RailItem.SETTINGS -> listKey(key, settingsRows.size) {
-                activateSetting(settingsRows[listIndex])
+            RailItem.FAST -> fastKey(key)
+            RailItem.SETTINGS -> settingsKey(key)
+            else -> {}
+        }
+    }
+
+    private fun fastKey(key: Key) {
+        when (key) {
+            Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost(1)
+            Key.LEFT -> {
+                if (listIndex == 1) {
+                    host.cycleTurboSpeed(-1)
+                    settingsTick++
+                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                } else {
+                    inPanel = false
+                }
             }
+            Key.RIGHT -> {
+                if (listIndex == 1) {
+                    host.cycleTurboSpeed(1)
+                    settingsTick++
+                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                }
+            }
+            Key.A -> when (listIndex) {
+                0 -> {
+                    fastOn = !fastOn
+                    host.setStickyFastForward(fastOn)
+                    status = if (fastOn) {
+                        "Sticky ${host.turboSpeedLabel()} stays on after resume."
+                    } else {
+                        "Sticky fast forward off. Hold R2 while playing."
+                    }
+                }
+                1 -> {
+                    host.cycleTurboSpeed(1)
+                    settingsTick++
+                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun settingsKey(key: Key) {
+        val row = settingsRows.getOrNull(listIndex)
+        when (key) {
+            Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost((settingsRows.size - 1).coerceAtLeast(0))
+            Key.LEFT -> {
+                if (row is SettingRow.Cycle) {
+                    host.cycleTurboSpeed(-1)
+                    settingsTick++
+                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                } else {
+                    inPanel = false
+                }
+            }
+            Key.RIGHT -> {
+                if (row is SettingRow.Cycle) {
+                    host.cycleTurboSpeed(1)
+                    settingsTick++
+                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                }
+            }
+            Key.A -> if (row != null) activateSetting(row)
             else -> {}
         }
     }
@@ -1061,6 +1131,11 @@ class OracleUi internal constructor(
             is SettingRow.Toggle -> {
                 host.setSetting(row.key, !host.setting(row.key))
                 settingsTick++
+            }
+            is SettingRow.Cycle -> {
+                host.cycleTurboSpeed(1)
+                settingsTick++
+                status = "R2 speed: ${host.turboSpeedLabel()}"
             }
             is SettingRow.Action -> when (row.key) {
                 "reset" -> {
@@ -1626,6 +1701,7 @@ class OracleUi internal constructor(
                             RailItem.SAVE, RailItem.LOAD -> SlotGrid(item == RailItem.SAVE)
                             RailItem.CAPTURE -> CapturePanel()
                             RailItem.ITEMS -> ItemsPanel()
+                            RailItem.FAST -> FastPanel()
                             RailItem.SETTINGS -> SettingsPanel()
                             else -> Txt(blurb(item), 13.sp, Pal.DIM, maxLines = 4)
                         }
@@ -1676,8 +1752,13 @@ class OracleUi internal constructor(
                     }
                 }
                 RailItem.FAST -> {
-                    Badge(if (fastOn) "×3" else "OFF", if (fastOn) Pal.TEAL else Pal.LINE)
-                    Spacer(Modifier.width(6.dp))
+                    val speed = host.turboSpeedLabel()
+                    Badge(if (fastOn) speed else "OFF", if (fastOn) Pal.TEAL else Pal.LINE)
+                    if (!fastOn) {
+                        Spacer(Modifier.width(6.dp))
+                        Badge(speed, Pal.DIM)
+                    }
+                    Spacer(Modifier.width(8.dp))
                 }
                 else -> {}
             }
@@ -1845,6 +1926,33 @@ class OracleUi internal constructor(
                 Spacer(Modifier.height(2.dp))
                 Txt(card.subtitle, 10.5.sp, Pal.DIM, maxLines = 2)
             }
+        }
+    }
+
+    @Composable
+    private fun FastPanel() {
+        @Suppress("UNUSED_VARIABLE") val tick = settingsTick
+        val speed = host.turboSpeedLabel()
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ListRow(
+                "Sticky fast forward",
+                if (fastOn) "ON · $speed" else "OFF",
+                inPanel && listIndex == 0,
+                tagColor = if (fastOn) Pal.TEAL else Pal.DIM,
+            )
+            ListRow(
+                "R2 hold speed",
+                speed,
+                inPanel && listIndex == 1,
+                tagColor = Pal.TEAL,
+            )
+            Spacer(Modifier.height(6.dp))
+            Txt(
+                "Hold R2 while playing to speed up at $speed. Sticky keeps the same speed after Resume. Cycle ×2 → ×3 → ×4 → MAX.",
+                11.sp,
+                Pal.DIM,
+                maxLines = 3,
+            )
         }
     }
 
@@ -2179,6 +2287,9 @@ class OracleUi internal constructor(
                         val on = host.setting(row.key)
                         ListRow(row.label, if (on) "ON" else "OFF", selected, tagColor = if (on) Pal.TEAL else Pal.DIM)
                     }
+                    is SettingRow.Cycle -> {
+                        ListRow(row.label, host.turboSpeedLabel(), selected, tagColor = Pal.TEAL)
+                    }
                     is SettingRow.Action -> {
                         ListRow(row.label, row.tag, selected, tagColor = Pal.DIM)
                     }
@@ -2365,6 +2476,10 @@ class OracleUi internal constructor(
                 else -> tab
             }
         }
+        RailItem.FAST -> {
+            val speed = host.turboSpeedLabel()
+            if (fastOn) "Sticky $speed" else "Hold R2 · $speed"
+        }
         RailItem.SETTINGS -> socketMeta.ifEmpty { "tcp://127.0.0.1:${StatusManifest.PORT}" }
         else -> ""
     }
@@ -2372,7 +2487,7 @@ class OracleUi internal constructor(
     private fun blurb(item: RailItem): String = when (item) {
         RailItem.RESUME -> "Back to the game."
         RailItem.RELOAD -> "Reloads the current ROM file from disk ($menuTitle). Great after pushing a new build over ADB — your battery save is preserved."
-        RailItem.FAST -> "A toggles ×3 speed. It stays on after you resume. Holding R2 still works."
+        RailItem.FAST -> "Open to set sticky FF and R2 speed (×2 / ×3 / ×4 / MAX). Hold R2 while playing."
         RailItem.LIBRARY -> "Switch channels, resume a state, roll back, or start from the battery save."
         else -> ""
     }
@@ -2399,6 +2514,18 @@ class OracleUi internal constructor(
                 TAB_WARPS -> listOf("A" to "Warp (keeps SRAM)", "LEFT RIGHT" to "Room ID", "L1 R1" to "Tab", "B" to "Back")
                 TAB_TEST_CHEATS -> listOf("A" to "Toggle / run", "LEFT RIGHT" to "Sprite ID", "L1 R1" to "Tab", "B" to "Back")
                 else -> listOf("A" to "Toggle / apply", "LEFT RIGHT" to "Adjust / bit", "L1 R1" to "Tab", "B" to "Back")
+            }
+            RailItem.FAST -> when (listIndex) {
+                1 -> listOf("A / LEFT RIGHT" to "Cycle speed", "B" to "Back")
+                else -> listOf("A" to "Toggle sticky", "B" to "Back")
+            }
+            RailItem.SETTINGS -> {
+                val row = settingsRows.getOrNull(listIndex)
+                if (row is SettingRow.Cycle) {
+                    listOf("A / LEFT RIGHT" to "Cycle R2 speed", "B" to "Back")
+                } else {
+                    listOf("A" to "Toggle / run", "B" to "Back")
+                }
             }
             else -> listOf("A" to "Select", "B" to "Back")
         }

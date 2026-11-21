@@ -17,6 +17,10 @@ final class FrameRateTracker {
     @Deprecated
     static final String WEATHER_ROM_SHA1 = "0E365616014911F7C6FFDA04D9A0CF718BB204C2";
 
+    /** Held-R2 / sticky FF presets as EmulationConfig.TurboSpeed percents (0 = MAX). */
+    static final int[] TURBO_SPEED_PRESETS = { 200, 300, 400, 0 };
+    static final int DEFAULT_TURBO_SPEED = 300;
+
     private String mRom = "";
     private long mFrames = -1;
     private long mSampleTimeMs = -1;
@@ -64,6 +68,42 @@ final class FrameRateTracker {
             return "FF";
         }
         return String.format(Locale.US, "FF ×%.1f", observedFps / NTSC_FPS);
+    }
+
+    /** Snap an arbitrary TurboSpeed percent onto the handheld preset list. */
+    static int sanitizeTurboSpeed(int percent) {
+        for (int preset : TURBO_SPEED_PRESETS) {
+            if (preset == percent) {
+                return preset;
+            }
+        }
+        return DEFAULT_TURBO_SPEED;
+    }
+
+    /** Cycle ×2 → ×3 → ×4 → MAX → ×2. {@code delta} is usually ±1. */
+    static int cycleTurboSpeed(int current, int delta) {
+        int[] presets = TURBO_SPEED_PRESETS;
+        int cur = sanitizeTurboSpeed(current);
+        int idx = 0;
+        for (int i = 0; i < presets.length; i++) {
+            if (presets[i] == cur) {
+                idx = i;
+                break;
+            }
+        }
+        int n = presets.length;
+        int step = delta % n;
+        idx = (idx + step + n) % n;
+        return presets[idx];
+    }
+
+    /** Compact UI badge for a TurboSpeed percent (MAX / ×2 / ×3 / ×4). */
+    static String turboSpeedLabel(int percent) {
+        int value = sanitizeTurboSpeed(percent);
+        if (value <= 0) {
+            return "MAX";
+        }
+        return "×" + (value / 100);
     }
 
     /** Short present-rate chip for the HUD (unique uploads reaching SDL). */
