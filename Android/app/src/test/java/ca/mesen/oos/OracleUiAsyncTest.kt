@@ -30,7 +30,7 @@ class OracleUiAsyncTest {
         var replayActive = false
         var overlayMask = 0
         var steppedFrames = 0
-        val toggleValues = hashMapOf("r2_capture" to true)
+        val toggleValues = hashMapOf("r2_capture" to false)
         val activeCheatAddrs = HashMap<Int, Int>()
         val warpedTargets = ArrayList<Progression.Checkpoint>()
         val fakeMemory = object : Inventory.Memory {
@@ -458,7 +458,7 @@ class OracleUiAsyncTest {
         val states = File(temp, "SaveStates").apply { mkdirs() }
         val saves = File(temp, "Saves").apply { mkdirs() }
         val host = TestHost(roms, states, saves).apply { ready = true }
-        assertTrue(host.setting("r2_capture"))
+        assertFalse(host.setting("r2_capture"))
 
         val ui = OracleUi(host) { r -> r.run() }
         ui.openMenu()
@@ -467,14 +467,14 @@ class OracleUiAsyncTest {
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: Fast-forward speed
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 2: ZR / R2 trigger mode
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        assertFalse(host.setting("r2_capture"))
+        assertTrue(host.setting("r2_capture"))
 
-        // Step back to Settings panel, row 1 (`r2_capture`), toggle back to true.
+        // Step back to Settings panel, row 1 (`r2_capture`), toggle back to false (default Fast Forward).
         ui.onKey(KeyEvent.KEYCODE_BUTTON_B, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter SettingsPanel
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: r2_capture
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        assertTrue(host.setting("r2_capture"))
+        assertFalse(host.setting("r2_capture"))
     }
 }

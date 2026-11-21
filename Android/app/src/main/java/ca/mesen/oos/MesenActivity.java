@@ -139,7 +139,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private volatile boolean mSmoothPlay;
     private volatile boolean mPreferGpu;
     private volatile boolean mCaptureHotkeys = true;
-    private volatile boolean mR2CaptureMode = true;
+    private volatile boolean mR2CaptureMode = false;
     private volatile boolean mRecordInputHud;
     private volatile boolean mReplayBufferEnabled;
     private volatile int mOverlayMask;
@@ -257,7 +257,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
         mCaptureHotkeys = prefs.getBoolean(PREF_HOTKEYS, true);
-        mR2CaptureMode = prefs.getBoolean(PREF_R2_CAPTURE, true);
+        mR2CaptureMode = prefs.getBoolean(PREF_R2_CAPTURE, false);
         mRecordInputHud = prefs.getBoolean(PREF_REC_HUD, false);
         mReplayBufferEnabled = prefs.getBoolean(PREF_REPLAY_BUF, false);
         mTurboSpeed = FrameRateTracker.sanitizeTurboSpeed(
@@ -2011,7 +2011,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             setTurboSpeedPercent(intent.getIntExtra("turbo_speed", FrameRateTracker.DEFAULT_TURBO_SPEED));
         }
         if (intent.hasExtra("r2_capture")) {
-            setR2CaptureMode(intent.getBooleanExtra("r2_capture", true));
+            setR2CaptureMode(intent.getBooleanExtra("r2_capture", false));
         }
         if (intent.hasExtra("record_video")) {
             boolean wantRec = intent.getBooleanExtra("record_video", false);

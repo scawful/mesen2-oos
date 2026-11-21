@@ -251,7 +251,7 @@ class OracleUi internal constructor(
         SettingRow.Toggle("fit", "Fill screen"),
         SettingRow.Toggle("play", "Smooth play"),
         SettingRow.Toggle("gpu", "GPU blit"),
-        SettingRow.Toggle("hotkeys", "Capture hotkeys (ZR / L3 / R3)"),
+        SettingRow.Toggle("hotkeys", "Capture hotkeys (L3 rec / R3 shot)"),
         SettingRow.Action("reset", "Reset console", "Restart the emulated console"),
         SettingRow.Action("home", "Add to Home", "Pin launcher shortcut"),
     )
@@ -2333,7 +2333,7 @@ class OracleUi internal constructor(
             )
             Spacer(Modifier.height(6.dp))
             Txt(
-                "ZL opens this menu. ZR defaults to Capture (tap = screenshot, hold = MP4 rec), or toggle ZR to hold $speed fast forward.",
+                "ZL opens this menu. Hold ZR while playing for $speed fast forward (L3 = video, R3 = screenshot).",
                 11.sp,
                 Pal.DIM,
                 maxLines = 3,
@@ -2883,7 +2883,7 @@ class OracleUi internal constructor(
     private fun blurb(item: RailItem): String = when (item) {
         RailItem.RESUME -> "Back to the game."
         RailItem.RELOAD -> "Reloads the current ROM file from disk ($menuTitle). Great after pushing a new build over ADB — your battery save is preserved."
-        RailItem.FAST -> "Set sticky fast-forward speed and choose whether ZR captures screenshots/video or holds fast-forward."
+        RailItem.FAST -> "Set sticky fast-forward speed (×2 / ×3 / ×4 / MAX) and ZR trigger behavior. Hold ZR while playing."
         RailItem.LIBRARY -> "Oracle Test Hub: switch test ROMs, load saves/states, or warp directly into areas and scenarios."
         else -> ""
     }
