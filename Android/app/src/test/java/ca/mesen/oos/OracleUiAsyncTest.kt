@@ -3,6 +3,7 @@ package ca.mesen.oos
 import android.view.KeyEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -61,7 +62,9 @@ class OracleUiAsyncTest {
         var recentCapturesHook: () -> List<MediaCapture.CaptureItem> = { emptyList() }
         var launchShortcutHook: ((PlaytestShortcuts.Card) -> PlaytestShortcuts.LaunchResult)? = null
         var checkpointDataHook: () -> CheckpointData = { CheckpointData.empty(null) }
+        var presetDataHook: () -> PresetData = { PresetData.empty(null) }
         var batteryLabelHook: (File) -> String = { "" }
+        var previewAssetsHook: () -> Set<String> = { emptySet() }
 
         override fun nativeReady(): Boolean = ready
         override fun romRoots(): Array<File> {
@@ -90,7 +93,7 @@ class OracleUiAsyncTest {
         override fun statesDir(): File = statesDirFile
         override fun savesDir(): File = savesDirFile
         override fun checkpointData(): CheckpointData = checkpointDataHook()
-        override fun presetData(): PresetData = PresetData.empty(null)
+        override fun presetData(): PresetData = presetDataHook()
         override fun socketSummary(): String = socketSummaryHook()
         override fun uiOpened() { uiOpenedCalls++ }
         override fun uiClosed() { uiClosedCalls++ }
@@ -146,6 +149,10 @@ class OracleUiAsyncTest {
             warpedTargets.add(target)
         }
         override fun fallToDungeonRoom(roomId: Int) {}
+        override fun previewAssetNames(): Set<String> = previewAssetsHook()
+        override fun readWramByte(address: Int): Int = fakeMemory.readByte(address)
+        override fun writeWramByte(address: Int, value: Int): Boolean = fakeMemory.writeByte(address, value)
+        override fun syncWramToSram(): Boolean = fakeMemory.syncSram()
     }
 
     private fun pump(queue: ConcurrentLinkedQueue<Runnable>, timeoutMs: Long = 3000, until: () -> Boolean) {
@@ -159,6 +166,18 @@ class OracleUiAsyncTest {
             Thread.sleep(10)
         }
         throw AssertionError("Timed out waiting for async UI condition")
+    }
+
+    @Test
+    fun railHasCompactSixEntries() {
+        assertEquals(
+            listOf("Resume", "Play & Warps", "States", "Cheats & Gear", "Capture", "ROMs & Settings"),
+            RailItem.values().map { it.label },
+        )
+        assertEquals(
+            listOf("Featured", "Overworld", "Dungeons", "Bosses", "Rooms"),
+            WarpCategory.values().map { it.label },
+        )
     }
 
     @Test
@@ -193,7 +212,6 @@ class OracleUiAsyncTest {
         assertTrue(ui.isLoadingLibrary)
         assertTrue(firstScanStarted.await(5, TimeUnit.SECONDS))
 
-        // Add a second ROM and trigger a newer openLibrary scan while scan 1 is blocked.
         File(roms, "Oracle - Latest.sfc").writeBytes(byteArrayOf(4, 5, 6))
         ui.openLibrary()
         releaseFirstScan.countDown()
@@ -203,13 +221,13 @@ class OracleUiAsyncTest {
     }
 
     @Test
-    fun openMenuAndTabSwitchLoadOffMainThreadAndGuardStaleItems() {
+    fun openMenuAndCheatTabSwitchLoadOffMainThread() {
         val temp = Files.createTempDirectory("oracle-ui-menu").toFile()
         val roms = File(temp, "Roms").apply { mkdirs() }
         val states = File(temp, "SaveStates").apply { mkdirs() }
         val saves = File(temp, "Saves").apply { mkdirs() }
         val rom = File(roms, "Oracle - Main.sfc").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-        File(roms, "Oracle - Main.build.json").writeText("{\"build\":\"b66\"}")
+        File(roms, "Oracle - Main.build.json").writeText("{\"build\":\"b68\"}")
 
         val host = TestHost(roms, states, saves)
         host.currentRom = rom.path
@@ -231,18 +249,19 @@ class OracleUiAsyncTest {
         assertEquals(1, host.uiOpenedCalls)
         assertFalse(ui.isBusy)
 
-        // Move rail to ITEMS and enter panel.
-        repeat(RailItem.ITEMS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        // Move rail to CHEATS and enter panel.
+        repeat(RailItem.CHEATS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        // Switch from Presets -> Warps -> Test cheats -> Items -> Songs rapidly via R1.
+        assertEquals("Live", ui.currentCheatTabName)
+
+        // Switch from Live -> Items -> Songs rapidly via R1.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals("Songs", ui.currentCheatTabName)
 
         metaGate.countDown()
         pump(mainQueue) {
-            ui.currentMenuTitle == "Main b66" &&
+            ui.currentMenuTitle == "Main b68" &&
                 ui.currentSocketMeta == "tcp://127.0.0.1:27015 · 2 agents" &&
                 !ui.isLoadingItems &&
                 ui.currentItemRows.isNotEmpty()
@@ -272,10 +291,10 @@ class OracleUiAsyncTest {
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
-        // Move to CAPTURE and enter panel (cursor at 0: Take screenshot).
         repeat(RailItem.CAPTURE.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
 
+        // (0,0) = Screenshot
         val t0 = System.nanoTime()
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0)
@@ -287,22 +306,22 @@ class OracleUiAsyncTest {
         assertEquals(1, ui.currentCaptures.size)
         assertEquals("oracle_test.png", ui.currentCaptures[0].name)
 
-        // Move down 2 to Save last 20s instant replay, then 2 more to Save bug snapshot (row 4).
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        // Move right to (0,1) = 20s Replay
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("replay_test.mp4") }
 
+        // Move down to row 1: Cat(1,1) -> cycle category, then left to Bug Snap(1,0) -> save.
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // cycles from Softlock -> Warp / Transition
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("Warp / Transition") }
     }
 
     @Test
-    fun warpsAndTestCheatsTabsWorkOffMainThread() {
-        val temp = Files.createTempDirectory("oracle-ui-testtools").toFile()
+    fun cheatsAndGearQuickChipsSteppersAndGearWorkOffMainThread() {
+        val temp = Files.createTempDirectory("oracle-ui-cheats").toFile()
         val roms = File(temp, "Roms").apply { mkdirs() }
         val states = File(temp, "SaveStates").apply { mkdirs() }
         val saves = File(temp, "Saves").apply { mkdirs() }
@@ -311,29 +330,54 @@ class OracleUiAsyncTest {
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
-        // Enter ITEMS.
-        repeat(RailItem.ITEMS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        repeat(RailItem.CHEATS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        // R1 once -> Warps, R1 twice -> Test cheats.
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
-        assertEquals("Warps", ui.currentItemTabName)
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
-        assertEquals("Test cheats", ui.currentItemTabName)
+        assertEquals("Live", ui.currentCheatTabName)
 
-        // Move to INF_HEALTH (row 0) -> toggles cheat off main thread.
+        // (0,0) = Invincibility (NO_DAMAGE), (0,3) = Inf Rupees (INF_RUPEES).
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.INF_HEALTH) }
-        assertTrue(host.activeCheatAddrs.containsKey(Inventory.HEALTH_CURRENT))
+        pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.NO_DAMAGE) }
+        assertTrue(host.activeCheatAddrs.containsKey(TestingTools.WRAM_NOPAIN))
 
-        // Move down 6 rows (past 5 cheats + Clear all) to Overlay: Hitboxes & sprites (bit 0x01).
-        repeat(6) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        repeat(3) { ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.INF_RUPEES) }
+        assertEquals(0xE7, host.activeCheatAddrs[Inventory.RUPEES])
+
+        // Row 1 col 1 = One-Hit, Row 1 col 3 = Clear All.
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.tools.isCheatActive(TestingTools.Cheat.ONE_HIT) }
+        assertEquals(1, host.activeCheatAddrs[TestingTools.SPR_HP])
+
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.tools.activeCheatCount() == 0 }
+
+        // Row 3 col 0 = Step +1f, Row 4 col 0 = Hitboxes overlay (0x01).
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        repeat(3) { ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.steppedFrames == 1 }
+
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && (host.overlayMask and 0x01) != 0 }
+
+        // Row 6 col 0 = Sword cycle (0 -> 1 via hostMemory).
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.fakeMemory.readByte(Inventory.SWORD) == 1 }
     }
 
     @Test
-    fun playtestShortcutsGridNavigatesAndLaunchesOffMainThread() {
-        val temp = Files.createTempDirectory("oracle-ui-shortcuts").toFile()
+    fun playAndWarpsGridFiltersCategoriesAndLaunchesShortcuts() {
+        val temp = Files.createTempDirectory("oracle-ui-playwarps").toFile()
         val roms = File(temp, "Roms").apply { mkdirs() }
         val states = File(temp, "SaveStates").apply { mkdirs() }
         val saves = File(temp, "Saves").apply { mkdirs() }
@@ -348,28 +392,52 @@ class OracleUiAsyncTest {
             File(dir, "state.mss").writeBytes(byteArrayOf(i.toByte(), 2, 3))
         }
 
+        val cpData = CheckpointData.parse(
+            "{\"checkpoints\":[{\"id\":\"d1-boss-ready\",\"beat\":9,\"label\":\"D1 Mushroom Grotto boss ready (Manhandla, room $5A)\",\"location\":{\"entrance\":\"0x26\"},\"writes\":[]}]}",
+            "{\"entrances\":[{\"id\":\"0x26\",\"name\":\"D1 Mushroom Grotto\",\"area\":\"0x10\",\"room\":\"0x004A\"}],\"areas\":[{\"area\":\"0x30\",\"name\":\"Kalyxo Docks\",\"world\":\"kalyxo\",\"via_room\":\"0x0104\"}]}",
+        )
         val host = TestHost(roms, states, saves, playtestDirFile = playtest).apply {
             ready = true
             currentRom = rom.path
+            checkpointDataHook = { cpData }
         }
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
         pump(mainQueue) { !ui.isLoadingShortcuts && ui.currentShortcuts.size == 5 }
 
-        // Move to SHORTCUTS (index 1) and enter 3-column grid.
-        repeat(RailItem.SHORTCUTS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        // Move to PLAY (index 1) and enter 3-column grid.
+        repeat(RailItem.PLAY.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        assertEquals(0, ui.currentShortcutIndex)
+        assertEquals(WarpCategory.FEATURED, ui.currentWarpCategory)
+        assertEquals(0, ui.currentWarpIndex)
 
-        // Move right twice -> index 2 (row 0, col 2), then down -> clamps to index 4 (last card on partial row 1).
+        // Category pills via R1: Featured -> Overworld -> Dungeons -> Bosses -> Rooms.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(WarpCategory.OVERWORLD, ui.currentWarpCategory)
+        assertTrue(ui.currentWarpTags.contains("OW $30"))
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(WarpCategory.DUNGEONS, ui.currentWarpCategory)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(WarpCategory.BOSSES, ui.currentWarpCategory)
+        assertTrue(ui.currentWarpTitles.contains("Manhandla"))
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(WarpCategory.ROOMS, ui.currentWarpCategory)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0) // step FallRoom 0 -> 1
+        assertEquals(1, ui.currentFallRoomId)
+
+        // Cycle back to Featured (5 shortcuts + featured OW $30 Docks = 6 cards).
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(WarpCategory.FEATURED, ui.currentWarpCategory)
+        assertEquals(6, ui.currentWarpCount)
         ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
         ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
-        assertEquals(2, ui.currentShortcutIndex)
+        assertEquals(2, ui.currentWarpIndex)
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        assertEquals(4, ui.currentShortcutIndex)
+        assertEquals(5, ui.currentWarpIndex)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
+        assertEquals(4, ui.currentWarpIndex)
 
-        // Launch Card 5 via A button -> runs off main thread, loads state, and closes menu.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         assertTrue(ui.isBusy)
         pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
@@ -379,8 +447,27 @@ class OracleUiAsyncTest {
     }
 
     @Test
-    fun reloadRomActionBootsCurrentRomOffMainThreadAndClosesMenu() {
-        val temp = Files.createTempDirectory("oracle-ui-reload").toFile()
+    fun statesPanelTogglesLoadAndSaveModes() {
+        val temp = Files.createTempDirectory("oracle-ui-states").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val host = TestHost(roms, states, saves).apply { ready = true }
+
+        val ui = OracleUi(host) { r -> r.run() }
+        ui.openMenu()
+        repeat(RailItem.STATES.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertFalse(ui.currentStatesSaveMode)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertTrue(ui.currentStatesSaveMode)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_L1, 0)
+        assertFalse(ui.currentStatesSaveMode)
+    }
+
+    @Test
+    fun romsAndSettingsReloadsCurrentRomAndTogglesZrModeWithFastForwardDefault() {
+        val temp = Files.createTempDirectory("oracle-ui-settings").toFile()
         val roms = File(temp, "Roms").apply { mkdirs() }
         val states = File(temp, "SaveStates").apply { mkdirs() }
         val saves = File(temp, "Saves").apply { mkdirs() }
@@ -390,19 +477,36 @@ class OracleUiAsyncTest {
             ready = true
             currentRom = rom.path
         }
+        assertFalse(host.setting("r2_capture"))
+
         val mainQueue = ConcurrentLinkedQueue<Runnable>()
         val ui = OracleUi(host) { r -> mainQueue.add(r) }
         ui.openMenu()
-        repeat(RailItem.RELOAD.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        pump(mainQueue) { !ui.isLoadingLibrary && ui.cardChannels.size == 1 }
+
+        repeat(RailItem.SETTINGS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter SETTINGS at section 0 col 0 (Reload ROM)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         assertTrue(ui.isBusy)
         pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
         assertEquals(listOf(rom.path), host.bootCalls)
-        assertEquals(1, host.uiClosedCalls)
+
+        // Re-open menu, go to SETTINGS -> down through ROM strip to Settings grid cell 2 (ZR Mode).
+        ui.openMenu()
+        pump(mainQueue) { !ui.isLoadingLibrary }
+        repeat(RailItem.SETTINGS.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // section 1 (ROM strip)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // section 2 (settings grid index 0: Sticky FF)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // index 2: ZR Mode
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertTrue(host.setting("r2_capture"))
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertFalse(host.setting("r2_capture"))
     }
 
     @Test
-    fun oracleHubSwitchesThreeTabsListsSavesAndWarpsAndColdBootsOnWarp() {
+    fun oracleHubSwitchesThreeTabsListsWarpsAndSavesAndColdBootsOnWarp() {
         val temp = Files.createTempDirectory("oracle-ui-hub").toFile()
         val roms = File(temp, "Roms").apply { mkdirs() }
         val states = File(temp, "SaveStates").apply { mkdirs() }
@@ -427,22 +531,22 @@ class OracleUiAsyncTest {
         pump(mainQueue) { !ui.isLoadingLibrary && !ui.isLoadingShortcuts && ui.cardChannels.size == 2 }
         assertEquals(0, ui.currentHubTab)
 
-        // L1/R1 switches between Test ROMs -> Saves & States -> Warps & Shortcuts.
+        // L1/R1 switches between Test ROMs -> Play & Warps -> States.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         assertEquals(1, ui.currentHubTab)
-        assertEquals(3, ui.hubSaveCount) // 1 occupied slot state + 2 ROM battery save rows
+        assertEquals(1, ui.hubWarpCount)
 
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         assertEquals(2, ui.currentHubTab)
-        assertEquals(2, ui.hubWarpCount) // 1 built-in area warp + FallRoom row
+        assertEquals(3, ui.hubSaveCount) // 1 occupied slot state + 2 ROM battery save rows
 
         // Wrap forward & backward via L1/R1.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
         assertEquals(0, ui.currentHubTab)
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_L1, 0)
-        assertEquals(2, ui.currentHubTab)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(1, ui.currentHubTab)
 
-        // Launch built-in area warp while cold (no ROM running yet): boots active Oracle ROM first, then warps.
+        // Launch built-in area warp while cold: boots active Oracle ROM first, then warps.
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         assertTrue(ui.isBusy)
         pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
@@ -452,29 +556,34 @@ class OracleUiAsyncTest {
     }
 
     @Test
-    fun r2CaptureSettingTogglesInFastPanelAndSettings() {
-        val temp = Files.createTempDirectory("oracle-ui-r2cap").toFile()
-        val roms = File(temp, "Roms").apply { mkdirs() }
-        val states = File(temp, "SaveStates").apply { mkdirs() }
-        val saves = File(temp, "Saves").apply { mkdirs() }
-        val host = TestHost(roms, states, saves).apply { ready = true }
-        assertFalse(host.setting("r2_capture"))
+    fun bundledPreviewAssetsMatchKeyLocations() {
+        val previewsDir = File("src/main/assets/oracle/previews")
+        assertTrue("previews dir must exist", previewsDir.isDirectory)
+        val bundled = previewsDir.listFiles { _, name -> name.endsWith(".png") }
+            ?.map { it.name }
+            ?.toSet()
+            ?: emptySet()
+        assertEquals(15, bundled.size)
 
+        val temp = Files.createTempDirectory("oracle-ui-previews").toFile()
+        val host = TestHost(
+            File(temp, "Roms").apply { mkdirs() },
+            File(temp, "SaveStates").apply { mkdirs() },
+            File(temp, "Saves").apply { mkdirs() },
+        ).apply {
+            previewAssetsHook = { bundled }
+        }
         val ui = OracleUi(host) { r -> r.run() }
-        ui.openMenu()
-        repeat(RailItem.FAST.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter FastPanel
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: Fast-forward speed
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 2: ZR / R2 trigger mode
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        assertTrue(host.setting("r2_capture"))
 
-        // Step back to Settings panel, row 1 (`r2_capture`), toggle back to false (default Fast Forward).
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_B, 0)
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter SettingsPanel
-        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: r2_capture
-        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
-        assertFalse(host.setting("r2_capture"))
+        assertEquals("d1_grotto.png", ui.resolvedPreviewAsset("d1"))
+        assertEquals("d4_zora.png", ui.resolvedPreviewAsset("zora"))
+        assertEquals("d6_goron.png", ui.resolvedPreviewAsset("goron"))
+        assertEquals("ow_30_docks.png", ui.resolvedPreviewAsset("ow_30_docks"))
+        assertEquals("ow_23_wayward.png", ui.resolvedPreviewAsset("village-impa"))
+        assertEquals("ow_00_ranch.png", ui.resolvedPreviewAsset("jump-horse-archery"))
+        assertEquals("abyss_40_windmill.png", ui.resolvedPreviewAsset("abyss-arrival"))
+        assertEquals("showcase_main.png", ui.resolvedPreviewAsset("full"))
+        assertNotNull(ui.resolvedPreviewAsset("lyra_sea_korl"))
+        assertNotNull(ui.resolvedPreviewAsset("sw_81_korok_cove"))
     }
 }

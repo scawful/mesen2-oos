@@ -44,9 +44,12 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -70,9 +73,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
     private static final String ACTION_DUMP_PGO = "ca.mesen.oos.DUMP_PGO";
 
-    private static final int TEXT_PRIMARY = Color.parseColor("#EDF0F5");
-    private static final int GOLD = Color.parseColor("#E8C35A");
-    private static final int TEAL = Color.parseColor("#4FB3A9");
+    private static final int TEXT_PRIMARY = Color.parseColor("#E6ECF2");
+    private static final int BRAND_STONE = Color.parseColor("#B8AD96");
+    private static final int TEAL = Color.parseColor("#63B3A0");
 
     private static MesenActivity sInstance;
 
@@ -112,6 +115,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private PlaySession.Jump mLastJump;
     private PresetData mPresetData;
     private List<PlaySession.Jump> mFeatureStates = Collections.emptyList();
+    private Set<String> mPreviewAssets = Collections.emptySet();
     private OracleUi mUi;
     private ComposeView mUiView;
     private ComposeHost mComposeHost;
@@ -251,6 +255,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                 warpsJson);
         mFeatureStates = PlaySession.savestateJumps(
                 readAssetText("oracle/save_state_library.json"));
+        mPreviewAssets = listAssetNames("oracle/previews");
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         mKeepHud = prefs.getBoolean(PREF_HUD, false);
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
@@ -542,7 +547,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
         TextView brand = new TextView(this);
         brand.setText(R.string.hud_brand);
-        brand.setTextColor(GOLD);
+        brand.setTextColor(BRAND_STONE);
         brand.setTextSize(11);
         brand.setAllCaps(true);
         brand.setTypeface(Typeface.DEFAULT_BOLD);
@@ -964,6 +969,40 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
+    public Set<String> previewAssetNames() {
+        return mPreviewAssets;
+    }
+
+    @Override
+    public byte[] loadPreviewAsset(String fileName) {
+        if (fileName == null || fileName.isEmpty() || fileName.contains("/") || fileName.contains("..")) {
+            return null;
+        }
+        return readAssetBytes("oracle/previews/" + fileName);
+    }
+
+    @Override
+    public int readWramByte(int address) {
+        return mNativeReady && !mDestroyed ? MesenNative.readByte(address) : -1;
+    }
+
+    @Override
+    public boolean writeWramByte(int address, int value) {
+        return mNativeReady && !mDestroyed && MesenNative.writeByte(address, value);
+    }
+
+    @Override
+    public boolean syncWramToSram() {
+        if (!mNativeReady || mDestroyed) return false;
+        try {
+            Progression.syncSram(Progression.LIVE);
+            return true;
+        } catch (Progression.Failure f) {
+            return false;
+        }
+    }
+
+    @Override
     public TestingTools testingTools() {
         return mTestingTools;
     }
@@ -1337,7 +1376,19 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
-    private String readAssetText(String path) {
+    private Set<String> listAssetNames(String dir) {
+        try {
+            String[] names = getAssets().list(dir);
+            if (names == null || names.length == 0) {
+                return Collections.emptySet();
+            }
+            return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(names)));
+        } catch (IOException e) {
+            return Collections.emptySet();
+        }
+    }
+
+    private byte[] readAssetBytes(String path) {
         try (InputStream in = getAssets().open(path)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
@@ -1345,11 +1396,19 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             while ((n = in.read(buf)) > 0) {
                 out.write(buf, 0, n);
             }
-            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+            return out.toByteArray();
         } catch (IOException e) {
-            Log.w(TAG, "Missing asset " + path + ": " + e.getMessage());
             return null;
         }
+    }
+
+    private String readAssetText(String path) {
+        byte[] bytes = readAssetBytes(path);
+        if (bytes == null) {
+            Log.w(TAG, "Missing asset " + path);
+            return null;
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private void markNativeReady() {

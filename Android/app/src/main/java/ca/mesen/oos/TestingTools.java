@@ -1,9 +1,9 @@
 package ca.mesen.oos;
 
-import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Handheld beta-testing cheats, sprite/time manipulators, and frame-step controls.
@@ -12,11 +12,15 @@ import java.util.Locale;
  */
 public final class TestingTools {
     public enum Cheat {
-        INF_HEALTH("Infinite health", "Frame-locks HP ($7EF36D) to current max hearts"),
-        NO_DAMAGE("Invulnerable (No damage)", "Sets $7E037B = 1 so hazards and hits deal 0 damage"),
-        INF_MAGIC_AMMO("Infinite magic & ammo", "Locks magic, bombs, arrows, bombchus & deku sticks full"),
-        WALK_WALLS("Walk through walls", "Sets $7E037F = 1 for collision bypass (CHEAT flag)"),
-        FREEZE_SPRITES("Freeze sprites", "Sets $7E0FC1 = 1 to pause active sprite AI");
+        NO_DAMAGE("Invincibility", "Sets $7E037B = 1 so hazards and hits deal 0 damage"),
+        INF_HEALTH("Inf Hearts", "Frame-locks HP ($7EF36D) to current max hearts"),
+        INF_MAGIC("Inf Magic", "Frame-locks magic meter ($7EF36E) full"),
+        INF_RUPEES("Inf Rupees", "Frame-locks rupees ($7EF360/$7EF362) at 999"),
+        INF_AMMO("Inf Bombs/Arrows", "Locks bombs, arrows, bombchus & deku sticks full"),
+        ONE_HIT("One-Hit", "Locks active enemy sprite HP ($7E0E50) to 1"),
+        WALK_WALLS("Walk-Through-Walls", "Sets $7E037F = 1 for collision bypass (CHEAT flag)"),
+        FREEZE_SPRITES("Freeze Sprites", "Sets $7E0FC1 = 1 to pause active sprite AI"),
+        INF_MAGIC_AMMO("Inf Magic & Ammo", "Locks magic, bombs, arrows, bombchus & deku sticks full");
 
         public final String label;
         public final String detail;
@@ -26,6 +30,17 @@ public final class TestingTools {
             this.detail = detail;
         }
     }
+
+    /** Primary 7 quick-toggle cheats shown in the Cheats & Gear chip grid (8th chip is Clear All). */
+    public static final Cheat[] QUICK_CHEATS = {
+        Cheat.NO_DAMAGE,
+        Cheat.INF_HEALTH,
+        Cheat.INF_MAGIC,
+        Cheat.INF_RUPEES,
+        Cheat.INF_AMMO,
+        Cheat.ONE_HIT,
+        Cheat.WALK_WALLS
+    };
 
     public enum LiveAction {
         TOGGLE_LAYER("Toggle Link layer", "Swaps Link floor $7E00EE between BG2 (0) and BG1 (1)"),
@@ -127,12 +142,29 @@ public final class TestingTools {
                 if (cheat == Cheat.INF_HEALTH) {
                     int maxHp = memory.readByte(Inventory.HEALTH_MAX);
                     memory.writeByte(Inventory.HEALTH_CURRENT, maxHp > 0 ? maxHp : 0x18);
+                } else if (cheat == Cheat.INF_MAGIC) {
+                    memory.writeByte(Inventory.MAGIC, 0x80);
+                } else if (cheat == Cheat.INF_RUPEES) {
+                    memory.writeWord(Inventory.RUPEES, 999);
+                    memory.writeWord(Inventory.RUPEES_DISPLAY, 999);
+                } else if (cheat == Cheat.INF_AMMO) {
+                    memory.writeByte(Inventory.BOMBS, 50);
+                    memory.writeByte(Inventory.ARROWS, 70);
+                    memory.writeByte(Inventory.BOMBCHU_AMMO, Inventory.BOMBCHU_AMMO_MAX);
+                    memory.writeByte(Inventory.DEKU_STICKS, 20);
                 } else if (cheat == Cheat.INF_MAGIC_AMMO) {
                     memory.writeByte(Inventory.MAGIC, 0x80);
                     memory.writeByte(Inventory.BOMBS, 50);
                     memory.writeByte(Inventory.ARROWS, 70);
                     memory.writeByte(Inventory.BOMBCHU_AMMO, Inventory.BOMBCHU_AMMO_MAX);
                     memory.writeByte(Inventory.DEKU_STICKS, 20);
+                } else if (cheat == Cheat.ONE_HIT) {
+                    for (int i = 0; i < SPR_SLOTS; i++) {
+                        int st = memory.readByte(SPR_STATE + i);
+                        if ((st == 0x09 || st == 0x0B) && memory.readByte(SPR_HP + i) > 1) {
+                            memory.writeByte(SPR_HP + i, 1);
+                        }
+                    }
                 }
             }
         }
@@ -142,45 +174,50 @@ public final class TestingTools {
 
     public void syncCheats(Inventory.Memory memory) {
         if (cheatSink == null) return;
-        List<Integer> addrs = new ArrayList<>();
-        List<Integer> vals = new ArrayList<>();
+        Map<Integer, Integer> locks = new LinkedHashMap<>();
 
         if (activeCheats.contains(Cheat.INF_HEALTH)) {
             int maxHp = memory != null ? memory.readByte(Inventory.HEALTH_MAX) : -1;
             int targetHp = maxHp > 0 ? maxHp : 0x18;
-            addrs.add(Inventory.HEALTH_CURRENT);
-            vals.add(targetHp);
+            locks.put(Inventory.HEALTH_CURRENT, targetHp);
         }
         if (activeCheats.contains(Cheat.NO_DAMAGE)) {
-            addrs.add(WRAM_NOPAIN);
-            vals.add(1);
+            locks.put(WRAM_NOPAIN, 1);
         }
-        if (activeCheats.contains(Cheat.INF_MAGIC_AMMO)) {
-            addrs.add(Inventory.MAGIC);
-            vals.add(0x80);
-            addrs.add(Inventory.BOMBS);
-            vals.add(50);
-            addrs.add(Inventory.ARROWS);
-            vals.add(70);
-            addrs.add(Inventory.BOMBCHU_AMMO);
-            vals.add(Inventory.BOMBCHU_AMMO_MAX);
-            addrs.add(Inventory.DEKU_STICKS);
-            vals.add(20);
+        if (activeCheats.contains(Cheat.INF_MAGIC) || activeCheats.contains(Cheat.INF_MAGIC_AMMO)) {
+            locks.put(Inventory.MAGIC, 0x80);
+        }
+        if (activeCheats.contains(Cheat.INF_AMMO) || activeCheats.contains(Cheat.INF_MAGIC_AMMO)) {
+            locks.put(Inventory.BOMBS, 50);
+            locks.put(Inventory.ARROWS, 70);
+            locks.put(Inventory.BOMBCHU_AMMO, Inventory.BOMBCHU_AMMO_MAX);
+            locks.put(Inventory.DEKU_STICKS, 20);
+        }
+        if (activeCheats.contains(Cheat.INF_RUPEES)) {
+            locks.put(Inventory.RUPEES, 999 & 0xFF);
+            locks.put(Inventory.RUPEES + 1, (999 >> 8) & 0xFF);
+            locks.put(Inventory.RUPEES_DISPLAY, 999 & 0xFF);
+            locks.put(Inventory.RUPEES_DISPLAY + 1, (999 >> 8) & 0xFF);
+        }
+        if (activeCheats.contains(Cheat.ONE_HIT)) {
+            for (int i = 0; i < SPR_SLOTS; i++) {
+                locks.put(SPR_HP + i, 1);
+            }
         }
         if (activeCheats.contains(Cheat.WALK_WALLS)) {
-            addrs.add(WRAM_CHEAT_WALLS);
-            vals.add(1);
+            locks.put(WRAM_CHEAT_WALLS, 1);
         }
         if (activeCheats.contains(Cheat.FREEZE_SPRITES)) {
-            addrs.add(WRAM_FREEZE_SPR);
-            vals.add(1);
+            locks.put(WRAM_FREEZE_SPR, 1);
         }
 
-        int[] a = new int[addrs.size()];
-        int[] v = new int[vals.size()];
-        for (int i = 0; i < addrs.size(); i++) {
-            a[i] = addrs.get(i);
-            v[i] = vals.get(i) & 0xFF;
+        int[] a = new int[locks.size()];
+        int[] v = new int[locks.size()];
+        int idx = 0;
+        for (Map.Entry<Integer, Integer> entry : locks.entrySet()) {
+            a[idx] = entry.getKey();
+            v[idx] = entry.getValue() & 0xFF;
+            idx++;
         }
         cheatSink.apply(a, v);
     }
