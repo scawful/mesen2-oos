@@ -112,6 +112,36 @@ namespace Mesen.Views
 			}
 		}
 
+		private async void OnPlayJumpClick(object? sender, RoutedEventArgs e)
+		{
+			if(ViewModel?.SelectedPlayJump == null) {
+				return;
+			}
+			Window? window = TopLevel.GetTopLevel(this) as Window;
+			if(window != null) {
+				DialogResult answer = await MessageBox.Show(
+					window,
+					"Jump to " + ViewModel.SelectedPlayJump.Display + "? This writes story bytes and warps, or loads the savestate.",
+					"Oracle",
+					MessageBoxButtons.YesNo,
+					MessageBoxIcon.Warning
+				);
+				if(answer != DialogResult.Yes) {
+					return;
+				}
+			}
+			ViewModel.ExecutePlayJump();
+		}
+
+		private void OnReloadPlayCatalogClick(object? sender, RoutedEventArgs e)
+		{
+			ViewModel?.ReloadPlayCatalog();
+		}
+
+		private void OnPlayLooksGoodClick(object? sender, RoutedEventArgs e) => ViewModel?.SavePlayFeedback("looks_good");
+		private void OnPlayNeedsChangesClick(object? sender, RoutedEventArgs e) => ViewModel?.SavePlayFeedback("needs_changes");
+		private void OnPlayCommentClick(object? sender, RoutedEventArgs e) => ViewModel?.SavePlayFeedback("comment");
+
 		private async void OnApplyPresetClick(object? sender, RoutedEventArgs e)
 		{
 			if(ViewModel != null) {

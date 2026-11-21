@@ -110,6 +110,9 @@ namespace Mesen.ViewModels
 		private OracleWarpTargetViewModel? _selectedWarpTarget;
 		private OraclePresetOptionViewModel? _selectedPreset;
 		private OracleFlagOptionViewModel? _selectedFlag;
+		private string _playCatalogStatus = "Shared checkpoints not loaded.";
+		private string _playNote = "";
+		private OraclePlayCatalog.Jump? _selectedPlayJump;
 
 		public event EventHandler? VisibilityModeChanged;
 
@@ -137,6 +140,8 @@ namespace Mesen.ViewModels
 
 			MacroButtons = new ObservableCollection<OracleMacroButtonViewModel>();
 			MacroProfilePath = ExpandHome(ConfigManager.Config.Oracle.DebugPanelMacroProfilePath);
+			PlayJumps = new ObservableCollection<OraclePlayCatalog.Jump>();
+			ReloadPlayCatalog();
 			if(!string.IsNullOrWhiteSpace(MacroProfilePath)) {
 				_ = ReloadMacrosAsync();
 			}
@@ -261,6 +266,90 @@ namespace Mesen.ViewModels
 			}
 		}
 
+		public ObservableCollection<OraclePlayCatalog.Jump> PlayJumps { get; }
+
+		public string PlayCatalogStatus {
+			get => _playCatalogStatus;
+			private set => this.RaiseAndSetIfChanged(ref _playCatalogStatus, value);
+		}
+
+		public string PlayNote {
+			get => _playNote;
+			set => this.RaiseAndSetIfChanged(ref _playNote, value);
+		}
+
+		public OraclePlayCatalog.Jump? SelectedPlayJump {
+			get => _selectedPlayJump;
+			set => this.RaiseAndSetIfChanged(ref _selectedPlayJump, value);
+		}
+
+		public void ReloadPlayCatalog()
+		{
+			PlayJumps.Clear();
+			string directory = OraclePlayCatalog.ResolveDebugDataDirectory();
+			OraclePlayCatalog.Catalog catalog = OraclePlayCatalog.LoadFromDirectory(directory);
+			if(!string.IsNullOrWhiteSpace(catalog.Error)) {
+				PlayCatalogStatus = catalog.Error;
+			} else {
+				foreach(OraclePlayCatalog.Jump jump in catalog.Checkpoints) PlayJumps.Add(jump);
+				foreach(OraclePlayCatalog.Jump jump in catalog.Entrances) PlayJumps.Add(jump);
+				foreach(OraclePlayCatalog.Jump jump in catalog.Areas) PlayJumps.Add(jump);
+				PlayCatalogStatus = directory + ": " + catalog.Checkpoints.Count + " checkpoints, "
+					+ catalog.Entrances.Count + " entrances, " + catalog.Areas.Count + " areas";
+			}
+			try {
+				string? project = AgentLauncher.ResolveProjectRoot();
+				foreach(PlayJump state in PlaySession.LoadJumps(project)) {
+					if(state.Kind != "savestate" || string.IsNullOrWhiteSpace(state.SourceId)) continue;
+					string? full = PlaySession.ResolveStateFile(project, state);
+					PlayJumps.Add(new OraclePlayCatalog.Jump {
+						Kind = "savestate",
+						Id = state.SourceId,
+						Label = string.IsNullOrWhiteSpace(state.Label) ? state.SourceId : state.Label,
+						Path = full ?? "",
+						Method = string.IsNullOrWhiteSpace(full) ? "unsupported" : "savestate",
+						Reason = string.IsNullOrWhiteSpace(full) ? "Savestate path is missing." : ""
+					});
+				}
+			} catch {
+				// The shared savestate library is optional. Checkpoint jumps still work.
+			}
+		}
+
+		public string ExecutePlayJump()
+		{
+			string result = OraclePlayJump.Execute(SelectedPlayJump!);
+			StatusLine = result;
+			AppendLog("play-jump", result.StartsWith("Jump") || result.StartsWith("Loaded"), result);
+			return result;
+		}
+
+		public string SavePlayFeedback(string decision)
+		{
+			try {
+				OraclePlayCatalog.Jump? jump = SelectedPlayJump;
+				PlayJump? target = null;
+				if(jump != null && !string.IsNullOrWhiteSpace(jump.Kind)) {
+					target = new PlayJump {
+						Kind = jump.Kind,
+						SourceId = jump.Id,
+						Label = jump.Label,
+						StatePath = jump.Kind == "savestate" ? jump.Path : ""
+					};
+				}
+				string category = decision == "needs_changes" ? "bug" : "review";
+				string boards = PlaySession.ReviewBoardsDirectory(AgentLauncher.ResolveProjectRoot());
+				PlaySession.AppendFeedback(boards, decision, category, PlayNote.Trim(), PlaySession.SourceDesktop, target);
+				PlayNote = "";
+				StatusLine = "Saved in-play feedback to " + Path.Combine(boards, "in-play", "feedback-in-play.json");
+				AppendLog("play-feedback", true, StatusLine);
+				return StatusLine;
+			} catch(Exception ex) {
+				StatusLine = ex.Message;
+				AppendLog("play-feedback", false, ex.Message);
+				return ex.Message;
+			}
+		}
 		public void ToggleHiddenCollapsed()
 		{
 			VisibilityMode = IsHidden ? OracleDebugPanelVisibility.Collapsed : OracleDebugPanelVisibility.Hidden;

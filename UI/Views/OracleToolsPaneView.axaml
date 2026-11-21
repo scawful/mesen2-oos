@@ -279,6 +279,25 @@
 					<TextBox Classes="row" Text="{Binding CaptureNotes}" Watermark="Notes (optional)" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="80" />
 					<Button HorizontalAlignment="Stretch" Content="Save state + screenshot" Click="OnCaptureStateClick" IsEnabled="{Binding !IsCommandInFlight}" />
 					<TextBlock Classes="hint" Margin="0,4,0,0" Text="{Binding LastCaptureText}" IsVisible="{Binding LastCaptureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+					<TextBlock Classes="section" Text="Shared jumps &amp; feedback" />
+					<TextBlock Classes="hint" Text="{Binding PlayCatalogStatus}" />
+					<Grid ColumnDefinitions="*,4,Auto,4,Auto">
+						<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" ItemsSource="{Binding PlayJumps}" SelectedItem="{Binding SelectedPlayJump}">
+							<ComboBox.ItemTemplate>
+								<DataTemplate>
+									<TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis" />
+								</DataTemplate>
+							</ComboBox.ItemTemplate>
+						</ComboBox>
+						<Button Grid.Column="2" Classes="cheat" Content="Reload" Click="OnReloadPlayCatalogClick" />
+						<Button Grid.Column="4" Classes="cheat" Content="Jump" Click="OnPlayJumpClick" />
+					</Grid>
+					<TextBox Classes="row" MinHeight="48" AcceptsReturn="True" TextWrapping="Wrap" Watermark="Note for this jump" Text="{Binding PlayNote}" />
+					<StackPanel Orientation="Horizontal" Spacing="6">
+						<Button Classes="cheat" Content="Looks good" Click="OnPlayLooksGoodClick" />
+						<Button Classes="cheat" Content="Needs changes" Click="OnPlayNeedsChangesClick" />
+						<Button Classes="cheat" Content="Comment" Click="OnPlayCommentClick" />
+					</StackPanel>
 				</StackPanel>
 			</ScrollViewer>
 
