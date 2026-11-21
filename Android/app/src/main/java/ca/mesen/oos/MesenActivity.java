@@ -64,6 +64,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String PREF_REC_HUD = "record_input_hud";
     private static final String PREF_REPLAY_BUF = "replay_buffer";
     private static final String PREF_TURBO_SPEED = "turbo_speed";
+    private static final String PREF_R2_CAPTURE = "r2_capture_mode";
     private static final String HOME_SHORTCUT_ID = "oracle-open";
     private static final String HOME_SHORTCUT_PINNED = "ca.mesen.oos.HOME_SHORTCUT_PINNED";
     private static final String HOME_REQUEST_TOKEN = "home_request_token";
@@ -138,6 +139,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private volatile boolean mSmoothPlay;
     private volatile boolean mPreferGpu;
     private volatile boolean mCaptureHotkeys = true;
+    private volatile boolean mR2CaptureMode = true;
     private volatile boolean mRecordInputHud;
     private volatile boolean mReplayBufferEnabled;
     private volatile int mOverlayMask;
@@ -153,13 +155,16 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     });
     private volatile long mVideoStartElapsedMs;
-    private boolean mL2KeyHeld;
-    private boolean mL2TriggerHeld;
-    private boolean mL2Held;
-    private boolean mL2HoldFired;
-    private final Runnable mL2HoldRunnable = () -> {
-        if (mL2Held && !mUiVisible && mCaptureHotkeys && !mDestroyed) {
-            mL2HoldFired = true;
+    private boolean mL2MenuKeyHeld;
+    private boolean mL2MenuTriggerHeld;
+    private boolean mL2MenuDown;
+    private boolean mR2CaptureKeyHeld;
+    private boolean mR2CaptureTriggerHeld;
+    private boolean mR2CaptureHeld;
+    private boolean mR2CaptureHoldFired;
+    private final Runnable mR2HoldRunnable = () -> {
+        if (mR2CaptureHeld && !mUiVisible && mCaptureHotkeys && mR2CaptureMode && !mDestroyed) {
+            mR2CaptureHoldFired = true;
             triggerToggleVideoFromHotkey();
         }
     };
@@ -252,6 +257,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mSmoothPlay = prefs.getBoolean(PREF_PLAY, true);
         mPreferGpu = prefs.getBoolean(PREF_GPU, true);
         mCaptureHotkeys = prefs.getBoolean(PREF_HOTKEYS, true);
+        mR2CaptureMode = prefs.getBoolean(PREF_R2_CAPTURE, true);
         mRecordInputHud = prefs.getBoolean(PREF_REC_HUD, false);
         mReplayBufferEnabled = prefs.getBoolean(PREF_REPLAY_BUF, false);
         mTurboSpeed = FrameRateTracker.sanitizeTurboSpeed(
@@ -331,6 +337,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     protected void onPause() {
         clearFastForward();
         clearCaptureHotkeys();
+        clearMenuTriggerState();
         if (mComposeHost != null) {
             mComposeHost.onPause();
         }
@@ -347,6 +354,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     protected void onStop() {
         clearFastForward();
         clearCaptureHotkeys();
+        clearMenuTriggerState();
         stopRecordingIfActive(true);
         if (mNativeReady) {
             try {
@@ -396,6 +404,18 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             }
             return true;
         }
+        if (code == KeyEvent.KEYCODE_BUTTON_L2) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) {
+                    mL2MenuKeyHeld = true;
+                    updateL2MenuHeld();
+                }
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                mL2MenuKeyHeld = false;
+                updateL2MenuHeld();
+            }
+            return true;
+        }
         if (mUiVisible) {
             // Keep SDL's pad state current so the game does not see a stuck button after closing.
             forwardPadToSdl(event);
@@ -405,6 +425,20 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return true;
         }
         if (code == KeyEvent.KEYCODE_BUTTON_R2) {
+            if (mR2CaptureMode) {
+                if (mCaptureHotkeys) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        if (event.getRepeatCount() == 0) {
+                            mR2CaptureKeyHeld = true;
+                            updateR2CaptureHeld();
+                        }
+                    } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                        mR2CaptureKeyHeld = false;
+                        updateR2CaptureHeld();
+                    }
+                }
+                return true;
+            }
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 setFastForwardKeyHeld(true);
             } else if (event.getAction() == KeyEvent.ACTION_UP) {
@@ -413,16 +447,6 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return true;
         }
         if (mCaptureHotkeys) {
-            if (code == KeyEvent.KEYCODE_BUTTON_L2) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    mL2KeyHeld = true;
-                    updateL2CaptureHeld();
-                } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                    mL2KeyHeld = false;
-                    updateL2CaptureHeld();
-                }
-                return true;
-            }
             if (code == KeyEvent.KEYCODE_BUTTON_THUMBR) {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
                     triggerScreenshotFromHotkey();
@@ -442,6 +466,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
         int source = event.getSource();
+        if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0) {
+            float lTrigger = Math.max(
+                    event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+                    event.getAxisValue(MotionEvent.AXIS_BRAKE));
+            mL2MenuTriggerHeld = mL2MenuTriggerHeld ? (lTrigger > 0.35f) : (lTrigger > 0.55f);
+            updateL2MenuHeld();
+        }
         if (mUiVisible) {
             if ((source & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_DPAD
                     | InputDevice.SOURCE_GAMEPAD)) == 0) {
@@ -464,15 +495,17 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             float trigger = Math.max(
                     event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
                     event.getAxisValue(MotionEvent.AXIS_GAS));
-            setFastForwardTriggerHeld(trigger > 0.55f);
-            float lTrigger = Math.max(
-                    event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
-                    event.getAxisValue(MotionEvent.AXIS_BRAKE));
-            if (mCaptureHotkeys) {
-                mL2TriggerHeld = lTrigger > 0.55f;
-                updateL2CaptureHeld();
+            if (mR2CaptureMode) {
+                setFastForwardTriggerHeld(false);
+                if (mCaptureHotkeys) {
+                    mR2CaptureTriggerHeld = mR2CaptureTriggerHeld ? (trigger > 0.35f) : (trigger > 0.55f);
+                    updateR2CaptureHeld();
+                } else {
+                    mR2CaptureTriggerHeld = false;
+                }
             } else {
-                mL2TriggerHeld = false;
+                mR2CaptureTriggerHeld = false;
+                setFastForwardTriggerHeld(trigger > 0.55f);
             }
         }
         return super.dispatchGenericMotionEvent(event);
@@ -621,8 +654,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                 getFilesDir(),
                 getExternalFilesDir(null),
                 new File("/storage/emulated/0/Android/data/ca.mesen.oos/files"),
-                new File("/storage/emulated/0/OracleOfSecrets"),
-                new File("/storage/0000-0000/snes")
+                new File("/storage/emulated/0/OracleOfSecrets")
         };
     }
 
@@ -1146,6 +1178,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "play": return mSmoothPlay;
             case "gpu": return mPreferGpu;
             case "hotkeys": return mCaptureHotkeys;
+            case "r2_capture": return mR2CaptureMode;
             case "rec_hud": return mRecordInputHud;
             case "replay": return mReplayBufferEnabled;
             default: return false;
@@ -1166,6 +1199,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             case "play": setSmoothPlay(on); break;
             case "gpu": setPreferGpu(on); break;
             case "hotkeys": setCaptureHotkeys(on); break;
+            case "r2_capture": setR2CaptureMode(on); break;
             case "rec_hud": setRecordInputHud(on); break;
             case "replay": setReplayBufferEnabled(on); break;
             default: break;
@@ -1680,6 +1714,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
+    private void setR2CaptureMode(boolean enabled) {
+        mR2CaptureMode = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_R2_CAPTURE, enabled).apply();
+        clearCaptureHotkeys();
+        clearFastForward();
+    }
+
     private void setRecordInputHud(boolean enabled) {
         mRecordInputHud = enabled;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_REC_HUD, enabled).apply();
@@ -1772,28 +1813,53 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
-    private void clearCaptureHotkeys() {
-        mL2KeyHeld = false;
-        mL2TriggerHeld = false;
-        mL2Held = false;
-        mL2HoldFired = false;
-        mHandler.removeCallbacks(mL2HoldRunnable);
+    private void clearMenuTriggerState() {
+        mL2MenuKeyHeld = false;
+        mL2MenuTriggerHeld = false;
+        mL2MenuDown = false;
     }
 
-    private void updateL2CaptureHeld() {
-        boolean next = !mUiVisible && mCaptureHotkeys && (mL2KeyHeld || mL2TriggerHeld);
-        if (next == mL2Held) {
+    private void updateL2MenuHeld() {
+        boolean next = mL2MenuKeyHeld || mL2MenuTriggerHeld;
+        if (next == mL2MenuDown) {
             return;
         }
-        mL2Held = next;
+        mL2MenuDown = next;
+        if (next && !mDestroyed) {
+            if (mUiVisible) {
+                if (mUi != null) {
+                    mUi.onBack();
+                }
+            } else {
+                openQuickMenu();
+            }
+        }
+    }
+
+    private void clearCaptureHotkeys() {
+        mR2CaptureKeyHeld = false;
+        mR2CaptureTriggerHeld = false;
+        mR2CaptureHeld = false;
+        mR2CaptureHoldFired = false;
+        mHandler.removeCallbacks(mR2HoldRunnable);
+    }
+
+    private void updateR2CaptureHeld() {
+        boolean next = !mUiVisible && mCaptureHotkeys && mR2CaptureMode
+                && (mR2CaptureKeyHeld || mR2CaptureTriggerHeld);
+        if (next == mR2CaptureHeld) {
+            return;
+        }
+        mR2CaptureHeld = next;
         if (next) {
-            mL2HoldFired = false;
-            mHandler.removeCallbacks(mL2HoldRunnable);
-            mHandler.postDelayed(mL2HoldRunnable, 550L);
+            mR2CaptureHoldFired = false;
+            mHandler.removeCallbacks(mR2HoldRunnable);
+            mHandler.postDelayed(mR2HoldRunnable, 550L);
         } else {
-            mHandler.removeCallbacks(mL2HoldRunnable);
-            boolean fireScreenshot = !mL2HoldFired && !mUiVisible && mCaptureHotkeys && !mDestroyed;
-            mL2HoldFired = false;
+            mHandler.removeCallbacks(mR2HoldRunnable);
+            boolean fireScreenshot = !mR2CaptureHoldFired && !mUiVisible
+                    && mCaptureHotkeys && mR2CaptureMode && !mDestroyed;
+            mR2CaptureHoldFired = false;
             if (fireScreenshot) {
                 triggerScreenshotFromHotkey();
             }
@@ -1943,6 +2009,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         if (intent.hasExtra("turbo_speed")) {
             setTurboSpeedPercent(intent.getIntExtra("turbo_speed", FrameRateTracker.DEFAULT_TURBO_SPEED));
+        }
+        if (intent.hasExtra("r2_capture")) {
+            setR2CaptureMode(intent.getBooleanExtra("r2_capture", true));
         }
         if (intent.hasExtra("record_video")) {
             boolean wantRec = intent.getBooleanExtra("record_video", false);

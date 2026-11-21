@@ -30,8 +30,9 @@ class OracleUiAsyncTest {
         var replayActive = false
         var overlayMask = 0
         var steppedFrames = 0
-        val toggleValues = HashMap<String, Boolean>()
+        val toggleValues = hashMapOf("r2_capture" to true)
         val activeCheatAddrs = HashMap<Int, Int>()
+        val warpedTargets = ArrayList<Progression.Checkpoint>()
         val fakeMemory = object : Inventory.Memory {
             private val wram = hashMapOf(
                 Inventory.MODULE to 0x09,
@@ -59,6 +60,8 @@ class OracleUiAsyncTest {
         var bugSnapshotHook: (String) -> String = { cat -> "Saved bug_test ($cat)" }
         var recentCapturesHook: () -> List<MediaCapture.CaptureItem> = { emptyList() }
         var launchShortcutHook: ((PlaytestShortcuts.Card) -> PlaytestShortcuts.LaunchResult)? = null
+        var checkpointDataHook: () -> CheckpointData = { CheckpointData.empty(null) }
+        var batteryLabelHook: (File) -> String = { "" }
 
         override fun nativeReady(): Boolean = ready
         override fun romRoots(): Array<File> {
@@ -82,11 +85,11 @@ class OracleUiAsyncTest {
             })
         }
         override fun currentRomPath(): String? = currentRom
-        override fun batterySaveLabel(rom: File): String = ""
+        override fun batterySaveLabel(rom: File): String = batteryLabelHook(rom)
         override fun romSourceLabel(rom: File): String = "app"
         override fun statesDir(): File = statesDirFile
         override fun savesDir(): File = savesDirFile
-        override fun checkpointData(): CheckpointData = CheckpointData.empty(null)
+        override fun checkpointData(): CheckpointData = checkpointDataHook()
         override fun presetData(): PresetData = PresetData.empty(null)
         override fun socketSummary(): String = socketSummaryHook()
         override fun uiOpened() { uiOpenedCalls++ }
@@ -139,7 +142,9 @@ class OracleUiAsyncTest {
             steppedFrames += frames
             return true
         }
-        override fun startWarp(target: Progression.Checkpoint) {}
+        override fun startWarp(target: Progression.Checkpoint) {
+            warpedTargets.add(target)
+        }
         override fun fallToDungeonRoom(roomId: Int) {}
     }
 
@@ -394,5 +399,82 @@ class OracleUiAsyncTest {
         pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
         assertEquals(listOf(rom.path), host.bootCalls)
         assertEquals(1, host.uiClosedCalls)
+    }
+
+    @Test
+    fun oracleHubSwitchesThreeTabsListsSavesAndWarpsAndColdBootsOnWarp() {
+        val temp = Files.createTempDirectory("oracle-ui-hub").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val mainRom = File(roms, "Oracle - Main.sfc").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        File(roms, "Oracle - Showcase.sfc").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        File(states, "Oracle - Main_1.mss").apply { writeBytes(byteArrayOf(9, 8, 7)) }
+
+        val cpData = CheckpointData.parse(
+            "{\"checkpoints\":[]}",
+            "{\"entrances\":[],\"areas\":[{\"area\":\"0x33\",\"name\":\"Loom Beach\",\"via_room\":\"0x0104\"}]}",
+        )
+        val host = TestHost(roms, states, saves).apply {
+            ready = true
+            checkpointDataHook = { cpData }
+            batteryLabelHook = { "Heart 5 · Save ready" }
+        }
+        val mainQueue = ConcurrentLinkedQueue<Runnable>()
+        val ui = OracleUi(host) { r -> mainQueue.add(r) }
+
+        ui.openLibrary()
+        pump(mainQueue) { !ui.isLoadingLibrary && !ui.isLoadingShortcuts && ui.cardChannels.size == 2 }
+        assertEquals(0, ui.currentHubTab)
+
+        // L1/R1 switches between Test ROMs -> Saves & States -> Warps & Shortcuts.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(1, ui.currentHubTab)
+        assertEquals(3, ui.hubSaveCount) // 1 occupied slot state + 2 ROM battery save rows
+
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(2, ui.currentHubTab)
+        assertEquals(2, ui.hubWarpCount) // 1 built-in area warp + FallRoom row
+
+        // Wrap forward & backward via L1/R1.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        assertEquals(0, ui.currentHubTab)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_L1, 0)
+        assertEquals(2, ui.currentHubTab)
+
+        // Launch built-in area warp while cold (no ROM running yet): boots active Oracle ROM first, then warps.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertTrue(ui.isBusy)
+        pump(mainQueue) { !ui.isBusy && ui.screen == Screen.CLOSED }
+        assertEquals(listOf(mainRom.path), host.bootCalls)
+        assertEquals(1, host.warpedTargets.size)
+        assertEquals(0x33, host.warpedTargets[0].target)
+    }
+
+    @Test
+    fun r2CaptureSettingTogglesInFastPanelAndSettings() {
+        val temp = Files.createTempDirectory("oracle-ui-r2cap").toFile()
+        val roms = File(temp, "Roms").apply { mkdirs() }
+        val states = File(temp, "SaveStates").apply { mkdirs() }
+        val saves = File(temp, "Saves").apply { mkdirs() }
+        val host = TestHost(roms, states, saves).apply { ready = true }
+        assertTrue(host.setting("r2_capture"))
+
+        val ui = OracleUi(host) { r -> r.run() }
+        ui.openMenu()
+        repeat(RailItem.FAST.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter FastPanel
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: Fast-forward speed
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 2: ZR / R2 trigger mode
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertFalse(host.setting("r2_capture"))
+
+        // Step back to Settings panel, row 1 (`r2_capture`), toggle back to true.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_B, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // enter SettingsPanel
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) // row 1: r2_capture
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        assertTrue(host.setting("r2_capture"))
     }
 }

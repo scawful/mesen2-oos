@@ -109,7 +109,7 @@ enum class RailItem(val label: String) {
     ITEMS("Items & progress"),
     FAST("Fast forward"),
     SETTINGS("Settings"),
-    LIBRARY("Library"),
+    LIBRARY("Oracle Hub"),
 }
 
 private enum class Key { UP, DOWN, LEFT, RIGHT, A, B, X, Y, L, R, START }
@@ -201,14 +201,17 @@ class OracleUi internal constructor(
     private var confirm by mutableStateOf<Confirm?>(null)
     private var confirmYes by mutableStateOf(false)
 
-    // Library
+    // Library / Oracle Test Hub
     private var cards by mutableStateOf(listOf<RomCard>())
     private var loadingLibrary by mutableStateOf(false)
     private var currentRomCanonical by mutableStateOf<String?>(null)
     private var hasCurrentRom by mutableStateOf(false)
+    private var hubTab by mutableIntStateOf(0)
     private var libIndex by mutableIntStateOf(0)
     private var libRow by mutableIntStateOf(0)
     private var libAction by mutableIntStateOf(0)
+    private var hubSaveIndex by mutableIntStateOf(0)
+    private var hubWarpIndex by mutableIntStateOf(0)
 
     // Quick menu
     private var rail by mutableIntStateOf(0)
@@ -242,12 +245,13 @@ class OracleUi internal constructor(
 
     private val itemTabs = listOf(TAB_PRESETS, TAB_WARPS, TAB_TEST_CHEATS) + Inventory.tabs()
     private val settingsRows = listOf(
-        SettingRow.Cycle("turbo", "R2 / fast-forward speed"),
+        SettingRow.Cycle("turbo", "Fast-forward speed"),
+        SettingRow.Toggle("r2_capture", "ZR trigger captures (off = fast fwd)"),
         SettingRow.Toggle("hud", "Keep status bar visible"),
         SettingRow.Toggle("fit", "Fill screen"),
         SettingRow.Toggle("play", "Smooth play"),
         SettingRow.Toggle("gpu", "GPU blit"),
-        SettingRow.Toggle("hotkeys", "Capture hotkeys (L2 / L3 / R3)"),
+        SettingRow.Toggle("hotkeys", "Capture hotkeys (ZR / L3 / R3)"),
         SettingRow.Action("reset", "Reset console", "Restart the emulated console"),
         SettingRow.Action("home", "Add to Home", "Pin launcher shortcut"),
     )
@@ -256,6 +260,21 @@ class OracleUi internal constructor(
         class Toggle(key: String, label: String) : SettingRow(key, label)
         class Cycle(key: String, label: String) : SettingRow(key, label)
         class Action(key: String, label: String, val tag: String) : SettingRow(key, label)
+    }
+
+    private sealed class HubSaveRow {
+        class State(val card: RomCard, val entry: SaveStateSlots.Entry) : HubSaveRow()
+        class Battery(val card: RomCard) : HubSaveRow()
+    }
+
+    private sealed class HubWarpRow {
+        class Shortcut(val card: PlaytestShortcuts.Card) : HubWarpRow()
+        class Feature(val jump: PlaySession.Jump) : HubWarpRow()
+        class Preset(val preset: PresetData.Preset) : HubWarpRow()
+        class Milestone(val cp: Progression.Checkpoint) : HubWarpRow()
+        class Area(val target: Progression.Checkpoint) : HubWarpRow()
+        class Entrance(val target: Progression.Checkpoint) : HubWarpRow()
+        object FallRoom : HubWarpRow()
     }
 
     val isOpen: Boolean get() = screen != Screen.CLOSED
@@ -270,6 +289,9 @@ class OracleUi internal constructor(
     internal val currentSocketMeta: String get() = socketMeta
     internal val currentActiveSaveSlot: Int get() = activeSaveSlot
     internal val cardChannels: List<String> get() = cards.map { it.entry.channel }
+    internal val currentHubTab: Int get() = hubTab
+    internal val hubSaveCount: Int get() = hubSaveRows().size
+    internal val hubWarpCount: Int get() = hubWarpRows().size
     internal val currentShortcuts: List<PlaytestShortcuts.Card> get() = shortcuts
     internal val currentShortcutIndex: Int get() = shortcutIndex
     internal val stateSlotsCount: Int get() = states.size
@@ -292,13 +314,17 @@ class OracleUi internal constructor(
         } else if (cards.isEmpty()) {
             libIndex = 0
         }
+        hubTab = 0
         libRow = 0
         libAction = 0
+        hubSaveIndex = 0
+        hubWarpIndex = 0
         status = ""
         confirm = null
         screen = Screen.LIBRARY
         if (wasClosed) host.uiOpened()
         reloadCards(selectCurrent = true)
+        refreshShortcuts()
     }
 
     fun openMenu() {
@@ -598,7 +624,128 @@ class OracleUi internal constructor(
         }
     }
 
+    private fun hubSaveRows(): List<HubSaveRow> {
+        val states = cards.flatMap { card ->
+            card.states.filter { it.occupied }.map { HubSaveRow.State(card, it) }
+        }.sortedByDescending { it.entry.modified }
+        val battery = cards.map { HubSaveRow.Battery(it) }
+        return states + battery
+    }
+
+    private fun hubWarpRows(): List<HubWarpRow> {
+        val cpData = host.checkpointData()
+        val out = ArrayList<HubWarpRow>()
+        shortcuts.forEach { out.add(HubWarpRow.Shortcut(it)) }
+        host.featureStates().forEach { out.add(HubWarpRow.Feature(it)) }
+        host.presetData().presets.forEach { out.add(HubWarpRow.Preset(it)) }
+        cpData.checkpoints.forEach { out.add(HubWarpRow.Milestone(it)) }
+        cpData.areaWarps.forEach { out.add(HubWarpRow.Area(it)) }
+        cpData.entranceWarps.forEach { out.add(HubWarpRow.Entrance(it)) }
+        out.add(HubWarpRow.FallRoom)
+        return out
+    }
+
+    private fun activateHubSave(row: HubSaveRow) {
+        when (row) {
+            is HubSaveRow.State -> resumeState(row.card, row.entry)
+            is HubSaveRow.Battery -> boot(row.card)
+        }
+    }
+
+    private fun withHubRomBooted(onReady: () -> Unit) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
+        if (!host.currentRomPath().isNullOrEmpty()) {
+            onReady()
+            return
+        }
+        val target = cards.getOrNull(libIndex) ?: cards.firstOrNull()
+        if (target == null) {
+            status = "No Oracle test ROM found in files/Roms/ or OracleOfSecrets/."
+            return
+        }
+        val path = target.file.path
+        val canon = target.canonicalPath
+        work("Booting ${target.entry.channel}…", {
+            if (host.bootRom(path)) null else "Could not load ${target.file.name}."
+        }) { problem ->
+            if (problem != null) {
+                status = problem
+            } else {
+                currentRomCanonical = canon
+                hasCurrentRom = true
+                onReady()
+            }
+        }
+    }
+
+    private fun activateHubWarp(row: HubWarpRow) {
+        when (row) {
+            is HubWarpRow.Shortcut -> launchShortcut(row.card)
+            is HubWarpRow.Feature -> withHubRomBooted { runFeature(row.jump) }
+            is HubWarpRow.Preset -> withHubRomBooted { runPreset(row.preset) }
+            is HubWarpRow.Milestone -> withHubRomBooted { runCheckpoint(row.cp) }
+            is HubWarpRow.Area -> withHubRomBooted {
+                close()
+                host.startWarp(row.target)
+            }
+            is HubWarpRow.Entrance -> withHubRomBooted {
+                close()
+                host.startWarp(row.target)
+            }
+            HubWarpRow.FallRoom -> withHubRomBooted {
+                val targetRoom = fallRoomId
+                close()
+                host.fallToDungeonRoom(targetRoom)
+            }
+        }
+    }
+
     private fun libraryKey(key: Key) {
+        if (key == Key.L || key == Key.R) {
+            val n = HUB_TABS.size
+            hubTab = if (key == Key.L) (hubTab - 1 + n) % n else (hubTab + 1) % n
+            status = ""
+            return
+        }
+        when (hubTab) {
+            HUB_TAB_SAVES -> {
+                val rows = hubSaveRows()
+                when (key) {
+                    Key.UP -> hubSaveIndex = (hubSaveIndex - 1).coerceAtLeast(0)
+                    Key.DOWN -> hubSaveIndex = (hubSaveIndex + 1).coerceAtMost((rows.size - 1).coerceAtLeast(0))
+                    Key.A, Key.START -> rows.getOrNull(hubSaveIndex)?.let { activateHubSave(it) }
+                    Key.Y -> reloadCards(selectCurrent = false)
+                    Key.B -> if (host.nativeReady() && hasCurrentRom) close()
+                    else -> {}
+                }
+                return
+            }
+            HUB_TAB_WARPS -> {
+                val rows = hubWarpRows()
+                val currentRow = rows.getOrNull(hubWarpIndex)
+                when (key) {
+                    Key.UP -> hubWarpIndex = (hubWarpIndex - 1).coerceAtLeast(0)
+                    Key.DOWN -> hubWarpIndex = (hubWarpIndex + 1).coerceAtMost((rows.size - 1).coerceAtLeast(0))
+                    Key.LEFT, Key.RIGHT -> {
+                        if (currentRow is HubWarpRow.FallRoom) {
+                            val n = Progression.MAX_ROOM_ID + 1
+                            fallRoomId = (fallRoomId + (if (key == Key.LEFT) -1 else 1) + n) % n
+                        }
+                    }
+                    Key.Y -> {
+                        status = "Rescanning Playtest shortcuts…"
+                        refreshShortcuts(announce = true)
+                    }
+                    Key.A, Key.START -> currentRow?.let { activateHubWarp(it) }
+                    Key.B -> if (host.nativeReady() && hasCurrentRom) close()
+                    else -> {}
+                }
+                return
+            }
+        }
         val card = cards.getOrNull(libIndex)
         val actions = card?.let { libActions(it) } ?: emptyList()
         when (key) {
@@ -923,12 +1070,12 @@ class OracleUi internal constructor(
     private fun fastKey(key: Key) {
         when (key) {
             Key.UP -> listIndex = (listIndex - 1).coerceAtLeast(0)
-            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost(1)
+            Key.DOWN -> listIndex = (listIndex + 1).coerceAtMost(2)
             Key.LEFT -> {
                 if (listIndex == 1) {
                     host.cycleTurboSpeed(-1)
                     settingsTick++
-                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                    status = "Fast-forward speed: ${host.turboSpeedLabel()}"
                 } else {
                     inPanel = false
                 }
@@ -937,7 +1084,7 @@ class OracleUi internal constructor(
                 if (listIndex == 1) {
                     host.cycleTurboSpeed(1)
                     settingsTick++
-                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                    status = "Fast-forward speed: ${host.turboSpeedLabel()}"
                 }
             }
             Key.A -> when (listIndex) {
@@ -947,13 +1094,23 @@ class OracleUi internal constructor(
                     status = if (fastOn) {
                         "Sticky ${host.turboSpeedLabel()} stays on after resume."
                     } else {
-                        "Sticky fast forward off. Hold R2 while playing."
+                        "Sticky fast forward off."
                     }
                 }
                 1 -> {
                     host.cycleTurboSpeed(1)
                     settingsTick++
-                    status = "R2 speed: ${host.turboSpeedLabel()}"
+                    status = "Fast-forward speed: ${host.turboSpeedLabel()}"
+                }
+                2 -> {
+                    val next = !host.setting("r2_capture")
+                    host.setSetting("r2_capture", next)
+                    settingsTick++
+                    status = if (next) {
+                        "ZR / R2 trigger: Capture (tap shot / hold rec)."
+                    } else {
+                        "ZR / R2 trigger: Hold for ${host.turboSpeedLabel()} fast forward."
+                    }
                 }
             }
             else -> {}
@@ -1133,13 +1290,21 @@ class OracleUi internal constructor(
     private fun activateSetting(row: SettingRow) {
         when (row) {
             is SettingRow.Toggle -> {
-                host.setSetting(row.key, !host.setting(row.key))
+                val next = !host.setting(row.key)
+                host.setSetting(row.key, next)
                 settingsTick++
+                if (row.key == "r2_capture") {
+                    status = if (next) {
+                        "ZR / R2 trigger: Capture (tap shot / hold rec)."
+                    } else {
+                        "ZR / R2 trigger: Hold for ${host.turboSpeedLabel()} fast forward."
+                    }
+                }
             }
             is SettingRow.Cycle -> {
                 host.cycleTurboSpeed(1)
                 settingsTick++
-                status = "R2 speed: ${host.turboSpeedLabel()}"
+                status = "Fast-forward speed: ${host.turboSpeedLabel()}"
             }
             is SettingRow.Action -> when (row.key) {
                 "reset" -> {
@@ -1601,67 +1766,252 @@ class OracleUi internal constructor(
     @Composable
     private fun LibraryScreen() {
         val listState = rememberLazyListState()
+        val savesState = rememberLazyListState()
+        val warpsState = rememberLazyListState()
+        val saveRows = hubSaveRows()
+        val warpRows = hubWarpRows()
         LaunchedEffect(libIndex) { listState.animateScrollToItem((libIndex - 1).coerceAtLeast(0)) }
+        LaunchedEffect(hubSaveIndex, hubTab) {
+            if (hubTab == HUB_TAB_SAVES && saveRows.isNotEmpty()) {
+                savesState.animateScrollToItem((hubSaveIndex - 3).coerceAtLeast(0))
+            }
+        }
+        LaunchedEffect(hubWarpIndex, hubTab) {
+            if (hubTab == HUB_TAB_WARPS && warpRows.isNotEmpty()) {
+                warpsState.animateScrollToItem((hubWarpIndex - 3).coerceAtLeast(0))
+            }
+        }
         val card = cards.getOrNull(libIndex)
         val actions = card?.let { libActions(it) } ?: emptyList()
+        val headerMeta = when (hubTab) {
+            HUB_TAB_SAVES -> "${saveRows.size} saves · ${clock(System.currentTimeMillis())}"
+            HUB_TAB_WARPS -> "${warpRows.size} warps & cards · ${clock(System.currentTimeMillis())}"
+            else -> "${cards.size} test ROMs · ${clock(System.currentTimeMillis())}"
+        }
         Column(Modifier.fillMaxSize().background(Pal.BG).padding(horizontal = 16.dp)) {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.Top) {
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Txt("ORACLE OF SECRETS", 11.sp, Pal.GOLD, bold = true, italic = true)
-                    Txt("ROM library", 22.sp, Pal.TEXT, bold = true, italic = true)
+                    Txt("Oracle Test Hub", 20.sp, Pal.TEXT, bold = true, italic = true)
                 }
-                Txt("${cards.size} channels · ${clock(System.currentTimeMillis())}", 12.sp, Pal.DIM, bold = true)
+                Txt(headerMeta, 12.sp, Pal.DIM, bold = true)
             }
-            Spacer(Modifier.height(10.dp))
-            if (cards.isEmpty()) {
-                Box(Modifier.fillMaxWidth().height(232.dp).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL), Alignment.Center) {
-                    Txt(
-                        if (loadingLibrary) "Scanning ROMs…" else "No ROMs found in files/Roms/, OracleOfSecrets/, or snes/.",
-                        13.sp,
-                        Pal.DIM,
-                    )
-                }
-            } else {
-                LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(232.dp)) {
-                    itemsIndexed(cards) { i, c -> RomCardView(c, i == libIndex, libRow == 0) }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HUB_TABS.forEachIndexed { idx, label ->
+                    val on = idx == hubTab
+                    val touch = remember { MutableInteractionSource() }
+                    Box(
+                        Modifier.clip(RoundedCornerShape(12.dp))
+                            .background(if (on) Pal.GOLD else Pal.PANEL)
+                            .border(1.dp, if (on) Pal.GOLD else Pal.LINE, RoundedCornerShape(12.dp))
+                            .clickable(interactionSource = touch, indication = null) {
+                                hubTab = idx
+                                status = ""
+                            }
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Txt(label, 12.sp, if (on) Pal.INK else Pal.DIM, bold = true)
+                    }
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Column(
-                Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            Spacer(Modifier.height(8.dp))
+            when (hubTab) {
+                HUB_TAB_SAVES -> HubSavesList(saveRows, savesState, Modifier.weight(1f))
+                HUB_TAB_WARPS -> HubWarpsList(warpRows, warpsState, Modifier.weight(1f))
+                else -> {
+                    if (cards.isEmpty()) {
+                        Box(
+                            Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL),
+                            Alignment.Center,
+                        ) {
+                            Txt(
+                                if (loadingLibrary) "Scanning Oracle ROMs…" else "No Oracle test ROMs found in files/Roms/ or OracleOfSecrets/.",
+                                13.sp,
+                                Pal.DIM,
+                            )
+                        }
+                    } else {
+                        LazyRow(
+                            state = listState,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.height(216.dp),
+                        ) {
+                            itemsIndexed(cards) { i, c -> RomCardView(c, i == libIndex, libRow == 0) }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Column(
+                            Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(10.dp)).background(Pal.PANEL)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            if (card != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Txt(card.entry.channel, 16.sp, Pal.TEXT, bold = true, italic = true)
+                                    if (card.entry.build.isNotEmpty()) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Txt(card.entry.build, 16.sp, Pal.GOLD, bold = true, italic = true)
+                                    }
+                                    if (card.entry.pinned) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Badge("PINNED", Pal.GOLD)
+                                    }
+                                    if (isCurrent(card)) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Badge("RUNNING", Pal.TEAL)
+                                    }
+                                }
+                                Txt(cardDetail(card), 11.sp, Pal.DIM, bold = true)
+                                Spacer(Modifier.weight(1f))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    actions.forEachIndexed { i, a ->
+                                        val on = (libRow == 1 && i == libAction) || (libRow == 0 && i == 0)
+                                        ActionButton(a.label, on, libRow == 1 && i == libAction, Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            HintBar(if (status.isNotEmpty()) status else null, hubHints(warpRows))
+        }
+    }
+
+    @Composable
+    private fun HubSavesList(
+        rows: List<HubSaveRow>,
+        listState: androidx.compose.foundation.lazy.LazyListState,
+        modifier: Modifier,
+    ) {
+        if (rows.isEmpty()) {
+            Box(
+                modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Pal.PANEL),
+                Alignment.Center,
             ) {
-                if (card != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Txt(card.entry.channel, 16.sp, Pal.TEXT, bold = true, italic = true)
-                        if (card.entry.build.isNotEmpty()) {
-                            Spacer(Modifier.width(6.dp))
-                            Txt(card.entry.build, 16.sp, Pal.GOLD, bold = true, italic = true)
-                        }
-                        if (card.entry.pinned) {
-                            Spacer(Modifier.width(8.dp))
-                            Badge("PINNED", Pal.GOLD)
-                        }
-                        if (isCurrent(card)) {
-                            Spacer(Modifier.width(8.dp))
-                            Badge("RUNNING", Pal.TEAL)
+                Txt(
+                    if (loadingLibrary) "Scanning Oracle saves & states…" else "No Oracle saves or save states found yet.",
+                    13.sp,
+                    Pal.DIM,
+                )
+            }
+            return
+        }
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp), modifier = modifier.fillMaxWidth()) {
+            itemsIndexed(rows) { idx, row ->
+                val selected = idx == hubSaveIndex
+                val touch = remember { MutableInteractionSource() }
+                when (row) {
+                    is HubSaveRow.State -> {
+                        val preview = rememberPreview(row.entry.file, row.entry.modified)
+                        val slotTag = if (row.entry.slot == SaveStateSlots.AUTO_SLOT) "Auto-save" else "Slot ${row.entry.slot}"
+                        val buildBit = if (row.card.entry.build.isNotEmpty()) " ${row.card.entry.build}" else ""
+                        val detail = listOfNotNull(
+                            whenText(row.entry.modified),
+                            row.entry.label.ifEmpty { null },
+                        ).joinToString(" · ")
+                        Row(
+                            Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(10.dp))
+                                .background(if (selected) Pal.PANEL2 else Pal.PANEL)
+                                .border(2.dp, if (selected) Pal.GOLD else Color.Transparent, RoundedCornerShape(10.dp))
+                                .clickable(interactionSource = touch, indication = null) {
+                                    if (busy) return@clickable
+                                    hubSaveIndex = idx
+                                    activateHubSave(row)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Thumb(preview, Modifier.width(64.dp).fillMaxHeight(), "STATE")
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Txt("${row.card.entry.channel}$buildBit · $slotTag", 13.sp, Pal.TEXT, bold = true)
+                                Txt(detail, 11.sp, Pal.DIM, bold = true)
+                            }
+                            Badge("STATE", Pal.TEAL)
                         }
                     }
-                    Txt(cardDetail(card), 11.sp, Pal.DIM, bold = true)
-                    Spacer(Modifier.weight(1f))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        actions.forEachIndexed { i, a ->
-                            val on = (libRow == 1 && i == libAction) || (libRow == 0 && i == 0)
-                            ActionButton(a.label, on, libRow == 1 && i == libAction, Modifier.weight(1f))
+                    is HubSaveRow.Battery -> {
+                        val buildBit = if (row.card.entry.build.isNotEmpty()) " ${row.card.entry.build}" else ""
+                        val saveText = row.card.saveLabel.ifEmpty { "Battery save (.srm)" }
+                        Row(
+                            Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp))
+                                .background(if (selected) Pal.PANEL2 else Pal.PANEL)
+                                .border(2.dp, if (selected) Pal.GOLD else Color.Transparent, RoundedCornerShape(10.dp))
+                                .clickable(interactionSource = touch, indication = null) {
+                                    if (busy) return@clickable
+                                    hubSaveIndex = idx
+                                    activateHubSave(row)
+                                }
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.width(56.dp)) { Badge("SRAM", Pal.GOLD) }
+                            Column(Modifier.weight(1f)) {
+                                Txt("${row.card.entry.channel}$buildBit", 13.sp, Pal.TEXT, bold = true)
+                                Txt(saveText, 11.sp, Pal.DIM, bold = true)
+                            }
+                            Txt("Start from save", 11.sp, if (selected) Pal.GOLD else Pal.DIM, bold = true)
                         }
                     }
                 }
             }
-            HintBar(
-                if (status.isNotEmpty()) status else null,
-                listOf("A / START" to "Play", "D-PAD" to "Browse") +
-                    if (host.nativeReady() && hasCurrentRom) listOf("B" to "Back to game") else emptyList(),
-            )
+        }
+    }
+
+    @Composable
+    private fun HubWarpsList(
+        rows: List<HubWarpRow>,
+        listState: androidx.compose.foundation.lazy.LazyListState,
+        modifier: Modifier,
+    ) {
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(4.dp), modifier = modifier.fillMaxWidth()) {
+            itemsIndexed(rows) { idx, row ->
+                val selected = idx == hubWarpIndex
+                val touch = remember { MutableInteractionSource() }
+                val (lead, title, tag, tagColor) = when (row) {
+                    is HubWarpRow.Shortcut -> Quad("CARD", row.card.title, row.card.badge.ifEmpty { "shortcut" }, Pal.GOLD)
+                    is HubWarpRow.Feature -> Quad("MSS", row.jump.label, "savestate", Pal.TEAL)
+                    is HubWarpRow.Preset -> Quad("B${row.preset.beat}", row.preset.label, row.preset.displayTag(), if (row.preset.inPlace) Pal.TEAL else Pal.GOLD)
+                    is HubWarpRow.Milestone -> Quad("B${row.cp.beat}", row.cp.label, "milestone", Pal.DIM)
+                    is HubWarpRow.Area -> Quad("AREA", row.target.label, String.format(Locale.US, "OW $%02X", row.target.target and 0xFF), Pal.TEAL)
+                    is HubWarpRow.Entrance -> Quad("DOOR", row.target.label, String.format(Locale.US, "Ent $%02X", row.target.target and 0xFF), Pal.GOLD)
+                    HubWarpRow.FallRoom -> Quad("FALL", "Fall into dungeon room", String.format(Locale.US, "$%04X", fallRoomId), Pal.GOLD)
+                }
+                Row(
+                    Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(8.dp))
+                        .background(if (selected) Pal.PANEL2 else Pal.PANEL)
+                        .border(2.dp, if (selected) Pal.GOLD else Color.Transparent, RoundedCornerShape(8.dp))
+                        .clickable(interactionSource = touch, indication = null) {
+                            if (busy) return@clickable
+                            hubWarpIndex = idx
+                            activateHubWarp(row)
+                        }
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(46.dp)) { Txt(lead, 11.sp, Pal.GOLD, bold = true, italic = true) }
+                    Box(Modifier.weight(1f)) { Txt(title, 13.sp, Pal.TEXT, bold = true) }
+                    Txt(tag, 11.sp, tagColor, bold = true)
+                }
+            }
+        }
+    }
+
+    private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+    private fun hubHints(warpRows: List<HubWarpRow>): List<Pair<String, String>> {
+        val resume = if (host.nativeReady() && hasCurrentRom) listOf("B / ZL" to "Resume") else emptyList()
+        return when (hubTab) {
+            HUB_TAB_SAVES -> listOf("A / START" to "Load", "L1/R1" to "Tab", "Y" to "Rescan") + resume
+            HUB_TAB_WARPS -> {
+                val nav = if (warpRows.getOrNull(hubWarpIndex) is HubWarpRow.FallRoom) {
+                    listOf("A / START" to "Warp", "LEFT RIGHT" to "Room ID", "L1/R1" to "Tab", "Y" to "Rescan")
+                } else {
+                    listOf("A / START" to "Warp / Launch", "L1/R1" to "Tab", "Y" to "Rescan")
+                }
+                nav + resume
+            }
+            else -> listOf("A / START" to "Play", "L1/R1" to "Tab", "D-PAD" to "Browse") + resume
         }
     }
 
@@ -1961,6 +2311,7 @@ class OracleUi internal constructor(
     private fun FastPanel() {
         @Suppress("UNUSED_VARIABLE") val tick = settingsTick
         val speed = host.turboSpeedLabel()
+        val r2Capture = host.setting("r2_capture")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             ListRow(
                 "Sticky fast forward",
@@ -1969,14 +2320,20 @@ class OracleUi internal constructor(
                 tagColor = if (fastOn) Pal.TEAL else Pal.DIM,
             )
             ListRow(
-                "R2 hold speed",
+                "Fast-forward speed",
                 speed,
                 inPanel && listIndex == 1,
                 tagColor = Pal.TEAL,
             )
+            ListRow(
+                "ZR / R2 trigger",
+                if (r2Capture) "Capture (shot / rec)" else "Fast forward",
+                inPanel && listIndex == 2,
+                tagColor = if (r2Capture) Pal.GOLD else Pal.TEAL,
+            )
             Spacer(Modifier.height(6.dp))
             Txt(
-                "Hold R2 while playing to speed up at $speed. Sticky keeps the same speed after Resume. Cycle ×2 → ×3 → ×4 → MAX.",
+                "ZL opens this menu. ZR defaults to Capture (tap = screenshot, hold = MP4 rec), or toggle ZR to hold $speed fast forward.",
                 11.sp,
                 Pal.DIM,
                 maxLines = 3,
@@ -2516,7 +2873,8 @@ class OracleUi internal constructor(
         }
         RailItem.FAST -> {
             val speed = host.turboSpeedLabel()
-            if (fastOn) "Sticky $speed" else "Hold R2 · $speed"
+            val r2 = if (host.setting("r2_capture")) "ZR Cap" else "ZR FF"
+            if (fastOn) "Sticky $speed · $r2" else "$r2 · $speed"
         }
         RailItem.SETTINGS -> socketMeta.ifEmpty { "tcp://127.0.0.1:${StatusManifest.PORT}" }
         else -> ""
@@ -2525,47 +2883,48 @@ class OracleUi internal constructor(
     private fun blurb(item: RailItem): String = when (item) {
         RailItem.RESUME -> "Back to the game."
         RailItem.RELOAD -> "Reloads the current ROM file from disk ($menuTitle). Great after pushing a new build over ADB — your battery save is preserved."
-        RailItem.FAST -> "Open to set sticky FF and R2 speed (×2 / ×3 / ×4 / MAX). Hold R2 while playing."
-        RailItem.LIBRARY -> "Switch channels, resume a state, roll back, or start from the battery save."
+        RailItem.FAST -> "Set sticky fast-forward speed and choose whether ZR captures screenshots/video or holds fast-forward."
+        RailItem.LIBRARY -> "Oracle Test Hub: switch test ROMs, load saves/states, or warp directly into areas and scenarios."
         else -> ""
     }
 
     private fun menuHints(item: RailItem): List<Pair<String, String>> {
         if (!inPanel) {
             return when (item) {
-                RailItem.SHORTCUTS -> listOf("A / RIGHT" to "Open grid", "B / START" to "Resume", "D-PAD" to "Move")
-                RailItem.RELOAD -> listOf("A" to "Reload ROM now", "B / START" to "Resume", "D-PAD" to "Move")
-                else -> listOf("A" to "Select", "B / START" to "Resume", "D-PAD" to "Move")
+                RailItem.SHORTCUTS -> listOf("A / RIGHT" to "Open grid", "B / ZL / START" to "Resume", "D-PAD" to "Move")
+                RailItem.RELOAD -> listOf("A" to "Reload ROM now", "B / ZL / START" to "Resume", "D-PAD" to "Move")
+                else -> listOf("A" to "Select", "B / ZL / START" to "Resume", "D-PAD" to "Move")
             }
         }
         return when (item) {
-            RailItem.SHORTCUTS -> listOf("A / TAP" to "Launch", "D-PAD" to "Browse", "Y" to "Rescan", "B" to "Back")
-            RailItem.SAVE -> listOf("A" to "Save here", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
-            RailItem.LOAD -> listOf("A" to "Load", "B" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
+            RailItem.SHORTCUTS -> listOf("A / TAP" to "Launch", "D-PAD" to "Browse", "Y" to "Rescan", "B / ZL" to "Back")
+            RailItem.SAVE -> listOf("A" to "Save here", "B / ZL" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
+            RailItem.LOAD -> listOf("A" to "Load", "B / ZL" to "Back", "L1 R1" to "Slot page", "Y" to "Delete")
             RailItem.CAPTURE -> when (listIndex) {
-                4 -> listOf("A" to "Save bug bundle", "LEFT RIGHT" to "Category", "B" to "Back")
-                in CAPTURE_CONTROLS..Int.MAX_VALUE -> listOf("A" to "Inspect / load bug state", "B" to "Back")
-                else -> listOf("A" to "Capture / toggle", "B" to "Back")
+                4 -> listOf("A" to "Save bug bundle", "LEFT RIGHT" to "Category", "B / ZL" to "Back")
+                in CAPTURE_CONTROLS..Int.MAX_VALUE -> listOf("A" to "Inspect / load bug state", "B / ZL" to "Back")
+                else -> listOf("A" to "Capture / toggle", "B / ZL" to "Back")
             }
             RailItem.ITEMS -> when (activeItemTabName()) {
-                TAB_PRESETS -> listOf("A" to "Apply preset", "L1 R1" to "Tab", "B" to "Back")
-                TAB_WARPS -> listOf("A" to "Warp (keeps SRAM)", "LEFT RIGHT" to "Room ID", "L1 R1" to "Tab", "B" to "Back")
-                TAB_TEST_CHEATS -> listOf("A" to "Toggle / run", "LEFT RIGHT" to "Sprite ID", "L1 R1" to "Tab", "B" to "Back")
-                else -> listOf("A" to "Toggle / apply", "LEFT RIGHT" to "Adjust / bit", "L1 R1" to "Tab", "B" to "Back")
+                TAB_PRESETS -> listOf("A" to "Apply preset", "L1 R1" to "Tab", "B / ZL" to "Back")
+                TAB_WARPS -> listOf("A" to "Warp (keeps SRAM)", "LEFT RIGHT" to "Room ID", "L1 R1" to "Tab", "B / ZL" to "Back")
+                TAB_TEST_CHEATS -> listOf("A" to "Toggle / run", "LEFT RIGHT" to "Sprite ID", "L1 R1" to "Tab", "B / ZL" to "Back")
+                else -> listOf("A" to "Toggle / apply", "LEFT RIGHT" to "Adjust / bit", "L1 R1" to "Tab", "B / ZL" to "Back")
             }
             RailItem.FAST -> when (listIndex) {
-                1 -> listOf("A / LEFT RIGHT" to "Cycle speed", "B" to "Back")
-                else -> listOf("A" to "Toggle sticky", "B" to "Back")
+                1 -> listOf("A / LEFT RIGHT" to "Cycle speed", "B / ZL" to "Back")
+                2 -> listOf("A" to "Switch ZR mode", "B / ZL" to "Back")
+                else -> listOf("A" to "Toggle sticky", "B / ZL" to "Back")
             }
             RailItem.SETTINGS -> {
                 val row = settingsRows.getOrNull(listIndex)
                 if (row is SettingRow.Cycle) {
-                    listOf("A / LEFT RIGHT" to "Cycle R2 speed", "B" to "Back")
+                    listOf("A / LEFT RIGHT" to "Cycle speed", "B / ZL" to "Back")
                 } else {
-                    listOf("A" to "Toggle / run", "B" to "Back")
+                    listOf("A" to "Toggle / run", "B / ZL" to "Back")
                 }
             }
-            else -> listOf("A" to "Select", "B" to "Back")
+            else -> listOf("A" to "Select", "B / ZL" to "Back")
         }
     }
 
@@ -2608,6 +2967,10 @@ class OracleUi internal constructor(
     }
 
     companion object {
+        private const val HUB_TAB_ROMS = 0
+        private const val HUB_TAB_SAVES = 1
+        private const val HUB_TAB_WARPS = 2
+        private val HUB_TABS = listOf("Test ROMs", "Saves & States", "Warps & Shortcuts")
         private const val TAB_PRESETS = "Presets"
         private const val TAB_WARPS = "Warps"
         private const val TAB_TEST_CHEATS = "Test cheats"
