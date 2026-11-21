@@ -133,6 +133,32 @@ public final class MediaCaptureTest {
         check("$41".equals(spr.get("idHex")), "sprite idHex");
         check(((Number) spr.get("x")).intValue() == 0x0280, "sprite 16-bit X");
         check(((Number) spr.get("y")).intValue() == 0x0140, "sprite 16-bit Y");
+
+        File feedback = PlaySession.feedbackFile(reports);
+        check(feedback.isFile(), "in-play feedback written beside the bug bundle");
+        Map<String, Object> inbox = MiniJson.object(MiniJson.parse(Files.readString(feedback.toPath())));
+        check("yaze.review_board_feedback.v2".equals(inbox.get("schema")), "feedback schema");
+        check("oos.play_feedback.v1".equals(inbox.get("play_schema")), "play schema");
+        check("in-play".equals(inbox.get("id")), "feedback id");
+        List<Object> history = MiniJson.array(inbox.get("history"));
+        check(history.size() == 1, "one feedback entry");
+        Map<String, Object> saved = MiniJson.object(history.get(0));
+        check("needs_changes".equals(saved.get("decision")), "bug note is needs_changes");
+        check("bug".equals(saved.get("category")), "bug category");
+        check("Collision / Layer: Link clipped \"wall\"\nline2".equals(saved.get("comment")),
+                "feedback comment keeps category and note");
+
+        MediaCapture.writeBugSnapshot(reports, "Oracle - Main.sfc", "Warp / Transition", "",
+                hooks, 1700000001000L,
+                new PlaySession.Jump("checkpoint:fortress-open", "fortress-open", "checkpoint",
+                        "Fortress", "", "", "fortress-open", ""));
+        inbox = MiniJson.object(MiniJson.parse(Files.readString(feedback.toPath())));
+        history = MiniJson.array(inbox.get("history"));
+        check(history.size() == 2, "second note appends");
+        Map<String, Object> play = MiniJson.object(MiniJson.object(history.get(1)).get("play"));
+        check("mesen-android".equals(play.get("source")), "android source");
+        Map<String, Object> jump = MiniJson.object(play.get("jump"));
+        check("fortress-open".equals(jump.get("id")), "checkpoint id recorded");
     }
 
     static void testListRecentOrderingAndLimit() throws Exception {

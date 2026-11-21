@@ -179,6 +179,10 @@ class OracleUi internal constructor(
         fun stepFrames(frames: Int): Boolean
         fun startWarp(target: Progression.Checkpoint)
         fun fallToDungeonRoom(roomId: Int)
+        /** Feature savestates from Data/debug/save_state_library.json. */
+        fun featureStates(): List<PlaySession.Jump> = emptyList()
+        /** Loads a project-relative savestate from external files OracleLibrary/. */
+        fun loadFeatureState(statePath: String): Boolean = false
     }
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "oracle-ui").apply { isDaemon = true } }
@@ -1296,6 +1300,26 @@ class OracleUi internal constructor(
         }
     }
 
+    private fun runFeature(jump: PlaySession.Jump) {
+        if (!host.nativeReady()) {
+            status = "Emulator is still starting."
+            return
+        }
+        ask(
+            "Load ${jump.label}?",
+            "Loads the feature savestate when its file is under OracleLibrary.",
+            "Load",
+        ) {
+            work("Loading ${jump.label}…", {
+                if (host.loadFeatureState(jump.statePath)) null
+                else "Savestate file is not under OracleLibrary: ${jump.statePath}"
+            }) { problem ->
+                if (problem == null) close()
+                status = problem ?: "Loaded ${jump.label}"
+            }
+        }
+    }
+
     private fun runPreset(preset: PresetData.Preset) {
         if (!host.nativeReady()) {
             status = "Emulator is still starting."
@@ -1353,10 +1377,14 @@ class OracleUi internal constructor(
         if (tab == TAB_PRESETS) {
             val presets = host.presetData().presets
             val cps = host.checkpointData().checkpoints
-            val total = presets.size + cps.size
+            val features = host.featureStates()
+            val total = presets.size + cps.size + features.size
             listKey(key, total) {
-                if (listIndex < presets.size) runPreset(presets[listIndex])
-                else runCheckpoint(cps[listIndex - presets.size])
+                when {
+                    listIndex < presets.size -> runPreset(presets[listIndex])
+                    listIndex < presets.size + cps.size -> runCheckpoint(cps[listIndex - presets.size])
+                    else -> runFeature(features[listIndex - presets.size - cps.size])
+                }
             }
             return
         }
@@ -2103,7 +2131,8 @@ class OracleUi internal constructor(
                 TAB_PRESETS -> {
                     val presetData = host.presetData()
                     val data = host.checkpointData()
-                    if (presetData.presets.isEmpty() && data.checkpoints.isEmpty()) {
+                    val features = host.featureStates()
+                    if (presetData.presets.isEmpty() && data.checkpoints.isEmpty() && features.isEmpty()) {
                         Txt(presetData.error ?: data.error ?: "No presets available.", 13.sp, Pal.DIM)
                     } else {
                         val base = presetData.presets.size
@@ -2123,6 +2152,15 @@ class OracleUi internal constructor(
                                     if (cp.kind == Progression.Kind.AREA) "area" else "door",
                                     inPanel && (base + i) == listIndex,
                                     lead = "${cp.beat}",
+                                )
+                            }
+                            itemsIndexed(features) { i, jump ->
+                                ListRow(
+                                    jump.label,
+                                    "savestate",
+                                    inPanel && (base + data.checkpoints.size + i) == listIndex,
+                                    lead = "MSS",
+                                    tagColor = Pal.TEAL,
                                 )
                             }
                         }

@@ -111,11 +111,16 @@ android {
     }
 }
 
-def oracleDebugDir = rootProject.file("../../oracle-of-secrets/Data/debug")
+def oracleDebugCandidates = [
+        rootProject.file("../../oracle-of-secrets/Data/debug"),
+        rootProject.file("../../../oracle-of-secrets/Data/debug"),
+        new File(System.getProperty("user.home"), "src/hobby/oracle-of-secrets/Data/debug"),
+]
+def oracleDebugDir = oracleDebugCandidates.find { it.isDirectory() } ?: oracleDebugCandidates[0]
 tasks.register("syncOracleData", Copy) {
     onlyIf { oracleDebugDir.isDirectory() }
     from(oracleDebugDir) {
-        include "checkpoints.json", "warps.json"
+        include "checkpoints.json", "warps.json", "save_state_library.json"
     }
     into file("src/main/assets/oracle")
 }

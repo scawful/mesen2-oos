@@ -44,6 +44,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -107,7 +108,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private StatusManifest mStatusManifest;
     private StatusWriter mStatusWriter;
     private CheckpointData mCheckpointData;
+    private PlaySession.Jump mLastJump;
     private PresetData mPresetData;
+    private List<PlaySession.Jump> mFeatureStates = Collections.emptyList();
     private OracleUi mUi;
     private ComposeView mUiView;
     private ComposeHost mComposeHost;
@@ -241,6 +244,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                 readAssetText(PresetData.PRESETS_ASSET),
                 mCheckpointData,
                 warpsJson);
+        mFeatureStates = PlaySession.savestateJumps(
+                readAssetText("oracle/save_state_library.json"));
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         mKeepHud = prefs.getBoolean(PREF_HUD, false);
         mFillScreen = prefs.getBoolean(PREF_FIT, false);
@@ -850,7 +855,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                             return currentRomPath();
                         }
                     },
-                    System.currentTimeMillis());
+                    System.currentTimeMillis(),
+                    mLastJump);
             return res.message;
         }
     }
@@ -909,6 +915,23 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     @Override
+    public List<PlaySession.Jump> featureStates() {
+        return mFeatureStates;
+    }
+
+    @Override
+    public boolean loadFeatureState(String statePath) {
+        if (!mNativeReady || mDestroyed) return false;
+        File file = PlaySession.resolveStateFile(oracleLibraryRoot(), statePath);
+        return file != null && file.isFile() && MesenNative.loadStateFile(file.getAbsolutePath());
+    }
+
+    private File oracleLibraryRoot() {
+        File external = getExternalFilesDir(null);
+        return new File(external != null ? external : getFilesDir(), "OracleLibrary");
+    }
+
+    @Override
     public TestingTools testingTools() {
         return mTestingTools;
     }
@@ -940,8 +963,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     public boolean loadCaptureState(File stateFile) {
-        return mNativeReady && !mDestroyed && stateFile != null
+        boolean loaded = mNativeReady && !mDestroyed && stateFile != null
                 && MesenNative.loadStateFile(stateFile.getAbsolutePath());
+        if (loaded) {
+            mLastJump = new PlaySession.Jump("savestate:" + stateFile.getName(), stateFile.getName(),
+                    "savestate", stateFile.getName(), "", stateFile.getName(), "", "");
+        }
+        return loaded;
     }
 
     @Override
@@ -1149,7 +1177,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (mCheckpointData == null) {
             return;
         }
-        runProgression(mCheckpointData.find(id));
+        Progression.Checkpoint target = mCheckpointData.find(id);
+        if (target != null) {
+            mLastJump = new PlaySession.Jump("checkpoint:" + target.id, target.id, "checkpoint",
+                    target.label, "", "", target.id, "");
+        }
+        runProgression(target);
     }
 
     @Override
@@ -1169,6 +1202,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (target == null) {
             return;
         }
+        String kind = target.kind == Progression.Kind.AREA ? "warp-area" : "warp-entrance";
+        String warpId = String.format(Locale.ROOT, "0x%02X", target.target & 0xFF);
+        mLastJump = new PlaySession.Jump(kind + ":" + warpId, warpId, kind, target.label, "", "", "", warpId);
         runBlockingAction("Warping to " + target.label + "…",
                 () -> Progression.warpOnly(target, Progression.LIVE));
     }

@@ -61,16 +61,19 @@ public final class MediaCapture {
         public final File stateFile;
         public final File replayFile;
         public final File reportFile;
+        public final File feedbackFile;
         public final String message;
 
         private BugSnapshotResult(boolean ok, File bundleDir, File screenshotFile,
-                                  File stateFile, File replayFile, File reportFile, String message) {
+                                  File stateFile, File replayFile, File reportFile,
+                                  File feedbackFile, String message) {
             this.ok = ok;
             this.bundleDir = bundleDir;
             this.screenshotFile = screenshotFile;
             this.stateFile = stateFile;
             this.replayFile = replayFile;
             this.reportFile = reportFile;
+            this.feedbackFile = feedbackFile;
             this.message = message;
         }
     }
@@ -196,12 +199,19 @@ public final class MediaCapture {
     public static BugSnapshotResult writeBugSnapshot(File reportsDir, String romName,
                                                      String category, String note,
                                                      SnapshotHooks hooks, long epochMs) {
+        return writeBugSnapshot(reportsDir, romName, category, note, hooks, epochMs, null);
+    }
+
+    public static BugSnapshotResult writeBugSnapshot(File reportsDir, String romName,
+                                                     String category, String note,
+                                                     SnapshotHooks hooks, long epochMs,
+                                                     PlaySession.Jump jump) {
         if (reportsDir == null || hooks == null) {
-            return new BugSnapshotResult(false, null, null, null, null, null, "Capture hooks unavailable");
+            return new BugSnapshotResult(false, null, null, null, null, null, null, "Capture hooks unavailable");
         }
         File bundleDir = nextBundleDir(reportsDir, romName, epochMs);
         if (!bundleDir.mkdirs() && !bundleDir.isDirectory()) {
-            return new BugSnapshotResult(false, null, null, null, null, null,
+            return new BugSnapshotResult(false, null, null, null, null, null, null,
                     "Failed to create bug bundle folder: " + bundleDir.getAbsolutePath());
         }
 
@@ -317,7 +327,7 @@ public final class MediaCapture {
         json.append("}\n");
 
         if (!pngOk && !stateOk && !replayOk && mode < 0 && status.isEmpty()) {
-            return new BugSnapshotResult(false, bundleDir, null, null, null, null,
+            return new BugSnapshotResult(false, bundleDir, null, null, null, null, null,
                     "No emulator state or capture available to snapshot");
         }
 
@@ -325,17 +335,30 @@ public final class MediaCapture {
             writeUtf8(reportFile, json.toString());
         } catch (IOException e) {
             return new BugSnapshotResult(false, bundleDir, pngOk ? pngFile : null,
-                    stateOk ? stateFile : null, replayOk ? replayFile : null, null,
+                    stateOk ? stateFile : null, replayOk ? replayFile : null, null, null,
                     "Failed to write report.json: " + e.getMessage());
         }
 
+        File feedbackFile = null;
+        String feedbackNote = "";
+        String noteText = note != null ? note.trim() : "";
+        String comment = (category != null && !category.isEmpty() ? category : MediaCapture.BUG_CATEGORIES[0])
+                + (noteText.isEmpty() ? "" : ": " + noteText);
+        try {
+            PlaySession.appendFeedback(reportsDir, "needs_changes", "bug", comment,
+                    PlaySession.SOURCE_ANDROID, jump);
+            feedbackFile = PlaySession.feedbackFile(reportsDir);
+        } catch (Exception e) {
+            feedbackNote = " feedback=" + e.getMessage();
+        }
+
         String summary = replayOk
-                ? String.format(Locale.US, "Saved %s (png=%s state=%s + replay.mp4)",
-                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no")
-                : String.format(Locale.US, "Saved %s (png=%s state=%s)",
-                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no");
+                ? String.format(Locale.US, "Saved %s (png=%s state=%s + replay.mp4)%s",
+                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no", feedbackNote)
+                : String.format(Locale.US, "Saved %s (png=%s state=%s)%s",
+                        bundleDir.getName(), pngOk ? "ok" : "no", stateOk ? "ok" : "no", feedbackNote);
         return new BugSnapshotResult(true, bundleDir, pngOk ? pngFile : null,
-                stateOk ? stateFile : null, replayOk ? replayFile : null, reportFile, summary);
+                stateOk ? stateFile : null, replayOk ? replayFile : null, reportFile, feedbackFile, summary);
     }
 
     public static List<CaptureItem> listRecent(File capturesRoot, int limit) {
