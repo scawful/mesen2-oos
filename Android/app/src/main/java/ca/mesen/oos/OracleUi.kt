@@ -190,6 +190,10 @@ class OracleUi internal constructor(
         fun readWramByte(address: Int): Int = -1
         fun writeWramByte(address: Int, value: Int): Boolean = false
         fun syncWramToSram(): Boolean = false
+        fun isStudySessionActive(): Boolean = false
+        fun studySessionSummary(): String = ""
+        fun toggleStudySession(): String = "Study Session unavailable"
+        fun addStudyBookmark(tag: String): String = "No active Study Session"
     }
 
     private val hostMemory = object : Inventory.Memory {
@@ -2023,6 +2027,44 @@ class OracleUi internal constructor(
         }
     }
 
+    private fun triggerStudySessionToggle() {
+        if (!host.nativeReady()) {
+            status = "Emulator starting…"
+            return
+        }
+        val gen = capturesGen.incrementAndGet()
+        var msg = ""
+        var loaded: List<MediaCapture.CaptureItem>? = null
+        work("Updating Study Session…", {
+            msg = host.toggleStudySession()
+            loaded = host.recentCaptures()
+            null
+        }) { problem ->
+            val items = loaded
+            if (items != null && gen == capturesGen.get()) {
+                captures = items
+                loadingCaptures = false
+            }
+            captureTick++
+            status = problem ?: msg
+        }
+    }
+
+    private fun triggerStudyBookmark(tag: String) {
+        if (!host.nativeReady()) {
+            status = "Emulator starting…"
+            return
+        }
+        var msg = ""
+        work("Saving bookmark…", {
+            msg = host.addStudyBookmark(tag)
+            null
+        }) { problem ->
+            captureTick++
+            status = problem ?: msg
+        }
+    }
+
     private fun triggerBugSnapshot() {
         if (!host.nativeReady()) {
             status = "Emulator starting…"
@@ -2067,11 +2109,25 @@ class OracleUi internal constructor(
         val recent = captures
         val cols = captureCols.coerceAtLeast(1)
         when (captureSection) {
-            0 -> { // Row 0: Screenshot(0), 20s Replay(1), MP4 Rec(2)
+            0 -> { // Study Session row (menu-only): Start/Stop(0), Mark Moment(1), Mark Bug(2)
                 when (key) {
                     Key.LEFT -> if (captureCol == 0) inPanel = false else captureCol--
                     Key.RIGHT -> if (captureCol < 2) captureCol++
-                    Key.DOWN -> { captureSection = 1; captureCol = captureCol.coerceIn(0, 3) }
+                    Key.DOWN -> { captureSection = 1; captureCol = captureCol.coerceIn(0, 2) }
+                    Key.A -> when (captureCol) {
+                        0 -> triggerStudySessionToggle()
+                        1 -> triggerStudyBookmark("moment")
+                        2 -> triggerStudyBookmark("bug")
+                    }
+                    else -> {}
+                }
+            }
+            1 -> { // Row 0: Screenshot(0), 20s Replay(1), MP4 Rec(2)
+                when (key) {
+                    Key.LEFT -> if (captureCol == 0) inPanel = false else captureCol--
+                    Key.RIGHT -> if (captureCol < 2) captureCol++
+                    Key.UP -> { captureSection = 0; captureCol = captureCol.coerceIn(0, 2) }
+                    Key.DOWN -> { captureSection = 2; captureCol = captureCol.coerceIn(0, 3) }
                     Key.A -> when (captureCol) {
                         0 -> triggerScreenshot()
                         1 -> triggerDumpReplay()
@@ -2080,11 +2136,11 @@ class OracleUi internal constructor(
                     else -> {}
                 }
             }
-            1 -> { // Row 1: Bug Snap(0), Cat(1), Replay Buf(2), Rec HUD(3)
+            2 -> { // Row 1: Bug Snap(0), Cat(1), Replay Buf(2), Rec HUD(3)
                 when (key) {
-                    Key.UP -> { captureSection = 0; captureCol = captureCol.coerceIn(0, 2) }
+                    Key.UP -> { captureSection = 1; captureCol = captureCol.coerceIn(0, 2) }
                     Key.DOWN -> if (recent.isNotEmpty()) {
-                        captureSection = 2
+                        captureSection = 3
                         captureGridIndex = captureGridIndex.coerceIn(0, recent.size - 1)
                     }
                     Key.LEFT -> if (captureCol == 0) inPanel = false else captureCol--
@@ -2115,7 +2171,7 @@ class OracleUi internal constructor(
             }
             else -> { // Recent visual thumbnail grid
                 if (recent.isEmpty()) {
-                    captureSection = 1
+                    captureSection = 2
                     return
                 }
                 val idx = captureGridIndex.coerceIn(0, recent.size - 1)
@@ -2126,7 +2182,7 @@ class OracleUi internal constructor(
                         if (idx >= cols) {
                             captureGridIndex = idx - cols
                         } else {
-                            captureSection = 1
+                            captureSection = 2
                             captureCol = (idx % 4).coerceIn(0, 3)
                         }
                     }
@@ -3167,6 +3223,8 @@ class OracleUi internal constructor(
     @Composable
     private fun CapturePanel() {
         @Suppress("UNUSED_VARIABLE") val tick = captureTick
+        val studyActive = host.isStudySessionActive()
+        val studySummary = host.studySessionSummary()
         val recording = host.isVideoRecording()
         val elapsed = host.videoRecordingElapsedSeconds()
         val replayOn = host.setting("replay")
@@ -3176,6 +3234,16 @@ class OracleUi internal constructor(
         val shortCat = category.substringBefore(" /").trim()
         val hudOn = host.setting("rec_hud")
 
+        val studyRow = listOf(
+            CheatCell(
+                if (studyActive) "Stop Study" else "Start Study",
+                if (studyActive) "ON" else "10m",
+                studyActive,
+                accentTone = true,
+            ) { triggerStudySessionToggle() },
+            CheatCell("Mark Moment", "Note", false) { triggerStudyBookmark("moment") },
+            CheatCell("Mark Bug", "Snap", false) { triggerStudyBookmark("bug") },
+        )
         val row0 = listOf(
             CheatCell("Screenshot", "PNG", false, accentTone = true) { triggerScreenshot() },
             CheatCell("20s Replay", if (replayActive) "${replaySecs}s" else "Off", replayActive && replaySecs > 0) {
@@ -3208,9 +3276,16 @@ class OracleUi internal constructor(
             },
         )
 
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Txt("STUDY SESSION (MENU-ONLY)", 9.5.sp, if (studyActive) Pal.ACCENT else Pal.STONE, bold = true)
+                Spacer(Modifier.weight(1f))
+                if (studyActive && studySummary.isNotEmpty()) {
+                    Txt(studySummary, 10.sp, Pal.ICE, bold = true)
+                }
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row0.forEachIndexed { col, cell ->
+                studyRow.forEachIndexed { col, cell ->
                     ChipTile(cell, inPanel && captureSection == 0 && captureCol == col, Modifier.weight(1f)) {
                         if (busy) return@ChipTile
                         inPanel = true
@@ -3220,12 +3295,23 @@ class OracleUi internal constructor(
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row1.forEachIndexed { col, cell ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row0.forEachIndexed { col, cell ->
                     ChipTile(cell, inPanel && captureSection == 1 && captureCol == col, Modifier.weight(1f)) {
                         if (busy) return@ChipTile
                         inPanel = true
                         captureSection = 1
+                        captureCol = col
+                        cell.onActivate()
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row1.forEachIndexed { col, cell ->
+                    ChipTile(cell, inPanel && captureSection == 2 && captureCol == col, Modifier.weight(1f)) {
+                        if (busy) return@ChipTile
+                        inPanel = true
+                        captureSection = 2
                         captureCol = col
                         cell.onActivate()
                     }
@@ -3252,7 +3338,7 @@ class OracleUi internal constructor(
                     val rows = captures.chunked(cols)
                     val gridState = rememberLazyListState()
                     LaunchedEffect(captureGridIndex, captureSection, cols, captures.size) {
-                        if (inPanel && captureSection == 2 && captures.isNotEmpty()) {
+                        if (inPanel && captureSection == 3 && captures.isNotEmpty()) {
                             val rIdx = captureGridIndex.coerceIn(0, captures.size - 1) / cols
                             gridState.animateScrollToItem(rIdx)
                         }
@@ -3268,12 +3354,12 @@ class OracleUi internal constructor(
                                         val globalIdx = rIdx * cols + col
                                         CaptureThumbCard(
                                             item = cap,
-                                            selected = inPanel && captureSection == 2 && globalIdx == captureGridIndex,
+                                            selected = inPanel && captureSection == 3 && globalIdx == captureGridIndex,
                                             modifier = Modifier.weight(1f),
                                         ) {
                                             if (busy) return@CaptureThumbCard
                                             inPanel = true
-                                            captureSection = 2
+                                            captureSection = 3
                                             captureGridIndex = globalIdx
                                             activateCaptureItem(cap)
                                         }

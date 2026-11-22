@@ -54,6 +54,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private static final String TAG = "MesenActivity";
@@ -159,6 +160,46 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     });
     private volatile long mVideoStartElapsedMs;
+    private volatile StudySessionRecorder mStudySession;
+    private volatile Double mLastObservedFps;
+    private volatile boolean mPausedState;
+    private final AtomicBoolean mStudyTickPending = new AtomicBoolean(false);
+    private final Runnable mStudyTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (mDestroyed) {
+                return;
+            }
+            StudySessionRecorder rec = mStudySession;
+            if (rec == null || !rec.isActive()) {
+                return;
+            }
+            final boolean pausedOrMenu = mUiVisible || mPausedState;
+            final Double fpsSnapshot = mLastObservedFps;
+            if (!mBgExecutor.isShutdown() && mStudyTickPending.compareAndSet(false, true)) {
+                mBgExecutor.execute(() -> {
+                    try {
+                        if (!mDestroyed) {
+                            synchronized (mCaptureLock) {
+                                StudySessionRecorder cur = mStudySession;
+                                if (cur != null && cur.isActive()) {
+                                    cur.tick(pausedOrMenu, fpsSnapshot);
+                                }
+                            }
+                            mHandler.post(() -> {
+                                if (!mDestroyed) {
+                                    updateRecBadgeUi(isVideoRecording());
+                                }
+                            });
+                        }
+                    } finally {
+                        mStudyTickPending.set(false);
+                    }
+                });
+            }
+            mHandler.postDelayed(this, 250L);
+        }
+    };
     private boolean mL2MenuKeyHeld;
     private boolean mL2MenuTriggerHeld;
     private boolean mL2MenuDown;
@@ -291,6 +332,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             sInstance = null;
         }
         clearCaptureHotkeys();
+        mHandler.removeCallbacks(mStudyTicker);
+        stopStudySessionIfActive("activity_destroy");
         stopRecordingIfActive(false);
         mHandler.removeCallbacksAndMessages(null);
         if (mStatusWriter != null) {
@@ -326,6 +369,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     @Override
     protected void onResume() {
         super.onResume();
+        mPausedState = false;
         keepVisibleScreenOn();
         applyImmersive();
         startNativeIfNeeded();
@@ -340,9 +384,11 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     protected void onPause() {
+        mPausedState = true;
         clearFastForward();
         clearCaptureHotkeys();
         clearMenuTriggerState();
+        flushStudySessionIfActive();
         if (mComposeHost != null) {
             mComposeHost.onPause();
         }
@@ -357,9 +403,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     protected void onStop() {
+        mPausedState = true;
         clearFastForward();
         clearCaptureHotkeys();
         clearMenuTriggerState();
+        mHandler.removeCallbacks(mStudyTicker);
+        stopStudySessionIfActive("activity_stop");
         stopRecordingIfActive(true);
         if (mNativeReady) {
             try {
@@ -830,6 +879,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return "Emulator is still starting";
         }
         synchronized (mCaptureLock) {
+            if (isStudySessionActiveLocked()) {
+                return "Study Session active — stop it from Capture menu first";
+            }
             if (MesenNative.isVideoRecording()) {
                 return stopRecordingLocked(true);
             }
@@ -845,6 +897,158 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                 }
             });
             return "Recording MP4: " + out.getName();
+        }
+    }
+
+    @Override
+    public boolean isStudySessionActive() {
+        StudySessionRecorder rec = mStudySession;
+        return mNativeReady && !mDestroyed && rec != null && rec.isActive();
+    }
+
+    @Override
+    public String studySessionSummary() {
+        StudySessionRecorder rec = mStudySession;
+        if (rec == null || !rec.isActive()) {
+            return "";
+        }
+        StudySessionRecorder.SessionStatus st = rec.status();
+        return String.format(Locale.US, "Seg #%d · %s · %d marks · %d anom",
+                st.segmentIndex, MediaCapture.formatDuration(st.elapsedSeconds),
+                st.bookmarkCount, st.anomalyCount);
+    }
+
+    @Override
+    public String toggleStudySession() {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            if (isStudySessionActiveLocked()) {
+                mHandler.removeCallbacks(mStudyTicker);
+                String msg = mStudySession.stop("manual");
+                mStudySession = null;
+                if (mReplayBufferEnabled && !MesenNative.isReplayBufferActive() && !mDestroyed) {
+                    MesenNative.startReplayBuffer(20, mRecordInputHud);
+                }
+                mHandler.post(() -> {
+                    if (!mDestroyed) {
+                        updateRecBadgeUi(isVideoRecording());
+                    }
+                });
+                return msg;
+            }
+            if (MesenNative.isVideoRecording()) {
+                stopRecordingLocked(true);
+            }
+            if (MesenNative.isReplayBufferActive()) {
+                MesenNative.stopReplayBuffer();
+            }
+            File sessionsRoot = StudySessionRecorder.sessionsDir(capturesDir());
+            StudySessionRecorder recorder = new StudySessionRecorder(sessionsRoot, new StudySessionRecorder.Hooks() {
+                @Override
+                public boolean startVideoSegment(File mp4File) {
+                    return MesenNative.startVideoRecording(mp4File.getAbsolutePath(), mRecordInputHud, false);
+                }
+
+                @Override
+                public boolean stopVideoSegment() {
+                    if (MesenNative.isVideoRecording()) {
+                        String path = MesenNative.videoRecordingPath();
+                        MesenNative.stopVideoRecording();
+                        if (path != null && !path.isEmpty()) {
+                            File out = new File(path);
+                            if (out.isFile() && out.length() > 0) {
+                                MediaGallery.publish(MesenActivity.this, out, true);
+                            }
+                        }
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean saveState(File stateFile) {
+                    return MesenNative.saveStateFile(stateFile.getAbsolutePath());
+                }
+
+                @Override
+                public boolean saveScreenshot(File pngFile) {
+                    return MesenNative.takeScreenshot(pngFile.getAbsolutePath());
+                }
+
+                @Override
+                public String statusJson(boolean detailed) {
+                    return MesenNative.statusJson(detailed);
+                }
+
+                @Override
+                public int readByte(int addr) {
+                    return MesenNative.readByte(addr);
+                }
+
+                @Override
+                public String romPath() {
+                    return currentRomPath();
+                }
+
+                @Override
+                public String romDisplayName() {
+                    return MesenActivity.this.romDisplayName();
+                }
+            });
+            String res = recorder.start();
+            if (!recorder.isActive()) {
+                return res;
+            }
+            mStudySession = recorder;
+            mHandler.removeCallbacks(mStudyTicker);
+            mHandler.postDelayed(mStudyTicker, 250L);
+            mHandler.post(() -> {
+                if (!mDestroyed) {
+                    updateRecBadgeUi(true);
+                }
+            });
+            return res;
+        }
+    }
+
+    @Override
+    public String addStudyBookmark(String tag) {
+        if (!mNativeReady || mDestroyed) {
+            return "Emulator is still starting";
+        }
+        synchronized (mCaptureLock) {
+            if (!isStudySessionActiveLocked()) {
+                return "Start Study Session first (menu-only)";
+            }
+            return mStudySession.addBookmark(tag, "");
+        }
+    }
+
+    private boolean isStudySessionActiveLocked() {
+        return mStudySession != null && mStudySession.isActive();
+    }
+
+    private void flushStudySessionIfActive() {
+        if (!mNativeReady) {
+            return;
+        }
+        synchronized (mCaptureLock) {
+            if (isStudySessionActiveLocked()) {
+                mStudySession.flush();
+            }
+        }
+    }
+
+    private void stopStudySessionIfActive(String reason) {
+        if (!mNativeReady) {
+            return;
+        }
+        synchronized (mCaptureLock) {
+            if (isStudySessionActiveLocked()) {
+                mStudySession.stop(reason);
+                mStudySession = null;
+            }
         }
     }
 
@@ -1122,6 +1326,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         if (!mNativeReady || mDestroyed) {
             return false;
         }
+        mHandler.removeCallbacks(mStudyTicker);
+        stopStudySessionIfActive("rom_switch");
         stopRecordingIfActive(true);
         BatterySaveSeed.Status seeded = seedBatterySave(path);
         if (seeded == BatterySaveSeed.Status.SEEDED) {
@@ -1547,6 +1753,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             Double observedFps = mFrameRateTracker.sample(
                     rom, json.optLong("frames", -1), paused,
                     SystemClock.elapsedRealtime());
+            mLastObservedFps = observedFps;
+            mPausedState = paused;
             Double presentFps = mPresentRateTracker.sample(
                     rom, json.optLong("renderPresents", -1), paused,
                     SystemClock.elapsedRealtime());
@@ -1798,6 +2006,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             return;
         }
         synchronized (mCaptureLock) {
+            if (isStudySessionActiveLocked()) {
+                return;
+            }
             if (mReplayBufferEnabled) {
                 if (!MesenNative.isVideoRecording() && !MesenNative.isReplayBufferActive()) {
                     MesenNative.startReplayBuffer(20, mRecordInputHud);
@@ -1814,6 +2025,21 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     private void updateRecBadgeUi(boolean recording) {
+        StudySessionRecorder rec = mStudySession;
+        if (rec != null && rec.isActive()) {
+            if (mRecBadge != null) {
+                if (mUiVisible) {
+                    mRecBadge.setVisibility(View.GONE);
+                } else {
+                    StudySessionRecorder.SessionStatus st = rec.status();
+                    mRecBadge.setText("\u25CF STUDY " + MediaCapture.formatDuration(st.elapsedSeconds)
+                            + " \u00B7 S#" + st.segmentIndex);
+                    mRecBadge.setVisibility(View.VISIBLE);
+                    mRecBadge.bringToFront();
+                }
+            }
+            return;
+        }
         if (!recording) {
             mVideoStartElapsedMs = 0L;
             if (mRecBadge != null) {

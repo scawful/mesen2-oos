@@ -28,6 +28,8 @@ class OracleUiAsyncTest {
         var bootCalls = ArrayList<String>()
         var loadedStates = ArrayList<String>()
         var recordingActive = false
+        var studySessionActive = false
+        val studyBookmarks = ArrayList<String>()
         var replayActive = false
         var overlayMask = 0
         var steppedFrames = 0
@@ -153,6 +155,18 @@ class OracleUiAsyncTest {
         override fun readWramByte(address: Int): Int = fakeMemory.readByte(address)
         override fun writeWramByte(address: Int, value: Int): Boolean = fakeMemory.writeByte(address, value)
         override fun syncWramToSram(): Boolean = fakeMemory.syncSram()
+        override fun isStudySessionActive(): Boolean = studySessionActive
+        override fun studySessionSummary(): String =
+            if (studySessionActive) "Seg #1 · 00:12 · ${studyBookmarks.size} marks · 0 anom" else ""
+        override fun toggleStudySession(): String {
+            studySessionActive = !studySessionActive
+            return if (studySessionActive) "Study Session started: test_session" else "Saved Study Session (1 segs, ${studyBookmarks.size} marks, 0 anomalies)"
+        }
+        override fun addStudyBookmark(tag: String): String {
+            if (!studySessionActive) return "Start Study Session first (menu-only)"
+            studyBookmarks.add(tag)
+            return "Bookmarked $tag @ seg #1 00:12"
+        }
     }
 
     private fun pump(queue: ConcurrentLinkedQueue<Runnable>, timeoutMs: Long = 3000, until: () -> Boolean) {
@@ -294,7 +308,20 @@ class OracleUiAsyncTest {
         repeat(RailItem.CAPTURE.ordinal) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
 
-        // (0,0) = Screenshot
+        // Section 0 = Study Session row: (0,0)=Start Study, (0,1)=Mark Moment, (0,2)=Mark Bug.
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && host.studySessionActive && ui.currentStatus.contains("Study Session started") }
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // Mark Moment
+        pump(mainQueue) { !ui.isBusy && host.studyBookmarks == listOf("moment") }
+        ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // Mark Bug
+        pump(mainQueue) { !ui.isBusy && host.studyBookmarks == listOf("moment", "bug") }
+
+        // Move down to Section 1 (0,0 left col -> Screenshot), then right to 20s Replay.
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         val t0 = System.nanoTime()
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0)
@@ -306,17 +333,23 @@ class OracleUiAsyncTest {
         assertEquals(1, ui.currentCaptures.size)
         assertEquals("oracle_test.png", ui.currentCaptures[0].name)
 
-        // Move right to (0,1) = 20s Replay
+        // Move right to Section 1 col 1 = 20s Replay
         ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("replay_test.mp4") }
 
-        // Move down to row 1: Cat(1,1) -> cycle category, then left to Bug Snap(1,0) -> save.
+        // Move down to Section 2: Cat(col 1) -> cycle category, then left to Bug Snap(col 0) -> save.
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0) // cycles from Softlock -> Warp / Transition
         ui.onKey(KeyEvent.KEYCODE_DPAD_LEFT, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && ui.currentStatus.contains("Warp / Transition") }
+
+        // Stop Study Session via menu navigation back up to Section 0 col 0
+        ui.onKey(KeyEvent.KEYCODE_DPAD_UP, 0)
+        ui.onKey(KeyEvent.KEYCODE_DPAD_UP, 0)
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) { !ui.isBusy && !host.studySessionActive && ui.currentStatus.contains("Saved Study Session") }
     }
 
     @Test

@@ -157,12 +157,12 @@ public final class MediaCapture {
         return out;
     }
 
-    private static String timestamp(long epochMs) {
+    static String timestamp(long epochMs) {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US);
         return fmt.format(new Date(epochMs));
     }
 
-    private static String isoTimestamp(long epochMs) {
+    static String isoTimestamp(long epochMs) {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
         fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
         return fmt.format(new Date(epochMs));
@@ -445,7 +445,7 @@ public final class MediaCapture {
         return String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
-    private static Map<String, Object> parseObjectSafe(String json) {
+    static Map<String, Object> parseObjectSafe(String json) {
         if (json == null || json.trim().isEmpty()) return Collections.emptyMap();
         try {
             return MiniJson.object(MiniJson.parse(json));
@@ -454,19 +454,19 @@ public final class MediaCapture {
         }
     }
 
-    private static int intField(Map<String, Object> map, String key, int fallback) {
+    static int intField(Map<String, Object> map, String key, int fallback) {
         Object v = map.get(key);
         if (v instanceof Number) return ((Number) v).intValue();
         return fallback;
     }
 
-    private static long longField(Map<String, Object> map, String key, long fallback) {
+    static long longField(Map<String, Object> map, String key, long fallback) {
         Object v = map.get(key);
         if (v instanceof Number) return ((Number) v).longValue();
         return fallback;
     }
 
-    private static boolean boolField(Map<String, Object> map, String key, boolean fallback) {
+    static boolean boolField(Map<String, Object> map, String key, boolean fallback) {
         Object v = map.get(key);
         if (v instanceof Boolean) return (Boolean) v;
         return fallback;
@@ -478,19 +478,19 @@ public final class MediaCapture {
         return (lo >= 0 && hi >= 0) ? (lo | (hi << 8)) : -1;
     }
 
-    private static int combineByteWord(int lo, int hi) {
+    static int combineByteWord(int lo, int hi) {
         return (lo >= 0 && hi >= 0) ? (lo | (hi << 8)) : -1;
     }
 
-    private static String hex2(int value) {
+    static String hex2(int value) {
         return value < 0 ? "null" : String.format(Locale.US, "$%02X", value & 0xFF);
     }
 
-    private static String hex4(int value) {
+    static String hex4(int value) {
         return value < 0 ? "null" : String.format(Locale.US, "$%04X", value & 0xFFFF);
     }
 
-    private static String jsonQuote(String s) {
+    static String jsonQuote(String s) {
         if (s == null) return "null";
         StringBuilder out = new StringBuilder(s.length() + 4);
         out.append('"');
@@ -515,7 +515,7 @@ public final class MediaCapture {
         return out.toString();
     }
 
-    private static void writeUtf8(File target, String content) throws IOException {
+    static void writeUtf8(File target, String content) throws IOException {
         File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
         try (FileOutputStream fos = new FileOutputStream(tmp)) {
             fos.write(content.getBytes(StandardCharsets.UTF_8));
