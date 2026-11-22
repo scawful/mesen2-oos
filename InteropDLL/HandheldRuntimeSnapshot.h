@@ -10,6 +10,9 @@ struct HandheldRuntimeSnapshot
 	int32_t Indoor = -1;
 	int32_t Area = -1;
 	int32_t Room = -1;
+	int32_t SavedWorld = -1;
+	int32_t SnesFrame = -1;
+	int32_t SnesLagFlag = -1;
 	int32_t LinkX = -1;
 	int32_t LinkY = -1;
 	int32_t LinkLayer = -1;

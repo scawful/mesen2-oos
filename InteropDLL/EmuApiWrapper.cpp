@@ -482,6 +482,7 @@ extern "C" {
 		// Fast-forward keeps audio: SoundMixer resamples turbo output by the
 		// measured speed (pitched up) instead of muting it.
 		audio.ReduceSoundInFastForward = false;
+		audio.AudioLatency = 45;
 		_emu->GetSettings()->SetAudioConfig(audio);
 
 		// TurboSpeed is owned by the Android host (R2 / sticky FF preference).
@@ -776,7 +777,10 @@ extern "C" {
 		snapshot.Submode = readByte(0x0011);
 		snapshot.Indoor = readByte(0x001B);
 		snapshot.Area = readByte(0x008A);
-		snapshot.Room = readByte(0x00A0);
+		snapshot.Room = readWord(0x00A0);
+		snapshot.SavedWorld = readByte(0xF3CA);
+		snapshot.SnesFrame = readByte(0x001A);
+		snapshot.SnesLagFlag = readByte(0x0012);
 		snapshot.LinkX = readWord(0x0022);
 		snapshot.LinkY = readWord(0x0020);
 		snapshot.LinkLayer = readByte(0x00EE);

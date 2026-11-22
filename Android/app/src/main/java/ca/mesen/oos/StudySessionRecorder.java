@@ -32,6 +32,7 @@ public final class StudySessionRecorder {
     public static final long STUCK_TRANSITION_MS = 5_000L;
     public static final int LOW_FPS_CONSECUTIVE_TICKS = 3;
     public static final double LOW_FPS_THRESHOLD = 45.0;
+    public static final int LAG_SPIKE_THRESHOLD = 4;
     public static final int MAX_AUTO_ANCHORS = 24;
 
     public interface Hooks {
@@ -202,10 +203,22 @@ public final class StudySessionRecorder {
         final int mask;
         final int state;
         final double fps;
+        final double presentFps;
         final String sha1;
+        final int snesFrame;
+        final int snesLagFlag;
+        final long emuFrames;
+        final long renderPresents;
+        final boolean paused;
+        final boolean fastForward;
+        final int snesLagFrames;
+        final int presentDrops;
 
         TelemetrySnapshot(int module, int sub, int indoors, int area, int room, int world,
-                          int x, int y, int hp, int mask, int state, double fps, String sha1) {
+                          int x, int y, int hp, int mask, int state, double fps, double presentFps,
+                          String sha1, int snesFrame, int snesLagFlag, long emuFrames,
+                          long renderPresents, boolean paused, boolean fastForward,
+                          int snesLagFrames, int presentDrops) {
             this.module = module;
             this.sub = sub;
             this.indoors = indoors;
@@ -218,7 +231,16 @@ public final class StudySessionRecorder {
             this.mask = mask;
             this.state = state;
             this.fps = fps;
+            this.presentFps = presentFps;
             this.sha1 = sha1;
+            this.snesFrame = snesFrame;
+            this.snesLagFlag = snesLagFlag;
+            this.emuFrames = emuFrames;
+            this.renderPresents = renderPresents;
+            this.paused = paused;
+            this.fastForward = fastForward;
+            this.snesLagFrames = snesLagFrames;
+            this.presentDrops = presentDrops;
         }
     }
 
@@ -277,6 +299,14 @@ public final class StudySessionRecorder {
     private boolean mPrevWasPlayable;
     private long mStuckTransitionMs;
     private int mLowFpsStreak;
+    private long mPrevEmuFrames = -1L;
+    private long mPrevRenderPresents = -1L;
+    private int mPrevSnesFrame = -1;
+    private long mTotalGameplayEmuFrames;
+    private long mTotalSnesLagFrames;
+    private long mTotalPresentDrops;
+    private int mMaxTickSnesLag;
+    private int mMaxTickPresentDrops;
     private TelemetrySnapshot mLatestSnapshot;
 
     public StudySessionRecorder(File sessionsRoot, Hooks hooks) {
@@ -391,9 +421,17 @@ public final class StudySessionRecorder {
         mPrevWasPlayable = false;
         mStuckTransitionMs = 0L;
         mLowFpsStreak = 0;
+        mPrevEmuFrames = -1L;
+        mPrevRenderPresents = -1L;
+        mPrevSnesFrame = -1;
+        mTotalGameplayEmuFrames = 0L;
+        mTotalSnesLagFrames = 0L;
+        mTotalPresentDrops = 0L;
+        mMaxTickSnesLag = 0;
+        mMaxTickPresentDrops = 0;
 
         mSegments.add(new SegmentRecord(1, seg1, 0L));
-        TelemetrySnapshot snap = readTelemetry(null);
+        TelemetrySnapshot snap = readTelemetry(null, null);
         mLatestSnapshot = snap;
         mRomSha1 = snap.sha1;
 
@@ -425,6 +463,10 @@ public final class StudySessionRecorder {
     }
 
     public synchronized void tick(boolean pausedOrMenuOpen, Double observedFps) {
+        tick(pausedOrMenuOpen, observedFps, null);
+    }
+
+    public synchronized void tick(boolean pausedOrMenuOpen, Double observedFps, Double presentFps) {
         if (!mActive) {
             return;
         }
@@ -435,6 +477,9 @@ public final class StudySessionRecorder {
         if (pausedOrMenuOpen) {
             mLowFpsStreak = 0;
             mStuckTransitionMs = 0L;
+            mPrevEmuFrames = -1L;
+            mPrevRenderPresents = -1L;
+            mPrevSnesFrame = -1;
             if (now - mLastFlushWallMs >= mFlushIntervalMs) {
                 flushTelemetryNow(now);
             }
@@ -449,7 +494,7 @@ public final class StudySessionRecorder {
             mSegmentActiveMs -= mSegmentDurationMs;
         }
 
-        TelemetrySnapshot snap = readTelemetry(observedFps);
+        TelemetrySnapshot snap = readTelemetry(observedFps, presentFps);
         mLatestSnapshot = snap;
         if (mRomSha1.isEmpty() && !snap.sha1.isEmpty()) {
             mRomSha1 = snap.sha1;
@@ -502,6 +547,9 @@ public final class StudySessionRecorder {
         mPrevRoom = snap.room;
         mPrevWorld = snap.world;
         mPrevWasPlayable = (snap.module == 0x07 || snap.module == 0x09);
+        mPrevEmuFrames = snap.emuFrames;
+        mPrevRenderPresents = snap.renderPresents;
+        mPrevSnesFrame = snap.snesFrame;
 
         if (now - mLastFlushWallMs >= mFlushIntervalMs) {
             flushTelemetryNow(now);
@@ -513,7 +561,7 @@ public final class StudySessionRecorder {
             return "No active Study Session";
         }
         long now = mHooks.nowMs();
-        TelemetrySnapshot snap = mLatestSnapshot != null ? mLatestSnapshot : readTelemetry(null);
+        TelemetrySnapshot snap = mLatestSnapshot != null ? mLatestSnapshot : readTelemetry(null, null);
         mBookmarkSeq++;
         String cleanTag = (tag == null || tag.trim().isEmpty()) ? "moment" : tag.trim();
         String prefix = String.format(Locale.US, "bm_%03d_%s", mBookmarkSeq, MediaCapture.slugify(cleanTag));
@@ -678,6 +726,14 @@ public final class StudySessionRecorder {
             anomalyKind = "low_fps";
             detail = String.format(Locale.US, "fps=%.1f (<%.0f for %d ticks)",
                     snap.fps, LOW_FPS_THRESHOLD, mLowFpsStreak);
+        } else if (snap.snesLagFrames >= LAG_SPIKE_THRESHOLD) {
+            anomalyKind = "snes_lag_spike";
+            detail = String.format(Locale.US, "snes_lag=%df (mod=$%02X area=$%02X rm=$%04X)",
+                    snap.snesLagFrames, snap.module, snap.area, snap.room);
+        } else if (snap.presentDrops >= LAG_SPIKE_THRESHOLD && snap.snesLagFrames == 0) {
+            anomalyKind = "emu_present_drop";
+            detail = String.format(Locale.US, "present_drops=%df (presentFps=%.1f mod=$%02X)",
+                    snap.presentDrops, snap.presentFps, snap.module);
         }
 
         if (anomalyKind == null) {
@@ -706,33 +762,71 @@ public final class StudySessionRecorder {
         writeSessionJsonSafe(now);
     }
 
-    private TelemetrySnapshot readTelemetry(Double observedFps) {
+    private TelemetrySnapshot readTelemetry(Double observedFps, Double presentFpsOverride) {
         Map<String, Object> status = MediaCapture.parseObjectSafe(mHooks.statusJson(false));
-        int module = readByteOrStatus(0x7E0010, status, "mode");
-        int sub = readByteOrStatus(0x7E0011, status, "sub");
-        int indoors = readByteOrStatus(0x7E001B, status, "indoor");
-        int area = readByteOrStatus(0x7E008A, status, "area");
-        int roomLo = mHooks.readByte(0x7E00A0);
-        int roomHi = mHooks.readByte(0x7E00A1);
-        int room = (roomLo >= 0 && roomHi >= 0) ? (roomLo | (roomHi << 8)) : MediaCapture.intField(status, "room", -1);
-        int world = mHooks.readByte(0x7EF3CA);
-        int xLo = mHooks.readByte(0x7E0022);
-        int xHi = mHooks.readByte(0x7E0023);
-        int x = (xLo >= 0 && xHi >= 0) ? (xLo | (xHi << 8)) : MediaCapture.intField(status, "linkX", -1);
-        int yLo = mHooks.readByte(0x7E0020);
-        int yHi = mHooks.readByte(0x7E0021);
-        int y = (yLo >= 0 && yHi >= 0) ? (yLo | (yHi << 8)) : MediaCapture.intField(status, "linkY", -1);
-        int hp = readByteOrStatus(Inventory.HEALTH_CURRENT, status, "health");
-        int mask = readByteOrStatus(0x7E02B2, status, "linkForm");
-        int state = readByteOrStatus(0x7E005D, status, "linkState");
+        int module = readByteWithStatus(status, "mode", 0x7E0010);
+        int sub = readByteWithStatus(status, "sub", 0x7E0011);
+        int indoors = readByteWithStatus(status, "indoor", 0x7E001B);
+        int area = readByteWithStatus(status, "area", 0x7E008A);
+        int room = readWordWithStatus(status, "room", 0x7E00A0, 0x7E00A1);
+        int world = readByteWithStatus(status, "savedWorld", 0x7EF3CA);
+        int x = readWordWithStatus(status, "linkX", 0x7E0022, 0x7E0023);
+        int y = readWordWithStatus(status, "linkY", 0x7E0020, 0x7E0021);
+        int hp = readByteWithStatus(status, "health", Inventory.HEALTH_CURRENT);
+        int mask = readByteWithStatus(status, "linkForm", 0x7E02B2);
+        int state = readByteWithStatus(status, "linkState", 0x7E005D);
         double fps = observedFps != null ? observedFps : doubleField(status, "observedFps", -1.0);
+        double presentFps = presentFpsOverride != null ? presentFpsOverride : doubleField(status, "presentFps", -1.0);
         String sha1 = MiniJson.string(status.get("sha1"), "");
-        return new TelemetrySnapshot(module, sub, indoors, area, room, world, x, y, hp, mask, state, fps, sha1);
+        int snesFrame = MediaCapture.intField(status, "snesFrame", -1);
+        int snesLagFlag = MediaCapture.intField(status, "snesLagFlag", -1);
+        long emuFrames = MediaCapture.longField(status, "frames", -1L);
+        long renderPresents = MediaCapture.longField(status, "renderPresents", -1L);
+        boolean paused = MediaCapture.boolField(status, "paused", false);
+        boolean fastForward = MediaCapture.boolField(status, "fastForward", false);
+
+        int snesLag = 0;
+        int presentDrops = 0;
+        if (mPrevEmuFrames >= 0L && emuFrames > mPrevEmuFrames) {
+            long dEmu = emuFrames - mPrevEmuFrames;
+            if (!fastForward && !paused && dEmu >= 1L && dEmu <= 60L) {
+                if (mPrevRenderPresents >= 0L && renderPresents >= mPrevRenderPresents) {
+                    long dPresents = renderPresents - mPrevRenderPresents;
+                    presentDrops = (int) Math.max(0L, dEmu - dPresents);
+                }
+                boolean gameplayMod = (module == 0x07 || module == 0x09 || module == 0x0B) && sub == 0;
+                if (gameplayMod && mPrevSnesFrame >= 0 && snesFrame >= 0) {
+                    int dSnes = (snesFrame - mPrevSnesFrame) & 0xFF;
+                    snesLag = (int) Math.max(0L, dEmu - dSnes);
+                }
+                mTotalGameplayEmuFrames += dEmu;
+                mTotalSnesLagFrames += snesLag;
+                mTotalPresentDrops += presentDrops;
+                if (snesLag > mMaxTickSnesLag) {
+                    mMaxTickSnesLag = snesLag;
+                }
+                if (presentDrops > mMaxTickPresentDrops) {
+                    mMaxTickPresentDrops = presentDrops;
+                }
+            }
+        }
+        return new TelemetrySnapshot(
+                module, sub, indoors, area, room, world, x, y, hp, mask, state,
+                fps, presentFps, sha1, snesFrame, snesLagFlag, emuFrames,
+                renderPresents, paused, fastForward, snesLag, presentDrops);
     }
 
-    private int readByteOrStatus(int addr, Map<String, Object> status, String statusKey) {
-        int val = mHooks.readByte(addr);
-        return val >= 0 ? val : MediaCapture.intField(status, statusKey, -1);
+    private int readByteWithStatus(Map<String, Object> status, String statusKey, int addr) {
+        int val = MediaCapture.intField(status, statusKey, -1);
+        return val >= 0 ? val : mHooks.readByte(addr);
+    }
+
+    private int readWordWithStatus(Map<String, Object> status, String statusKey, int loAddr, int hiAddr) {
+        int val = MediaCapture.intField(status, statusKey, -1);
+        if (val >= 0) {
+            return val;
+        }
+        return MediaCapture.combineByteWord(mHooks.readByte(loAddr), mHooks.readByte(hiAddr));
     }
 
     private static double doubleField(Map<String, Object> map, String key, double fallback) {
@@ -743,7 +837,7 @@ public final class StudySessionRecorder {
 
     private String formatSampleJson(String eventType, long tsMs, long sessionSec, int seg,
                                     long segSec, TelemetrySnapshot s, String anomalyKind, String detail) {
-        StringBuilder sb = new StringBuilder(220);
+        StringBuilder sb = new StringBuilder(280);
         sb.append("{\"event\":").append(MediaCapture.jsonQuote(eventType));
         sb.append(",\"ts_ms\":").append(tsMs);
         sb.append(",\"session_sec\":").append(sessionSec);
@@ -761,6 +855,10 @@ public final class StudySessionRecorder {
         sb.append(",\"mask\":").append(s.mask);
         sb.append(",\"state\":").append(s.state);
         sb.append(",\"fps\":").append(s.fps > 0.0 ? String.format(Locale.US, "%.1f", s.fps) : "null");
+        sb.append(",\"present_fps\":").append(s.presentFps > 0.0 ? String.format(Locale.US, "%.1f", s.presentFps) : "null");
+        sb.append(",\"emu_frames\":").append(s.emuFrames);
+        sb.append(",\"snes_lag_frames\":").append(s.snesLagFrames);
+        sb.append(",\"present_drops\":").append(s.presentDrops);
         if (anomalyKind != null) {
             sb.append(",\"kind\":").append(MediaCapture.jsonQuote(anomalyKind));
         }
@@ -865,6 +963,13 @@ public final class StudySessionRecorder {
         json.append("    \"totalAnchorsCaptured\": ").append(mAnchorSeq).append(",\n");
         json.append("    \"bookmarks\": ").append(mBookmarks.size()).append(",\n");
         json.append("    \"anomalies\": ").append(mAnomalies.size()).append("\n");
+        json.append("  },\n");
+        json.append("  \"lagSummary\": {\n");
+        json.append("    \"gameplayEmuFrames\": ").append(mTotalGameplayEmuFrames).append(",\n");
+        json.append("    \"snesLagFrames\": ").append(mTotalSnesLagFrames).append(",\n");
+        json.append("    \"presentDrops\": ").append(mTotalPresentDrops).append(",\n");
+        json.append("    \"maxTickSnesLag\": ").append(mMaxTickSnesLag).append(",\n");
+        json.append("    \"maxTickPresentDrops\": ").append(mMaxTickPresentDrops).append("\n");
         json.append("  },\n");
         json.append("  \"segments\": [\n");
         for (int i = 0; i < mSegments.size(); i++) {

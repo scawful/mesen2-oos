@@ -46,8 +46,8 @@ android {
         targetSdk 30
         // Shipping = PGO optimize (must outrank generate + non-PGO handheld).
         // generate is lower so train installs can replace shipping with -d.
-        versionCode pgoMode == "optimize" ? 1942 : (pgoMode == "generate" ? 1941 : 1940)
-        versionName pgoMode == "optimize" ? "0.1.54-pgo" : (pgoMode == "generate" ? "0.1.54-pgo-gen" : "0.1.54")
+        versionCode pgoMode == "optimize" ? 1952 : (pgoMode == "generate" ? 1951 : 1950)
+        versionName pgoMode == "optimize" ? "0.1.55-pgo" : (pgoMode == "generate" ? "0.1.55-pgo-gen" : "0.1.55")
         ndk {
             abiFilters 'arm64-v8a'
         }

@@ -696,9 +696,9 @@ extern "C" int SDL_main(int argc, char* argv[])
 				}
 			}
 		}
-		// New pixels wake this wait immediately. Keep the timeout short when a
-		// frame is already queued so we do not add multi-ms lag per present.
-		const int waitMs = g_frames.HasNewerThan(frame.Generation) ? 0 : 2;
+		// New pixels wake this wait immediately. Keep a modest 8 ms idle poll
+		// so SDL_WaitEventTimeout avoids unnecessary thread wake churn.
+		const int waitMs = g_frames.HasNewerThan(frame.Generation) ? 0 : 8;
 		if(SDL_WaitEventTimeout(&event, waitMs)) {
 			handleEvent(event);
 		}
@@ -1023,6 +1023,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_ca_mesen_oos_MesenNative_statusJson(
 		+ ",\"indoor\":" + std::to_string(runtime.Indoor)
 		+ ",\"area\":" + std::to_string(runtime.Area)
 		+ ",\"room\":" + std::to_string(runtime.Room)
+		+ ",\"savedWorld\":" + std::to_string(runtime.SavedWorld)
+		+ ",\"snesFrame\":" + std::to_string(runtime.SnesFrame)
+		+ ",\"snesLagFlag\":" + std::to_string(runtime.SnesLagFlag)
 		+ ",\"linkX\":" + std::to_string(runtime.LinkX)
 		+ ",\"linkY\":" + std::to_string(runtime.LinkY)
 		+ ",\"linkLayer\":" + std::to_string(runtime.LinkLayer)

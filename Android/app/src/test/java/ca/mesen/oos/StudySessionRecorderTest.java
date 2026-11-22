@@ -187,9 +187,128 @@ public class StudySessionRecorderTest {
         assertTrue(sessionJson.contains("\"cleanShutdown\": true"));
         assertTrue(sessionJson.contains("\"bookmarks\": 1"));
         assertTrue(sessionJson.contains("\"anomalies\": 2"));
+        assertTrue(sessionJson.contains("\"lagSummary\""));
         assertTrue(sessionJson.contains("video_seg_002.mp4"));
 
         String bookmarksJson = new String(Files.readAllBytes(new File(sessionDir, "bookmarks.json").toPath()), StandardCharsets.UTF_8);
         assertTrue(bookmarksJson.contains("bm_001_korok_cove.mss"));
+    }
+
+    @Test
+    public void attributesSnesLagSeparatelyFromEmulatorPresentDropsAndReadsAtomicStatusJson() throws Exception {
+        File tmp = Files.createTempDirectory("oos-study-lag-test").toFile();
+        File sessionsRoot = StudySessionRecorder.sessionsDir(tmp);
+        final int[] readByteCalls = {0};
+        final long[] emuFrames = {1000L};
+        final long[] renderPresents = {1000L};
+        final int[] snesFrame = {100};
+        final long[] nowMs = {1_760_100_000_000L};
+
+        StudySessionRecorder.Hooks atomicHooks = new StudySessionRecorder.Hooks() {
+            @Override
+            public boolean startVideoSegment(File mp4File) {
+                try {
+                    Files.write(mp4File.toPath(), "fake-mp4".getBytes(StandardCharsets.UTF_8));
+                    return true;
+                } catch (Exception e) {
+                    return false;
+                }
+            }
+
+            @Override
+            public boolean stopVideoSegment() {
+                return true;
+            }
+
+            @Override
+            public boolean saveState(File stateFile) {
+                try {
+                    Files.write(stateFile.toPath(), "fake-mss".getBytes(StandardCharsets.UTF_8));
+                    return true;
+                } catch (Exception e) {
+                    return false;
+                }
+            }
+
+            @Override
+            public boolean saveScreenshot(File pngFile) {
+                try {
+                    Files.write(pngFile.toPath(), "fake-png".getBytes(StandardCharsets.UTF_8));
+                    return true;
+                } catch (Exception e) {
+                    return false;
+                }
+            }
+
+            @Override
+            public String statusJson(boolean detailed) {
+                return String.format(
+                        "{\"sha1\":\"deadbeef\",\"mode\":7,\"sub\":0,\"indoor\":1,\"area\":14,\"room\":282,\"savedWorld\":64,\"linkX\":512,\"linkY\":384,\"health\":40,\"linkForm\":0,\"linkState\":0,\"snesFrame\":%d,\"snesLagFlag\":0,\"frames\":%d,\"renderPresents\":%d,\"paused\":false,\"fastForward\":false,\"observedFps\":60.0,\"presentFps\":59.9}",
+                        snesFrame[0], emuFrames[0], renderPresents[0]);
+            }
+
+            @Override
+            public int readByte(int addr) {
+                readByteCalls[0]++;
+                return 0;
+            }
+
+            @Override
+            public String romPath() {
+                return "/tmp/Oracle - Main.sfc";
+            }
+
+            @Override
+            public String romDisplayName() {
+                return "Oracle - Main.sfc";
+            }
+
+            @Override
+            public long nowMs() {
+                return nowMs[0];
+            }
+        };
+
+        StudySessionRecorder rec = new StudySessionRecorder(
+                sessionsRoot, atomicHooks, 60L, 60_000L, 60_000L, 1_000L, 200L, 3);
+        rec.start();
+        File sessionDir = rec.status().sessionDir;
+
+        // Tick 0 establishes delta baseline
+        nowMs[0] += 250L;
+        rec.tick(false, 60.0, 60.0);
+
+        // Tick 1: Eon interior 65816 lag (dEmu=15, dPresents=15, dSnes=10 -> snesLag=5, presentDrops=0)
+        nowMs[0] += 250L;
+        emuFrames[0] += 15;
+        renderPresents[0] += 15;
+        snesFrame[0] = (snesFrame[0] + 10) & 0xFF;
+        rec.tick(false, 60.0, 60.0);
+        assertEquals(1, rec.status().anomalyCount);
+
+        // Advance past anomaly cooldown; trigger Android present drop with 0 SNES lag (dEmu=15, dPresents=9, dSnes=15 -> presentDrops=6)
+        nowMs[0] += 1_500L;
+        emuFrames[0] += 15;
+        renderPresents[0] += 9;
+        snesFrame[0] = (snesFrame[0] + 15) & 0xFF;
+        rec.tick(false, 60.0, 42.0);
+        assertEquals(2, rec.status().anomalyCount);
+        assertEquals(0, readByteCalls[0]);
+
+        rec.stop("atomic_done");
+
+        String telemetry = new String(Files.readAllBytes(new File(sessionDir, "telemetry.ndjson").toPath()), StandardCharsets.UTF_8);
+        assertTrue(telemetry.contains("\"room\":282"));
+        assertTrue(telemetry.contains("\"world\":64"));
+        assertTrue(telemetry.contains("\"snes_lag_frames\":5"));
+        assertTrue(telemetry.contains("\"present_drops\":6"));
+        assertTrue(telemetry.contains("\"kind\":\"snes_lag_spike\""));
+        assertTrue(telemetry.contains("\"kind\":\"emu_present_drop\""));
+
+        String sessionJson = new String(Files.readAllBytes(new File(sessionDir, "session.json").toPath()), StandardCharsets.UTF_8);
+        assertTrue(sessionJson.contains("\"snesLagFrames\": 5"));
+        assertTrue(sessionJson.contains("\"presentDrops\": 6"));
+        assertTrue(sessionJson.contains("\"maxTickSnesLag\": 5"));
+        assertTrue(sessionJson.contains("\"maxTickPresentDrops\": 6"));
     }
 }

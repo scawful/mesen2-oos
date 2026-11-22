@@ -508,16 +508,28 @@ bool SnesPpu::ProcessEndOfScanline(uint16_t& hClock)
 
 			// Adaptive Smooth play: the frame limiter sleeps before each frame
 			// starts, so frame-start to frame-start time equals the target period
-			// while the core keeps up. Only a longer interval means the core fell
-			// behind; then skip one render to catch up. The old fixed 10 ms window
-			// skipped every other frame even with headroom (30 Hz on RG353P).
+			// while the core keeps up. Single-frame OS timer wakeup jitter should
+			// not trigger a frame skip; require 2 consecutive > +5.0 ms overruns
+			// before skipping one render to catch up.
 			double frameIntervalMs = _frameStartTimer.GetElapsedMS();
 			_frameStartTimer.Reset();
 			bool handheldBehind = false;
 			if(handheldFrameSkipping && !fastForwardLike) {
 				double speed = emulationSpeed > 0 ? (double)emulationSpeed : 100.0;
 				double targetMs = (1000.0 / _console->GetFps()) * 100.0 / speed;
-				handheldBehind = frameIntervalMs > targetMs + 2.5 && !_lastFrameSkipped;
+				if(frameIntervalMs > targetMs + 5.0 && !_lastFrameSkipped) {
+					if(_handheldBehindStreak < 255) {
+						_handheldBehindStreak++;
+					}
+					handheldBehind = (_handheldBehindStreak >= 2);
+					if(handheldBehind) {
+						_handheldBehindStreak = 0;
+					}
+				} else {
+					_handheldBehindStreak = 0;
+				}
+			} else {
+				_handheldBehindStreak = 0;
 			}
 
 			bool allowSkipThisFrame = !_interlacedFrame || (_frameCount & 0x02) || fastForwardLike;

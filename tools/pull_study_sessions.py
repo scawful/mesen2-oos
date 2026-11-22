@@ -89,9 +89,11 @@ def write_session_report(session_dir: Path) -> Path:
     events = parse_ndjson(telemetry_path)
     transitions = [e for e in events if e.get("event") == "transition"]
     anomalies_ndjson = [e for e in events if e.get("event") == "anomaly"]
+    lag_samples = [e for e in events if e.get("event") in ("sample", "transition", "anomaly")]
 
     rom_info = session.get("rom", {}) if isinstance(session.get("rom"), dict) else {}
     counts = session.get("counts", {}) if isinstance(session.get("counts"), dict) else {}
+    lag_summary = session.get("lagSummary", {}) if isinstance(session.get("lagSummary"), dict) else {}
     segments = session.get("segments", []) if isinstance(session.get("segments"), list) else []
     anchors = session.get("anchors", []) if isinstance(session.get("anchors"), list) else []
     anomalies = session.get("anomalies", []) if isinstance(session.get("anomalies"), list) else []
@@ -163,6 +165,67 @@ def write_session_report(session_dir: Path) -> Path:
             lines.append(f"| {idx} | `{an.get('kind', '')}` | {ts} | {an.get('detail', '')} | — |")
     else:
         lines.append("| — | *(none)* | — | — | — |")
+
+    lines.extend([
+        "",
+        "## Lag Attribution (SNES 65816 vs Android Emulator)",
+        "",
+    ])
+    total_gameplay_frames = int(lag_summary.get("gameplayEmuFrames", 0) or 0)
+    total_snes_lag = int(lag_summary.get("snesLagFrames", 0) or 0)
+    total_present_drops = int(lag_summary.get("presentDrops", 0) or 0)
+    max_snes_lag = int(lag_summary.get("maxTickSnesLag", 0) or 0)
+    max_present_drops = int(lag_summary.get("maxTickPresentDrops", 0) or 0)
+    if not lag_summary and lag_samples:
+        total_snes_lag = sum(int(e.get("snes_lag_frames", 0) or 0) for e in lag_samples)
+        total_present_drops = sum(int(e.get("present_drops", 0) or 0) for e in lag_samples)
+        max_snes_lag = max((int(e.get("snes_lag_frames", 0) or 0) for e in lag_samples), default=0)
+        max_present_drops = max((int(e.get("present_drops", 0) or 0) for e in lag_samples), default=0)
+    lines.append(
+        f"- **Totals:** `{total_gameplay_frames}` gameplay frames | SNES 65816 lag: `{total_snes_lag}f` (max tick `{max_snes_lag}f`) | Android present drops: `{total_present_drops}f` (max tick `{max_present_drops}f`)"
+    )
+    lines.extend([
+        "",
+        "| World | Ind | Area / Room | Samples | SNES Lag (f) | Emu Present Drops (f) | Min Obs FPS | Min Present FPS |",
+        "|---|---|---|---|---:|---:|---:|---:|",
+    ])
+    buckets: dict[tuple[int, int, int, int], dict[str, Any]] = {}
+    for ev in lag_samples:
+        w = int(ev.get("world", -1) if ev.get("world") is not None else -1)
+        ind = int(ev.get("indoors", -1) if ev.get("indoors") is not None else -1)
+        area = int(ev.get("area", -1) if ev.get("area") is not None else -1)
+        room = int(ev.get("room", -1) if ev.get("room") is not None else -1)
+        key = (w, ind, area if ind == 0 else -1, room if ind == 1 else -1)
+        b = buckets.setdefault(key, {
+            "samples": 0,
+            "snes_lag": 0,
+            "present_drops": 0,
+            "min_fps": None,
+            "min_present_fps": None,
+        })
+        b["samples"] += 1
+        b["snes_lag"] += int(ev.get("snes_lag_frames", 0) or 0)
+        b["present_drops"] += int(ev.get("present_drops", 0) or 0)
+        fps_v = ev.get("fps")
+        if isinstance(fps_v, (int, float)) and fps_v > 0:
+            b["min_fps"] = fps_v if b["min_fps"] is None else min(b["min_fps"], fps_v)
+        pfps_v = ev.get("present_fps")
+        if isinstance(pfps_v, (int, float)) and pfps_v > 0:
+            b["min_present_fps"] = pfps_v if b["min_present_fps"] is None else min(b["min_present_fps"], pfps_v)
+    sorted_buckets = sorted(
+        buckets.items(),
+        key=lambda kv: (kv[1]["snes_lag"] + kv[1]["present_drops"], kv[1]["samples"]),
+        reverse=True,
+    )
+    for (w, ind, area, room), b in sorted_buckets[:40]:
+        loc = f"area `{hex2(area)}`" if ind == 0 else (f"rm `{hex4(room)}`" if ind == 1 else f"area `{hex2(area)}` rm `{hex4(room)}`")
+        min_fps_s = f"{b['min_fps']:.1f}" if b["min_fps"] is not None else "—"
+        min_pfps_s = f"{b['min_present_fps']:.1f}" if b["min_present_fps"] is not None else "—"
+        lines.append(
+            f"| `{hex2(w)}` | `{ind}` | {loc} | {b['samples']} | {b['snes_lag']} | {b['present_drops']} | {min_fps_s} | {min_pfps_s} |"
+        )
+    if not sorted_buckets:
+        lines.append("| — | — | *(no telemetry samples)* | — | — | — | — | — |")
 
     lines.extend([
         "",

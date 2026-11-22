@@ -162,8 +162,10 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private volatile long mVideoStartElapsedMs;
     private volatile StudySessionRecorder mStudySession;
     private volatile Double mLastObservedFps;
+    private volatile Double mLastPresentFps;
     private volatile boolean mPausedState;
     private final AtomicBoolean mStudyTickPending = new AtomicBoolean(false);
+    private final AtomicBoolean mHudPollPending = new AtomicBoolean(false);
     private final Runnable mStudyTicker = new Runnable() {
         @Override
         public void run() {
@@ -176,6 +178,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             }
             final boolean pausedOrMenu = mUiVisible || mPausedState;
             final Double fpsSnapshot = mLastObservedFps;
+            final Double presentFpsSnapshot = mLastPresentFps;
             if (!mBgExecutor.isShutdown() && mStudyTickPending.compareAndSet(false, true)) {
                 mBgExecutor.execute(() -> {
                     try {
@@ -183,12 +186,13 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                             synchronized (mCaptureLock) {
                                 StudySessionRecorder cur = mStudySession;
                                 if (cur != null && cur.isActive()) {
-                                    cur.tick(pausedOrMenu, fpsSnapshot);
+                                    cur.tick(pausedOrMenu, fpsSnapshot, presentFpsSnapshot);
                                 }
                             }
+                            final boolean videoActive = isVideoRecording();
                             mHandler.post(() -> {
                                 if (!mDestroyed) {
-                                    updateRecBadgeUi(isVideoRecording());
+                                    updateRecBadgeUi(videoActive);
                                 }
                             });
                         }
@@ -219,6 +223,9 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private Boolean mPendingReplayBuffer;
     private Integer mPendingOverlayMask;
     private String mPendingBugSnapshotCategory;
+    private String mPendingStudyCmd;
+    private String mPendingStudyTag;
+    private String mPendingStudyNote;
 
     private boolean mHomeReceiverRegistered;
     private boolean mPgoDumpReceiverRegistered;
@@ -322,6 +329,12 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         mHandler.postDelayed(this::refreshHud, 1500);
         mHandler.postDelayed(this::hideHudBar, 4500);
         keepVisibleScreenOn();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                getWindow().setSustainedPerformanceMode(true);
+            } catch (Exception ignored) {
+            }
+        }
         registerPgoDumpReceiver();
     }
 
@@ -1646,7 +1659,7 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
         if (mPendingStartVideo || mPendingScreenshot || mPendingDumpReplay
                 || mPendingReplayBuffer != null || mPendingOverlayMask != null
-                || mPendingBugSnapshotCategory != null) {
+                || mPendingBugSnapshotCategory != null || mPendingStudyCmd != null) {
             mHandler.postDelayed(this::dispatchPendingCaptureActions, 400);
         }
     }
@@ -1739,66 +1752,97 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     }
 
     private void refreshHud() {
-        if (!mNativeReady || mHudRom == null) {
+        if (!mNativeReady || mDestroyed || mHudRom == null || mBgExecutor.isShutdown()) {
             return;
         }
-        try {
-            JSONObject json = new JSONObject(MesenNative.statusJson(mKeepHud));
-            String rom = json.optString("rom", "");
-            mHudRom.setText(rom.isEmpty() ? getString(R.string.hud_waiting) : rom);
-            String socket = json.optString("socket", "tcp:" + StatusManifest.PORT);
-            boolean pad = json.optBoolean("pad", false);
-            String sha1 = json.optString("sha1", "");
-            boolean paused = json.optBoolean("paused", false);
-            Double observedFps = mFrameRateTracker.sample(
-                    rom, json.optLong("frames", -1), paused,
-                    SystemClock.elapsedRealtime());
-            mLastObservedFps = observedFps;
-            mPausedState = paused;
-            Double presentFps = mPresentRateTracker.sample(
-                    rom, json.optLong("renderPresents", -1), paused,
-                    SystemClock.elapsedRealtime());
-            String performance = performanceLabel(paused, observedFps);
-            if (json.optBoolean("fastForward", mFastForwardHeld)) {
-                performance += " · " + FrameRateTracker.formatFastForwardLabel(observedFps)
-                        + " " + FrameRateTracker.turboSpeedLabel(mTurboSpeed);
-            }
-            if (json.optBoolean("performanceMode", mSmoothPlay)) {
-                performance += " · SMOOTH";
-            }
-            if (json.optBoolean("renderAccelerated", false)) {
-                performance += " · GPU";
-            } else if (json.optBoolean("preferAccelerated", mPreferGpu)) {
-                performance += " · SW";
-            }
-            String presentLabel = FrameRateTracker.formatPresentLabel(presentFps);
-            if (presentLabel != null) {
-                performance += " · " + presentLabel;
-            }
-            String romId = FrameRateTracker.romIdentityLabel(sha1);
-            if (romId != null) {
-                performance += " · " + romId;
-            }
-            json.put("observedFps", observedFps == null ? JSONObject.NULL : observedFps);
-            json.put("presentFps", presentFps == null ? JSONObject.NULL : presentFps);
-            json.put("observedFpsState",
-                    paused ? (observedFps == null ? "paused" : "last_running")
-                            : (observedFps == null ? "measuring" : "live"));
-            int agents = mStatusManifest != null ? mStatusManifest.cachedAgentCount() : 0;
-            String endpoint = mStatusManifest != null ? mStatusManifest.adbEndpoint() : socket;
-            String agentBit = agents > 0 ? (agents + " agents") : "ready";
-            mHudSocket.setText(socket + (pad ? " · pad" : " · no pad"));
-            if (mHudLink != null) {
-                mHudLink.setText(endpoint + "  ·  " + modeLabel(json)
-                        + "  ·  " + performance + "  ·  " + agentBit);
-                mHudLink.setVisibility(mKeepHud ? View.VISIBLE : View.GONE);
-            }
-            updateRecBadgeUi(json.optBoolean("recording", false));
-            if (mStatusWriter != null) {
-                mStatusWriter.enqueue(json);
-            }
-        } catch (Exception ignored) {
+        if (!mHudPollPending.compareAndSet(false, true)) {
+            return;
         }
+        final boolean keepHud = mKeepHud;
+        final boolean fastForwardHeld = mFastForwardHeld;
+        final boolean smoothPlay = mSmoothPlay;
+        final boolean preferGpu = mPreferGpu;
+        final int turboSpeed = mTurboSpeed;
+        final StatusManifest manifest = mStatusManifest;
+        final StatusWriter statusWriter = mStatusWriter;
+        mBgExecutor.execute(() -> {
+            try {
+                if (!mNativeReady || mDestroyed) {
+                    return;
+                }
+                JSONObject json = new JSONObject(MesenNative.statusJson(keepHud));
+                String rom = json.optString("rom", "");
+                String romText = rom.isEmpty() ? getString(R.string.hud_waiting) : rom;
+                String socket = json.optString("socket", "tcp:" + StatusManifest.PORT);
+                boolean pad = json.optBoolean("pad", false);
+                String sha1 = json.optString("sha1", "");
+                boolean paused = json.optBoolean("paused", false);
+                Double observedFps = mFrameRateTracker.sample(
+                        rom, json.optLong("frames", -1), paused,
+                        SystemClock.elapsedRealtime());
+                mLastObservedFps = observedFps;
+                mPausedState = paused;
+                Double presentFps = mPresentRateTracker.sample(
+                        rom, json.optLong("renderPresents", -1), paused,
+                        SystemClock.elapsedRealtime());
+                mLastPresentFps = presentFps;
+                String performance = performanceLabel(paused, observedFps);
+                if (json.optBoolean("fastForward", fastForwardHeld)) {
+                    performance += " · " + FrameRateTracker.formatFastForwardLabel(observedFps)
+                            + " " + FrameRateTracker.turboSpeedLabel(turboSpeed);
+                }
+                if (json.optBoolean("performanceMode", smoothPlay)) {
+                    performance += " · SMOOTH";
+                }
+                if (json.optBoolean("renderAccelerated", false)) {
+                    performance += " · GPU";
+                } else if (json.optBoolean("preferAccelerated", preferGpu)) {
+                    performance += " · SW";
+                }
+                String presentLabel = FrameRateTracker.formatPresentLabel(presentFps);
+                if (presentLabel != null) {
+                    performance += " · " + presentLabel;
+                }
+                String romId = FrameRateTracker.romIdentityLabel(sha1);
+                if (romId != null) {
+                    performance += " · " + romId;
+                }
+                json.put("observedFps", observedFps == null ? JSONObject.NULL : observedFps);
+                json.put("presentFps", presentFps == null ? JSONObject.NULL : presentFps);
+                json.put("observedFpsState",
+                        paused ? (observedFps == null ? "paused" : "last_running")
+                                : (observedFps == null ? "measuring" : "live"));
+                int agents = manifest != null ? manifest.cachedAgentCount() : 0;
+                String endpoint = manifest != null ? manifest.adbEndpoint() : socket;
+                String agentBit = agents > 0 ? (agents + " agents") : "ready";
+                String socketText = socket + (pad ? " · pad" : " · no pad");
+                String linkText = endpoint + "  ·  " + modeLabel(json)
+                        + "  ·  " + performance + "  ·  " + agentBit;
+                boolean recording = json.optBoolean("recording", false);
+                if (statusWriter != null) {
+                    statusWriter.enqueue(json);
+                }
+                mHandler.post(() -> {
+                    if (mDestroyed) {
+                        return;
+                    }
+                    if (mHudRom != null) {
+                        mHudRom.setText(romText);
+                    }
+                    if (mHudSocket != null) {
+                        mHudSocket.setText(socketText);
+                    }
+                    if (mHudLink != null) {
+                        mHudLink.setText(linkText);
+                        mHudLink.setVisibility(mKeepHud ? View.VISIBLE : View.GONE);
+                    }
+                    updateRecBadgeUi(recording);
+                });
+            } catch (Exception ignored) {
+            } finally {
+                mHudPollPending.set(false);
+            }
+        });
     }
 
     /**
@@ -2196,13 +2240,20 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         final Boolean replayBuf = mPendingReplayBuffer;
         final Integer overlayMask = mPendingOverlayMask;
         final String bugCat = mPendingBugSnapshotCategory;
+        final String studyCmd = mPendingStudyCmd;
+        final String studyTag = mPendingStudyTag;
+        final String studyNote = mPendingStudyNote;
         mPendingStartVideo = false;
         mPendingScreenshot = false;
         mPendingDumpReplay = false;
         mPendingReplayBuffer = null;
         mPendingOverlayMask = null;
         mPendingBugSnapshotCategory = null;
-        if (!startVideo && !screenshot && !dumpReplay && replayBuf == null && overlayMask == null && bugCat == null) {
+        mPendingStudyCmd = null;
+        mPendingStudyTag = null;
+        mPendingStudyNote = null;
+        if (!startVideo && !screenshot && !dumpReplay && replayBuf == null
+                && overlayMask == null && bugCat == null && studyCmd == null) {
             return;
         }
         mBgExecutor.execute(() -> {
@@ -2229,6 +2280,29 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             }
             if (bugCat != null) {
                 toast(captureBugSnapshot(bugCat));
+            }
+            if (studyCmd != null) {
+                if ("start".equals(studyCmd)) {
+                    if (!isStudySessionActive()) {
+                        toast(toggleStudySession());
+                    }
+                } else if ("stop".equals(studyCmd)) {
+                    if (isStudySessionActive()) {
+                        toast(toggleStudySession());
+                    }
+                } else if ("mark".equals(studyCmd) || "mark_moment".equals(studyCmd) || "mark_bug".equals(studyCmd)) {
+                    final String tag = "mark_bug".equals(studyCmd)
+                            ? "bug"
+                            : ((studyTag != null && !studyTag.trim().isEmpty()) ? studyTag.trim() : "moment");
+                    final String note = studyNote != null ? studyNote : "";
+                    synchronized (mCaptureLock) {
+                        if (!isStudySessionActiveLocked()) {
+                            toast("Start Study Session first (menu-only)");
+                        } else {
+                            toast(mStudySession.addBookmark(tag, note));
+                        }
+                    }
+                }
             }
         });
     }
@@ -2335,9 +2409,17 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
                     ? MediaCapture.BUG_CATEGORIES[0]
                     : cat;
         }
+        if (intent.hasExtra("study_cmd")) {
+            String cmd = intent.getStringExtra("study_cmd");
+            if (cmd != null && !cmd.trim().isEmpty()) {
+                mPendingStudyCmd = cmd.trim().toLowerCase(Locale.US);
+                mPendingStudyTag = intent.getStringExtra("study_tag");
+                mPendingStudyNote = intent.getStringExtra("study_note");
+            }
+        }
         if (mNativeReady && (mPendingStartVideo || mPendingScreenshot || mPendingDumpReplay
                 || mPendingReplayBuffer != null || mPendingOverlayMask != null
-                || mPendingBugSnapshotCategory != null)) {
+                || mPendingBugSnapshotCategory != null || mPendingStudyCmd != null)) {
             dispatchPendingCaptureActions();
         }
     }
