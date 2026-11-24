@@ -62,6 +62,7 @@ namespace Mesen.ViewModels
 		{
 			MainMenu.Initialize(wnd);
 			RecentGames.Init(GameScreenMode.RecentGames);
+			LibraryPreviews.StartAutoCapture();
 			OracleDebugPanel.RequestRefresh(true);
 
 			this.WhenAnyValue(x => x.RecentGames.Visible, x => x.RecentGames.Mode).Subscribe(x => {

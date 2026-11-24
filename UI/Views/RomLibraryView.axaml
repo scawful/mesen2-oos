@@ -25,10 +25,15 @@
 						<TextBlock Text="{Binding}" FontWeight="Bold" Foreground="Gray" FontSize="11" Margin="0 6 0 0" />
 					</DataTemplate>
 					<DataTemplate DataType="u:LibraryRom">
-						<StackPanel Margin="6 0 0 0">
-							<TextBlock Text="{Binding Display}" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
-							<TextBlock Text="{Binding Subtitle}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
-						</StackPanel>
+						<Grid ColumnDefinitions="Auto,*" Margin="2 0 0 0">
+							<Border Width="64" Height="56" Background="#101010" CornerRadius="3" ClipToBounds="True" VerticalAlignment="Center">
+								<Image Source="{Binding Preview}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None" />
+							</Border>
+							<StackPanel Grid.Column="1" Margin="8 0 0 0" VerticalAlignment="Center">
+								<TextBlock Text="{Binding Display}" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+								<TextBlock Text="{Binding Subtitle}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+						</Grid>
 					</DataTemplate>
 				</ListBox.DataTemplates>
 			</ListBox>
@@ -47,14 +52,26 @@
 				<Button Content="Play" Click="OnPlayClick" FontWeight="Bold" MinWidth="110" Height="34" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
 			</StackPanel>
 
+			<StackPanel DockPanel.Dock="Top" Margin="0 10 0 0" IsVisible="{Binding DetailPreview, Converter={x:Static ObjectConverters.IsNotNull}}">
+				<Border Background="#101010" CornerRadius="4" ClipToBounds="True" HorizontalAlignment="Left" MaxHeight="300">
+					<Image Source="{Binding DetailPreview}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None" MaxHeight="300" />
+				</Border>
+				<TextBlock Text="{Binding PreviewCaption}" FontSize="10" Foreground="Gray" Margin="0 2 0 0" />
+			</StackPanel>
+
 			<TextBlock DockPanel.Dock="Top" Text="Start with" FontWeight="Bold" Margin="0 12 0 4" />
 			<ListBox DockPanel.Dock="Top" ItemsSource="{Binding Saves}" SelectedItem="{Binding SelectedSave}" MaxHeight="230" DoubleTapped="OnDoubleTapped">
 				<ListBox.ItemTemplate>
 					<DataTemplate x:DataType="u:LibrarySave">
-						<StackPanel>
-							<TextBlock Text="{Binding Label}" FontWeight="Bold" />
-							<TextBlock Text="{Binding Detail}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
-						</StackPanel>
+						<Grid ColumnDefinitions="Auto,*">
+							<Border Width="40" Height="35" Background="#101010" CornerRadius="2" ClipToBounds="True" IsVisible="{Binding Preview, Converter={x:Static ObjectConverters.IsNotNull}}">
+								<Image Source="{Binding Preview}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None" />
+							</Border>
+							<StackPanel Grid.Column="1" Margin="8 0 0 0" VerticalAlignment="Center">
+								<TextBlock Text="{Binding Label}" FontWeight="Bold" />
+								<TextBlock Text="{Binding Detail}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+						</Grid>
 					</DataTemplate>
 				</ListBox.ItemTemplate>
 			</ListBox>

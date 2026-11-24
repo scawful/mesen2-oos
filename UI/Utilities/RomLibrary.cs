@@ -25,6 +25,21 @@ namespace Mesen.Utilities
 		public DateTime Date { get; init; }
 		public int BuildNumber { get; init; } = -1;
 		public string Display => string.IsNullOrEmpty(Badge) ? Title : $"{Title}  ·  {Badge}";
+
+		private Avalonia.Media.Imaging.Bitmap? _preview;
+		private bool _previewLoaded;
+		public Avalonia.Media.Imaging.Bitmap? Preview
+		{
+			get
+			{
+				if(!_previewLoaded) {
+					_previewLoaded = true;
+					_preview = LibraryPreviews.Load(LibraryPreviews.PathFor(RomPath));
+				}
+				return _preview;
+			}
+		}
+		public bool HasPreview => Preview != null;
 	}
 
 	public sealed class LibrarySave
@@ -34,6 +49,21 @@ namespace Mesen.Utilities
 		/// <summary>File copied over the game's save before loading. Null = keep the current save.</summary>
 		public string? SourcePath { get; init; }
 		public bool NewGame { get; init; }
+		public string? PreviewPath { get; init; }
+
+		private Avalonia.Media.Imaging.Bitmap? _preview;
+		private bool _previewLoaded;
+		public Avalonia.Media.Imaging.Bitmap? Preview
+		{
+			get
+			{
+				if(!_previewLoaded) {
+					_previewLoaded = true;
+					_preview = LibraryPreviews.Load(PreviewPath);
+				}
+				return _preview;
+			}
+		}
 	}
 
 	/// <summary>
@@ -315,6 +345,7 @@ namespace Mesen.Utilities
 				}
 				string hearts = s["hearts"] != null ? $"{s["hearts"]} hearts" : "";
 				yield return new LibrarySave {
+					PreviewPath = Path.Combine(folder, $"stop_{s["stop"]?.ToString().ToLowerInvariant()}_entry.png"),
 					Label = $"Start at {s["stop"]} {s["label"]}",
 					Detail = string.Join("  ·  ", new[] { hearts, "starts at Link's House with the items for this stop" }.Where(x => x.Length > 0)),
 					SourcePath = file

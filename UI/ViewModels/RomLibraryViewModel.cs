@@ -27,6 +27,8 @@ namespace Mesen.ViewModels
 		[Reactive] public string Status { get; private set; } = "";
 		[Reactive] public string FoldersText { get; private set; } = "";
 		[Reactive] public bool HasSelection { get; private set; }
+		[Reactive] public Avalonia.Media.Imaging.Bitmap? DetailPreview { get; private set; }
+		[Reactive] public string PreviewCaption { get; private set; } = "";
 
 		/// <summary>Set by the host window so Play can close it.</summary>
 		public Action? AfterPlay { get; set; }
@@ -34,6 +36,15 @@ namespace Mesen.ViewModels
 		public RomLibraryViewModel()
 		{
 			this.WhenAnyValue(x => x.Filter).Subscribe(_ => ApplyFilter());
+			this.WhenAnyValue(x => x.SelectedSave, x => x.Selected).Subscribe(_ => {
+				if(SelectedSave?.Preview is Avalonia.Media.Imaging.Bitmap savePreview) {
+					DetailPreview = savePreview;
+					PreviewCaption = SelectedSave.Label;
+				} else {
+					DetailPreview = Selected?.Preview;
+					PreviewCaption = Selected?.Preview != null ? "Last seen in this build" : "";
+				}
+			});
 			this.WhenAnyValue(x => x.SelectedItem).Subscribe(item => {
 				Selected = item as LibraryRom;
 				HasSelection = Selected != null;
@@ -84,7 +95,7 @@ namespace Mesen.ViewModels
 			}
 		}
 
-		public void Play()
+		public async void Play()
 		{
 			LibraryRom? rom = Selected;
 			LibrarySave? save = SelectedSave;
@@ -95,6 +106,9 @@ namespace Mesen.ViewModels
 
 			bool replacesSave = save.SourcePath != null || save.NewGame;
 			Status = "Loading " + rom.Title + "...";
+			if(EmuApi.IsRunning()) {
+				await LibraryPreviews.CaptureCurrent(onlyGameplay: true);
+			}
 			_ = EmulatorOperationTracker.Run(token => {
 				string? backup = null;
 				string? error = null;
