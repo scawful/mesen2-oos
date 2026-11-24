@@ -16,12 +16,10 @@ namespace Mesen.ViewModels
 {
 	public enum OracleToolPage
 	{
-		Travel,
-		Items,
-		Progress,
-		Capture,
-		Macros,
-		Log
+		Play,
+		Inventory,
+		Record,
+		Debug
 	}
 
 	public class OracleMacroButtonViewModel
@@ -76,7 +74,7 @@ namespace Mesen.ViewModels
 		private bool _commandInFlight;
 		private bool _canFallToRoom;
 		private bool _hasMacroError;
-		private OracleToolPage _selectedToolPage = OracleToolPage.Travel;
+		private OracleToolPage _selectedToolPage = OracleToolPage.Play;
 		private readonly List<string> _sessionEntries = new();
 		private readonly Dictionary<string, List<MacroStep>> _macroStepsById = new(StringComparer.OrdinalIgnoreCase);
 
@@ -118,6 +116,7 @@ namespace Mesen.ViewModels
 
 		public OracleDebugPanelViewModel()
 		{
+			CaptureSession.Changed += OnCaptureSessionChanged;
 			_visibilityMode = ConfigManager.Config.Oracle.DebugPanelVisibility;
 			if(!Enum.IsDefined(_visibilityMode)) {
 				_visibilityMode = OracleDebugPanelVisibility.Collapsed;
@@ -182,24 +181,36 @@ namespace Mesen.ViewModels
 					return;
 				}
 				this.RaiseAndSetIfChanged(ref _selectedToolPage, value);
-				this.RaisePropertyChanged(nameof(IsTravelPage));
-				this.RaisePropertyChanged(nameof(IsItemsPage));
-				this.RaisePropertyChanged(nameof(IsProgressPage));
-				this.RaisePropertyChanged(nameof(IsCapturePage));
-				this.RaisePropertyChanged(nameof(IsMacrosPage));
-				this.RaisePropertyChanged(nameof(IsLogPage));
+				this.RaisePropertyChanged(nameof(IsPlayPage));
+				this.RaisePropertyChanged(nameof(IsInventoryPage));
+				this.RaisePropertyChanged(nameof(IsRecordPage));
+				this.RaisePropertyChanged(nameof(IsDebugPage));
 				// These gates also refresh the values when a page becomes visible.
-				Cheats.IsItemsOpen = IsItemsPage;
-				Cheats.IsFlagsOpen = IsProgressPage;
+				Cheats.IsItemsOpen = IsInventoryPage;
+				Cheats.IsFlagsOpen = IsInventoryPage;
 			}
 		}
 
-		public bool IsTravelPage => SelectedToolPage == OracleToolPage.Travel;
-		public bool IsItemsPage => SelectedToolPage == OracleToolPage.Items;
-		public bool IsProgressPage => SelectedToolPage == OracleToolPage.Progress;
-		public bool IsCapturePage => SelectedToolPage == OracleToolPage.Capture;
-		public bool IsMacrosPage => SelectedToolPage == OracleToolPage.Macros;
-		public bool IsLogPage => SelectedToolPage == OracleToolPage.Log;
+		public bool IsPlayPage => SelectedToolPage == OracleToolPage.Play;
+		public bool IsInventoryPage => SelectedToolPage == OracleToolPage.Inventory;
+		public bool IsRecordPage => SelectedToolPage == OracleToolPage.Record;
+		public bool IsDebugPage => SelectedToolPage == OracleToolPage.Debug;
+
+		// Video recording (shared with the Capture window and the record shortcut)
+		private string _videoButtonText = "Record video";
+		private string _videoStatus = "";
+		public string VideoButtonText { get => _videoButtonText; private set => this.RaiseAndSetIfChanged(ref _videoButtonText, value); }
+		public string VideoStatus { get => _videoStatus; private set => this.RaiseAndSetIfChanged(ref _videoStatus, value); }
+
+		private void OnCaptureSessionChanged()
+		{
+			bool recording = CaptureSession.IsRecording;
+			VideoButtonText = recording ? "Stop recording" : (CaptureSession.IsExporting ? "Exporting..." : "Record video");
+			string elapsed = recording && CaptureSession.StartedAt is DateTime started
+				? $"{(int)(DateTime.Now - started).TotalMinutes:00}:{(DateTime.Now - started).Seconds:00}  ·  "
+				: "";
+			VideoStatus = elapsed + CaptureSession.Status;
+		}
 
 		public bool IsCommandInFlight {
 			get => _commandInFlight;
@@ -354,6 +365,16 @@ namespace Mesen.ViewModels
 		{
 			VisibilityMode = IsHidden ? OracleDebugPanelVisibility.Collapsed : OracleDebugPanelVisibility.Hidden;
 			if(!IsHidden) {
+				RequestRefresh(true);
+			}
+		}
+
+		/// <summary>Opens the tools pane on one page (Oracle menu shortcuts).</summary>
+		public void ShowPage(OracleToolPage page)
+		{
+			SelectedToolPage = page;
+			if(!IsExpanded) {
+				VisibilityMode = OracleDebugPanelVisibility.Expanded;
 				RequestRefresh(true);
 			}
 		}

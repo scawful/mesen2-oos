@@ -319,7 +319,7 @@ namespace Mesen.Utilities
 			return saves;
 		}
 
-		private static IEnumerable<LibrarySave> StopSaves()
+		public static IEnumerable<LibrarySave> StopSaves()
 		{
 			string folder = StopSavesFolder;
 			string manifest = Path.Combine(folder, "manifest.json");

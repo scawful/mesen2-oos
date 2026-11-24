@@ -46,6 +46,7 @@ namespace Mesen.ViewModels
 		private MainMenuAction? _oracleSocketStatusAction;
 		private MainMenuAction? _oracleYazeStatusAction;
 		private MainMenuAction? _oracleStatusUpdatedAction;
+		private MainMenuAction _oracleVideoAction = null!;
 
 		private RomInfo RomInfo => MainWindow.RomInfo;
 		private bool IsGameRunning => RomInfo.Format != RomFormat.Unknown;
@@ -1355,94 +1356,138 @@ namespace Mesen.ViewModels
 				IsEnabled = () => false
 			};
 
+			_oracleVideoAction = new MainMenuAction() {
+				ActionType = ActionType.Custom,
+				DynamicText = () => CaptureSession.IsRecording ? "Stop Video" : "Record Video",
+				IsEnabled = () => IsGameRunning || CaptureSession.IsRecording,
+				OnClick = () => { _ = CaptureSession.Toggle(); }
+			};
+			CaptureSession.Changed += () => Dispatcher.UIThread.Post(() => _oracleVideoAction.Update());
+
+			List<object> stopItems = new();
+			foreach(LibrarySave stop in RomLibrary.StopSaves()) {
+				stopItems.Add(CreateOracleCommand(stop.Label.Replace("Start at ", ""), () => StartAtStop(stop), () => IsGameRunning));
+			}
+			if(stopItems.Count > 0) {
+				stopItems.Add(new ContextMenuSeparator());
+			}
+			stopItems.Add(CreateOracleCommand("Other Builds and Saves...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new RomLibraryWindow())));
+
 			OracleMenuItems = new List<object>() {
-				CreateOracleCommand("Control Center...", () => OpenOracleControlCenter(wnd)),
-				new ContextMenuSeparator(),
+				CreateOracleCommand("ROM Library...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new RomLibraryWindow())),
 				new MainMenuAction() {
 					ActionType = ActionType.Custom,
-					CustomText = "Status",
-					SubActions = new List<object>() {
-						_oracleMesenStatusAction,
-						_oracleSocketStatusAction,
-						_oracleYazeStatusAction,
-						_oracleStatusUpdatedAction,
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Refresh Status", UpdateOracleStatus),
-						CreateOracleCommand("Open Status Window...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Status)),
-					}
+					CustomText = "Start at Stop",
+					SubActions = stopItems
 				},
+				CreateOracleCommand("Warp to a Place...", () => MainWindow.OracleDebugPanel.ShowPage(OracleToolPage.Play)),
+				CreateOracleCommand("Items and Flags...", () => MainWindow.OracleDebugPanel.ShowPage(OracleToolPage.Inventory)),
+				new ContextMenuSeparator(),
+				_oracleVideoAction,
+				CreateOracleCommand("Capture State + Screenshot...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
 				new MainMenuAction() {
 					ActionType = ActionType.Custom,
 					CustomText = "Save States",
 					SubActions = new List<object>() {
-						CreateOracleCommand("Save Labeled State...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
 						CreateOracleCommand("Label Save State Slot...", () => { _ = OracleStateActions.LabelSaveStateSlotAsync(wnd); }, () => IsGameRunning),
 						CreateOracleCommand("Open State Library", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new StateLibraryWindow())),
 						CreateOracleCommand("Open Save States Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.SaveStates)),
 					}
 				},
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Overlays",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Toggle HUD", () => OracleOverlayController.Toggle("enabled")),
-						CreateOracleCommand("Toggle Player Info", () => OracleOverlayController.Toggle("showPlayer")),
-						CreateOracleCommand("Toggle Sprite Boxes", () => OracleOverlayController.Toggle("showSprites")),
-						CreateOracleCommand("Toggle Issue Detection", () => OracleOverlayController.Toggle("showIssues")),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Open Overlay Controls...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Overlays)),
-					}
-				},
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Diagnostics",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Run ZSCustomOverworld Status", () => OracleDebugActions.ShowOutputWindow("ZSCustomOverworld Status", OracleDebugActions.DescribeZsowStatus), () => IsGameRunning),
-						CreateOracleCommand("Run Day/Night Status", () => OracleDebugActions.ShowOutputWindow("Day/Night Status", OracleDebugActions.DescribeDayNightStatus), () => IsGameRunning),
-						CreateOracleCommand("Open Diagnostics Tab...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Diagnostics)),
-						CreateOracleCommand("Open Diagnostics Window...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleDiagnosticsWindow())),
-					}
-				},
-				new MainMenuAction() {
-					ActionType = ActionType.Custom,
-					CustomText = "Socket Tools",
-					SubActions = new List<object>() {
-						CreateOracleCommand("Draw Path...", () => PromptOracleDrawPath(wnd), () => IsGameRunning),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Eval Expression...", () => PromptOracleEval(wnd), () => IsGameRunning),
-						CreateOracleCommand("Set PC...", () => PromptOracleSetPc(wnd), () => IsGameRunning),
-						CreateOracleCommand("Memory Size...", () => PromptOracleMemorySize(wnd), () => IsGameRunning),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Stack Retaddr...", () => PromptOracleStackRetaddr(wnd), () => IsGameRunning),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Mem Watch Add...", () => PromptOracleMemWatchAdd(wnd), () => IsGameRunning),
-						CreateOracleCommand("Mem Watch Remove...", () => PromptOracleMemWatchRemove(wnd), () => IsGameRunning),
-						CreateOracleCommand(
-							"Mem Watch List",
-							() => OracleLocalSocketClient.RunSocketCommandWithOutput(
-								"MEM_WATCH_WRITES",
-								new Dictionary<string, string> { ["action"] = "list" },
-								"Mem Watch List"
-							),
-							() => IsGameRunning
-						),
-						CreateOracleCommand(
-							"Mem Watch Clear",
-							() => OracleLocalSocketClient.RunSocketCommandWithOutput(
-								"MEM_WATCH_WRITES",
-								new Dictionary<string, string> { ["action"] = "clear" },
-								"Mem Watch Clear"
-							),
-							() => IsGameRunning
-						),
-						new ContextMenuSeparator(),
-						CreateOracleCommand("Mem Blame...", () => PromptOracleMemBlame(wnd), () => IsGameRunning),
-					}
-				},
 				new ContextMenuSeparator(),
-				CreateOracleCommand("Capture State + Screenshot...", () => { _ = OracleStateActions.SaveLabeledStateAsync(wnd); }, () => IsGameRunning),
-				CreateOracleCommand("Socket Health Check (Output)", () => OracleLocalSocketClient.RunSocketCommandWithOutput("HEALTH", null, "Oracle Socket Health")),
+				CreateOracleCommand("Control Center...", () => OpenOracleControlCenter(wnd)),
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					CustomText = "Developer",
+					SubActions = new List<object>() {
+							new MainMenuAction() {
+								ActionType = ActionType.Custom,
+								CustomText = "Status",
+								SubActions = new List<object>() {
+									_oracleMesenStatusAction,
+									_oracleSocketStatusAction,
+									_oracleYazeStatusAction,
+									_oracleStatusUpdatedAction,
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Refresh Status", UpdateOracleStatus),
+									CreateOracleCommand("Open Status Window...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Status)),
+								}
+							},
+							new MainMenuAction() {
+								ActionType = ActionType.Custom,
+								CustomText = "Overlays",
+								SubActions = new List<object>() {
+									CreateOracleCommand("Toggle HUD", () => OracleOverlayController.Toggle("enabled")),
+									CreateOracleCommand("Toggle Player Info", () => OracleOverlayController.Toggle("showPlayer")),
+									CreateOracleCommand("Toggle Sprite Boxes", () => OracleOverlayController.Toggle("showSprites")),
+									CreateOracleCommand("Toggle Issue Detection", () => OracleOverlayController.Toggle("showIssues")),
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Open Overlay Controls...", () => OpenOracleControlCenter(wnd, OracleControlCenterTab.Overlays)),
+								}
+							},
+							new MainMenuAction() {
+								ActionType = ActionType.Custom,
+								CustomText = "Diagnostics",
+								SubActions = new List<object>() {
+									CreateOracleCommand("Run ZSCustomOverworld Status", () => OracleDebugActions.ShowOutputWindow("ZSCustomOverworld Status", OracleDebugActions.DescribeZsowStatus), () => IsGameRunning),
+									CreateOracleCommand("Run Day/Night Status", () => OracleDebugActions.ShowOutputWindow("Day/Night Status", OracleDebugActions.DescribeDayNightStatus), () => IsGameRunning),
+									CreateOracleCommand("Open Diagnostics Window...", () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new OracleDiagnosticsWindow())),
+								}
+							},
+							new MainMenuAction() {
+								ActionType = ActionType.Custom,
+								CustomText = "Socket Tools",
+								SubActions = new List<object>() {
+									CreateOracleCommand("Draw Path...", () => PromptOracleDrawPath(wnd), () => IsGameRunning),
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Eval Expression...", () => PromptOracleEval(wnd), () => IsGameRunning),
+									CreateOracleCommand("Set PC...", () => PromptOracleSetPc(wnd), () => IsGameRunning),
+									CreateOracleCommand("Memory Size...", () => PromptOracleMemorySize(wnd), () => IsGameRunning),
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Stack Retaddr...", () => PromptOracleStackRetaddr(wnd), () => IsGameRunning),
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Mem Watch Add...", () => PromptOracleMemWatchAdd(wnd), () => IsGameRunning),
+									CreateOracleCommand("Mem Watch Remove...", () => PromptOracleMemWatchRemove(wnd), () => IsGameRunning),
+									CreateOracleCommand(
+										"Mem Watch List",
+										() => OracleLocalSocketClient.RunSocketCommandWithOutput(
+											"MEM_WATCH_WRITES",
+											new Dictionary<string, string> { ["action"] = "list" },
+											"Mem Watch List"
+										),
+										() => IsGameRunning
+									),
+									CreateOracleCommand(
+										"Mem Watch Clear",
+										() => OracleLocalSocketClient.RunSocketCommandWithOutput(
+											"MEM_WATCH_WRITES",
+											new Dictionary<string, string> { ["action"] = "clear" },
+											"Mem Watch Clear"
+										),
+										() => IsGameRunning
+									),
+									new ContextMenuSeparator(),
+									CreateOracleCommand("Mem Blame...", () => PromptOracleMemBlame(wnd), () => IsGameRunning),
+								}
+							},
+						new ContextMenuSeparator(),
+						CreateOracleCommand("Socket Health Check (Output)", () => OracleLocalSocketClient.RunSocketCommandWithOutput("HEALTH", null, "Oracle Socket Health")),
+					}
+				},
 			};
+		}
+
+		private void StartAtStop(LibrarySave stop)
+		{
+			LibraryRom? rom = RomLibraryViewModel.RunningOracleRom();
+			if(rom == null) {
+				return;
+			}
+			_ = RomLibraryViewModel.Launch(rom, stop, status => {
+				if(status.Length > 0) {
+					DisplayMessageHelper.DisplayMessage("Oracle", status);
+				}
+			}, error => DisplayMessageHelper.DisplayMessage("Oracle", error));
 		}
 
 		public void UpdateOracleStatus()

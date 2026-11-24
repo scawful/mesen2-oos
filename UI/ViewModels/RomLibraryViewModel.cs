@@ -103,9 +103,30 @@ namespace Mesen.ViewModels
 				Status = rom == null ? "Pick a ROM." : "ROM file is missing.";
 				return;
 			}
-
-			bool replacesSave = save.SourcePath != null || save.NewGame;
 			Status = "Loading " + rom.Title + "...";
+			await Launch(rom, save, status => {
+				Status = status;
+				AfterPlay?.Invoke();
+			}, error => Status = error);
+		}
+
+		/// <summary>Running Oracle ROM as a library entry, for "Start at stop" from the menu.</summary>
+		public static LibraryRom? RunningOracleRom()
+		{
+			if(!EmuApi.IsRunning()) {
+				return null;
+			}
+			string path = EmuApi.GetRomInfo().RomPath;
+			if(string.IsNullOrEmpty(path) || !File.Exists(path)) {
+				return null;
+			}
+			return new LibraryRom { RomPath = path, Title = Path.GetFileName(path), IsOracle = true };
+		}
+
+		/// <summary>Swaps in the chosen save (backing up the current one) and loads the ROM.</summary>
+		public static async Task Launch(LibraryRom rom, LibrarySave save, Action<string> onLoaded, Action<string> onError)
+		{
+			bool replacesSave = save.SourcePath != null || save.NewGame;
 			if(EmuApi.IsRunning()) {
 				await LibraryPreviews.CaptureCurrent(onlyGameplay: true);
 			}
@@ -126,12 +147,11 @@ namespace Mesen.ViewModels
 				}
 				Dispatcher.UIThread.Post(() => {
 					if(error != null) {
-						Status = "Could not set the save: " + error;
+						onError("Could not set the save: " + error);
 						return;
 					}
-					Status = backup != null ? "Previous save backed up to " + Path.GetFileName(backup) : "";
 					LoadRomHelper.LoadFile(rom.RomPath);
-					AfterPlay?.Invoke();
+					onLoaded(backup != null ? "Previous save backed up to " + Path.GetFileName(backup) : "");
 				});
 			});
 		}

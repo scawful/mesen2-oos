@@ -48,6 +48,20 @@ namespace Mesen.Views
 			}
 		}
 
+		private void OnOpenLibraryClick(object? sender, RoutedEventArgs e)
+		{
+			ApplicationHelper.GetOrCreateUniqueWindow(TopLevel.GetTopLevel(this) as Control, () => new RomLibraryWindow());
+		}
+
+		private void OnToggleVideoClick(object? sender, RoutedEventArgs e) => _ = CaptureSession.Toggle();
+
+		private void OnOpenCaptureWindowClick(object? sender, RoutedEventArgs e)
+		{
+			ApplicationHelper.GetOrCreateUniqueWindow(TopLevel.GetTopLevel(this) as Control, () => new VideoRecordWindow() {
+				DataContext = new VideoRecordConfigViewModel()
+			});
+		}
+
 		private async void OnWarpChoiceClick(object? sender, RoutedEventArgs e)
 		{
 			if(ViewModel != null) {
