@@ -54,6 +54,10 @@
 	#include "Sdl/SdlSoundManager.h"
 	#include "Linux/LinuxKeyManager.h"
 	#include "Linux/LinuxMouseManager.h"
+	//X11/X.h defines None, which breaks VideoFilterType::None and VideoCodec::None below
+	#ifdef None
+		#undef None
+	#endif
 #endif
 
 #include "Shared/Video/SoftwareRenderer.h"
