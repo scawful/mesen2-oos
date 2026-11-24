@@ -26,7 +26,7 @@ namespace Mesen.Utilities
 		public bool IsToggle => Choices.Length == 0;
 	}
 
-	/// <summary>Item and flag definitions from oracle-of-secrets Core/sram.asm (line numbers as of 2026-09-26).</summary>
+	/// <summary>Item and flag definitions from oracle-of-secrets Core/sram.asm (updated 2026-11-23).</summary>
 	public static class OracleCheatFields
 	{
 		private static (int, string)[] C(params (int, string)[] c) => c;
@@ -36,6 +36,7 @@ namespace Mesen.Utilities
 			new() { Label = "Sword", Address = 0x7EF359, Choices = C((0, "None"), (1, "Lv1"), (2, "Lv2"), (3, "Lv3"), (4, "Lv4 Master")) },
 			new() { Label = "Shield", Address = 0x7EF35A, Choices = C((0, "None"), (1, "Fighter"), (2, "Fire"), (3, "Mirror")) },
 			new() { Label = "Mail", Address = 0x7EF35B, Choices = C((0, "Green"), (1, "Blue"), (2, "Red")) },
+			new() { Label = "Wardrobe", Address = 0x7EF459, Choices = C((0, "0 Default MC"), (1, "1 ALTTP Link"), (2, "2 Parallel Worlds"), (3, "3 Awakening"), (4, "4 NES Link"), (5, "5 TP Zelda"), (6, "6 Classic Zelda"), (7, "7 Tetra"), (8, "8 Tingle")) },
 			new() { Label = "Gloves", Address = 0x7EF354, Choices = C((0, "None"), (1, "Power Glove"), (2, "Titan's Mitt")) },
 			new() { Label = "Hearts", Address = 0x7EF36C, IsHearts = true, Choices = Enumerable.Range(3, 18).Select(h => (h, $"{h} hearts")).ToArray() },
 			new() { Label = "Bow", Address = 0x7EF340, Choices = C((0, "None"), (1, "Bow"), (2, "Bow + arrows"), (3, "Silver"), (4, "Silver + arrows")) },
@@ -45,6 +46,8 @@ namespace Mesen.Utilities
 			new() { Label = "Ocarina", Address = 0x7EF34C, Choices = C((0, "None"), (1, "No songs"), (2, "Healing"), (3, "+ Storms"), (4, "+ Soaring"), (5, "+ Time"), (6, "+ Secrets"), (7, "+ Stone")) },
 			new() { Label = "Mirror", Address = 0x7EF353, Choices = C((0, "None"), (1, "Letter"), (2, "Mirror")) },
 			new() { Label = "Rod", Address = 0x7EF351, Choices = C((0, "None"), (1, "Fishing Rod"), (2, "Portal Rod")) },
+			new() { Label = "Bound Mask", Address = 0x7EF3A8, Choices = C((0, "None"), (1, "Deku"), (2, "Zora"), (3, "Wolf"), (4, "Bunny"), (5, "Stone"), (6, "Garo"), (7, "Stalfos"), (8, "Frog"), (9, "Fierce Deity")) },
+			new() { Label = "Active Form", Address = 0x7E02B2, Choices = C((0, "$00 Normal"), (1, "$01 Deku"), (2, "$02 Zora"), (3, "$03 Wolf"), (4, "$04 Bunny"), (5, "$05 Minish"), (6, "$06 GBC Link"), (7, "$07 Moosh"), (8, "$08 Garo"), (9, "$09 Horse"), (10, "$0A Farore"), (11, "$0B Stalfos"), (12, "$0C Frog"), (13, "$0D Fierce Deity"), (14, "$0E Mermaid")) },
 			new() { Label = "Bottle 1", Address = 0x7EF35C, Choices = Bottle() },
 			new() { Label = "Bottle 2", Address = 0x7EF35D, Choices = Bottle() },
 			new() { Label = "Bottle 3", Address = 0x7EF35E, Choices = Bottle() },
@@ -53,7 +56,7 @@ namespace Mesen.Utilities
 			new() { Label = "Bombs", Address = 0x7EF343, Choices = C((0, "0"), (10, "10"), (30, "30"), (50, "50")) },
 			new() { Label = "Arrows", Address = 0x7EF377, Choices = C((0, "0"), (30, "30"), (50, "50"), (70, "70")) },
 			new() { Label = "Magic Usage", Address = 0x7EF37B, Choices = C((0, "Normal"), (1, "1/2 Magic"), (2, "1/4 Magic")) },
-			new() { Label = "Equipped Ring", Address = 0x7EF3A3, Choices = C((0, "None"), (2, "Power"), (3, "Armor"), (4, "Heart"), (5, "Light"), (6, "Blast"), (7, "Steadfast")) },
+			new() { Label = "Equipped Ring", Address = 0x7EF3A3, Choices = C((0, "None"), (2, "Power"), (3, "Armor"), (4, "Heart"), (5, "Light"), (6, "Blast"), (7, "Steadfast"), (8, "Mana"), (9, "Charge"), (10, "Whisp")) },
 			new() { Label = "Bombchus", Address = 0x7EF3B0, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
 			new() { Label = "Deku Sticks", Address = 0x7EF395, Choices = C((0, "0"), (1, "1"), (5, "5"), (10, "10"), (20, "20")) },
 			new() { Label = "Bananas", Address = 0x7EF38B, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
@@ -61,6 +64,8 @@ namespace Mesen.Utilities
 			new() { Label = "Rock Meat", Address = 0x7EF38F, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
 			new() { Label = "Seashells", Address = 0x7EF391, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
 			new() { Label = "Honeycomb", Address = 0x7EF393, Choices = C((0, "0"), (5, "5"), (10, "10"), (20, "20")) },
+			new() { Label = "Keys $1C", Address = 0x7EF450, Choices = Enumerable.Range(0, 10).Select(k => (k, $"{k}")).ToArray() },
+			new() { Label = "Keys $1E", Address = 0x7EF451, Choices = Enumerable.Range(0, 10).Select(k => (k, $"{k}")).ToArray() },
 		};
 
 		// Vanilla bottle contents (Core/sram.asm Bottles: 0 = no bottle, 2 = empty, 3+ = contents).
@@ -82,7 +87,7 @@ namespace Mesen.Utilities
 			new() { Label = "Bunny Hood", Address = 0x7EF348 },
 			new() { Label = "Stone Mask", Address = 0x7EF352 },
 			new() { Label = "Wolf Mask", Address = 0x7EF358 },
-			// Oracle ownership bytes ($7EF3A6, $7EF3A9, $7EF3AC-$7EF3AF): only exactly 1 counts as owned.
+			// Oracle ownership bytes ($7EF3A6, $7EF3A9, $7EF3AC-$7EF3AF, $7EF45A-$7EF45D, $7EF466-$7EF468): only exactly 1 counts as owned.
 			new() { Label = "Cane of Byrna", Address = 0x7EF3AC },
 			new() { Label = "Bombchu", Address = 0x7EF3AD },
 			new() { Label = "Switch Hook", Address = 0x7EF3AE },
@@ -90,12 +95,23 @@ namespace Mesen.Utilities
 			new() { Label = "Portal Rod", Address = 0x7EF3A6 },
 			new() { Label = "Goldstar", Address = 0x7EF3A9 },
 			new() { Label = "Fishing Rod (Supply)", Address = 0x7EF38A },
+			new() { Label = "Clockwork Beetle", Address = 0x7EF45A },
+			new() { Label = "Switch Hook Col 21", Address = 0x7EF45B },
+			new() { Label = "Lens of Truth", Address = 0x7EF45C },
+			new() { Label = "Tempest Harp", Address = 0x7EF45D },
+			new() { Label = "Stalfos Mask", Address = 0x7EF466 },
+			new() { Label = "Frog Mask", Address = 0x7EF467 },
+			new() { Label = "Fierce Deity Mask", Address = 0x7EF468 },
 		};
 
 		// Core/sram.asm bit constants and addresses (StoryProgress, Crystals, Pendants, SideQuest*, Dreams, EonOwlFlags, ...).
 		public static readonly IReadOnlyList<OracleCheatField> FlagChoices = new List<OracleCheatField>() {
 			new() { Group = "Story", Label = "GameState", Address = 0x7EF3C5, Choices = C((0, "0 Start"), (1, "1 Loom Beach"), (2, "2 Sent to Abyss"), (3, "3 Farore rescued")) },
 			new() { Group = "Story", Label = "MapIcon", Address = 0x7EF3C7, Choices = C((0, "0 Maku Tree"), (1, "1 D1"), (2, "2 D2"), (3, "3 D3"), (4, "4 D4"), (5, "5 D5"), (6, "6 D6"), (7, "7 D7"), (8, "8 Fortress"), (9, "9 Tail Pond")) },
+			new() { Group = "Story", Label = "Eon Jabu", Address = 0x7EF481, Choices = C((0x00, "00 None"), (0xA1, "$A1 Heard"), (0xA2, "$A2 Errand"), (0xA3, "$A3 Pearl"), (0xA4, "$A4 Maw Open")) },
+			new() { Group = "Story", Label = "Jabu Water", Address = 0x7EF482, Choices = C((0, "0 Drained"), (1, "1 B1 Flooded"), (2, "2 1F+B1 Flooded")) },
+			new() { Group = "Story", Label = "Trade Quest", Address = 0x7EF43D, Choices = C((0, "0 None"), (1, "1 Yoshi Doll"), (2, "2 Velvet Cloak"), (3, "3 Pocket Watch"), (4, "4 Ghost Shroom"), (5, "5 Chateau Brew"), (6, "6 Secret Diary"), (7, "7 Lost Melody"), (8, "8 Owl Quill"), (9, "9 Moth Lantern"), (10, "10 Secrets Seal")) },
+			new() { Group = "Story", Label = "Sky Soaring", Address = 0x7EF3B2, Choices = C((0x00, "00 Locked"), (0xA5, "$A5 Learned")) },
 		};
 
 		public static readonly IReadOnlyList<OracleCheatField> FlagBits = new List<OracleCheatField>() {
@@ -137,6 +153,47 @@ namespace Mesen.Utilities
 			Bit("Side quest 2 $7EF3D8", "Deku soul freed", 0x7EF3D8, 0x10),
 			Bit("Side quest 2 $7EF3D8", "Tingle met", 0x7EF3D8, 0x20),
 			Bit("Side quest 2 $7EF3D8", "Beanstalk grown", 0x7EF3D8, 0x40),
+			Bit("Deku Village $7EF456", "Met King Deku", 0x7EF456, 0x01),
+			Bit("Deku Village $7EF456", "Trial active", 0x7EF456, 0x02),
+			Bit("Deku Village $7EF456", "Trial won", 0x7EF456, 0x04),
+			Bit("Deku Village $7EF456", "King blessed", 0x7EF456, 0x08),
+			Bit("Deku Village $7EF456", "Merchant gift", 0x7EF456, 0x10),
+			Bit("Deku Village $7EF456", "Cursed", 0x7EF456, 0x20),
+			Bit("Glacia Witches $7EF483", "Courtyard done", 0x7EF483, 0x01),
+			Bit("Glacia Witches $7EF483", "Mountain done", 0x7EF483, 0x02),
+			Bit("SongBits $7EF3B1", "Song of Healing", 0x7EF3B1, 0x01),
+			Bit("SongBits $7EF3B1", "Song of Storms", 0x7EF3B1, 0x02),
+			Bit("SongBits $7EF3B1", "Song of Soaring", 0x7EF3B1, 0x04),
+			Bit("SongBits $7EF3B1", "Song of Time", 0x7EF3B1, 0x08),
+			Bit("SongBits $7EF3B1", "Song of Secrets", 0x7EF3B1, 0x10),
+			Bit("SongBits $7EF3B1", "Epona's Song", 0x7EF3B1, 0x20),
+			Bit("SongBits $7EF3B1", "SongBits Active", 0x7EF3B1, 0x80),
+			Bit("Slingshot/Bow $7EF3C3", "Slingshot", 0x7EF3C3, 0x01),
+			Bit("Slingshot/Bow $7EF3C3", "Full Bow", 0x7EF3C3, 0x02),
+			Bit("Slingshot/Bow $7EF3C3", "SlingshotBow Init", 0x7EF3C3, 0x80),
+			Bit("Travel Spots $7EF412", "Spot 0 ($00)", 0x7EF412, 0x01),
+			Bit("Travel Spots $7EF412", "Spot 1 ($0B)", 0x7EF412, 0x02),
+			Bit("Travel Spots $7EF412", "Spot 2 ($06)", 0x7EF412, 0x04),
+			Bit("Travel Spots $7EF412", "Spot 3 ($10)", 0x7EF412, 0x08),
+			Bit("Travel Spots $7EF412", "Spot 4 ($1E)", 0x7EF412, 0x10),
+			Bit("Travel Spots $7EF412", "Spot 5 ($38)", 0x7EF412, 0x20),
+			Bit("Travel Spots $7EF412", "Spot 6 ($2F)", 0x7EF412, 0x40),
+			Bit("Travel Spots $7EF412", "Spot 7 ($36)", 0x7EF412, 0x80),
+			Bit("Special Travel $7EF438", "Korok Cove", 0x7EF438, 0x01),
+			Bit("Special Travel $7EF438", "Royal Garrison", 0x7EF438, 0x02),
+			Bit("Special Travel $7EF438", "Zora Quay", 0x7EF438, 0x04),
+			Bit("Special Travel $7EF438", "Goron Coast", 0x7EF438, 0x08),
+			Bit("Special Travel $7EF438", "Crescent Isle", 0x7EF438, 0x10),
+			Bit("Special Travel $7EF438", "Courage Isle", 0x7EF438, 0x20),
+			Bit("Special Travel $7EF438", "Frost Glacier", 0x7EF438, 0x40),
+			Bit("Abyss Travel $7EF43A", "Pyramid ($40)", 0x7EF43A, 0x01),
+			Bit("Abyss Travel $7EF43A", "Windmill ($63)", 0x7EF43A, 0x02),
+			Bit("Abyss Travel $7EF43A", "Fortress ($4B)", 0x7EF43A, 0x04),
+			Bit("Abyss Travel $7EF43A", "Twin Bros ($56)", 0x7EF43A, 0x08),
+			Bit("Abyss Travel $7EF43A", "Courage ($50)", 0x7EF43A, 0x10),
+			Bit("Abyss Travel $7EF43A", "Lupo ($5E)", 0x7EF43A, 0x20),
+			Bit("Abyss Travel $7EF43A", "Dreams ($58)", 0x7EF43A, 0x40),
+			Bit("Abyss Travel $7EF43A", "Beach ($76)", 0x7EF43A, 0x80),
 			Bit("Scrolls Found $7EF3BF", "D1 Mushroom", 0x7EF3BF, 0x01),
 			Bit("Scrolls Found $7EF3BF", "D2 Tail", 0x7EF3BF, 0x02),
 			Bit("Scrolls Found $7EF3BF", "D3 Kalyxo", 0x7EF3BF, 0x04),
@@ -159,6 +216,12 @@ namespace Mesen.Utilities
 			Bit("Rings $7EF3A2", "Light Ring", 0x7EF3A2, 0x04),
 			Bit("Rings $7EF3A2", "Blast Ring", 0x7EF3A2, 0x02),
 			Bit("Rings $7EF3A2", "Steadfast Ring", 0x7EF3A2, 0x01),
+			Bit("Found Rings Ex $7EF469", "Mana Ring", 0x7EF469, 0x01),
+			Bit("Found Rings Ex $7EF469", "Charge Ring", 0x7EF469, 0x02),
+			Bit("Found Rings Ex $7EF469", "Whisp Ring", 0x7EF469, 0x04),
+			Bit("Magic Rings Ex $7EF46A", "Mana Ring", 0x7EF46A, 0x01),
+			Bit("Magic Rings Ex $7EF46A", "Charge Ring", 0x7EF46A, 0x02),
+			Bit("Magic Rings Ex $7EF46A", "Whisp Ring", 0x7EF46A, 0x04),
 			Bit("Sword Slots $7EF3BD", "Heavy Owned", 0x7EF3BD, 0x01),
 			Bit("Sword Slots $7EF3BD", "Heavy Equipped", 0x7EF3BD, 0x02),
 			Bit("Sword Slots $7EF3BD", "Heavy Reforged", 0x7EF3BD, 0x04),
@@ -168,8 +231,11 @@ namespace Mesen.Utilities
 			Bit("Dreams $7EF410", "Courage", 0x7EF410, 0x04),
 			Bit("Eon Owl $7EF3A7", "Arrival Owl", 0x7EF3A7, 0x01),
 			Bit("Eon Owl $7EF3A7", "Sword Owl ($E6)", 0x7EF3A7, 0x02),
+			Bit("Eon Owl $7EF3A7", "Kaepora ($0E)", 0x7EF3A7, 0x04),
+			Bit("Eon Owl $7EF3A7", "Soaring Owl ($63)", 0x7EF3A7, 0x08),
 			Bit("Misc", "Maku Tree met", 0x7EF3D4, 0x01),
 			Bit("Misc", "Maku Seed", 0x7EF3D4, 0x02),
+			Bit("Misc", "KORL unlocked", 0x7EF439, 0x01),
 			Bit("Misc", "Kydrog/Farore gone", 0x7EF300, 0x01),
 			Bit("Misc", "Deku Mask quest", 0x7EF301, 0x01),
 			Bit("Misc", "Zora Mask quest", 0x7EF302, 0x01),

@@ -89,6 +89,16 @@ internal static class Program
 		Expect(OraclePlayCatalog.Parse("{\"schema\":\"other\"}", Warps).Error.Length > 0, "bad schema");
 		string noRom = OraclePlayJump.Execute(fortress);
 		Expect(noRom == "No ROM loaded.", noRom);
+
+		string liveDir = OraclePlayCatalog.ResolveDebugDataDirectory();
+		if(!string.IsNullOrWhiteSpace(liveDir)) {
+			OraclePlayCatalog.Catalog live = OraclePlayCatalog.LoadFromDirectory(liveDir);
+			Expect(live.Error.Length == 0, "live catalog error: " + live.Error);
+			Expect(live.Entrances.Count > 0 && live.Areas.Count > 0 && live.Checkpoints.Count > 0, "live catalog empty");
+			Expect(live.Warnings.Count == 0, "live catalog warnings: " + string.Join("; ", live.Warnings));
+			Console.WriteLine($"Live Data/debug ok ({live.Checkpoints.Count} checkpoints, {live.Entrances.Count} entrances, {live.Areas.Count} areas)");
+		}
+
 		Console.WriteLine("OraclePlayCatalogTest ok");
 		return 0;
 	}

@@ -334,6 +334,7 @@ namespace Mesen.ViewModels
 				Field = field,
 				Choices = field.Choices.Select(c => new OracleCheatChoiceValueViewModel() { Value = c.Value, Label = c.Label }).ToList()
 			};
+			vm.ValueWritten += (_, _) => RefreshValues();
 			return vm;
 		}
 

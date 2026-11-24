@@ -128,7 +128,7 @@ namespace Mesen.ViewModels
 				}));
 
 				LocationSummary = $"Area: {data.State.AreaName} (0x{data.State.AreaId:X2}) | Map: {data.State.MapName} | Room: {data.State.RoomName} ({data.State.RoomLabel})";
-				StatsSummary = $"Mode: {data.State.ModeName} / 0x{data.State.Submode:X2} | Link: {data.State.LinkX}, {data.State.LinkY} facing {data.State.LinkDirection} | HP {data.State.Health}/{data.State.MaxHealth} | Magic {data.State.Magic} | Rupees {data.State.Rupees} | GameState {data.State.GameState} | Crystals 0x{data.State.Crystals:X2} | Pendants 0x{data.State.Pendants:X2}";
+				StatsSummary = $"Mode: {data.State.ModeName} / 0x{data.State.Submode:X2} | Link: {data.State.LinkX}, {data.State.LinkY} facing {data.State.LinkDirection} ({data.State.LinkFormName}) | HP {data.State.Health}/{data.State.MaxHealth} | Magic {data.State.Magic} | Rupees {data.State.Rupees} | GameState {data.State.GameState} | Crystals 0x{data.State.Crystals:X2} | Pendants 0x{data.State.Pendants:X2}";
 				if(!preserveStatus) {
 					StatusText = "Loaded live Oracle save-data controls.";
 				}
