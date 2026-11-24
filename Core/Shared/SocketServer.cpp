@@ -110,7 +110,9 @@ SimpleLock SocketServer::_agentLock;
 
 // Static member definitions for command history
 std::deque<CommandHistoryEntry> SocketServer::_commandHistory;
-uint32_t SocketServer::_commandHistoryMaxSize = 100;
+uint32_t SocketServer::_commandHistoryMaxSize = 1000;
+uint64_t SocketServer::_commandHistorySeq = 0;
+
 SimpleLock SocketServer::_historyLock;
 
 // Static member definitions for save/load status
@@ -879,6 +881,11 @@ bool SocketServer::HandleClient(int clientFd) {
 		entry.timestamp = timeStr;
 		entry.errorCode = response.errorCode;
 		entry.latencyUs = latencyUs;
+		entry.seq = ++_commandHistorySeq;
+		entry.frame = (_emu && _emu->IsRunning()) ? _emu->GetFrameCount() : 0;
+		entry.timeMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+		entry.success = response.success;
+		entry.paramsJson = SummarizeParams(cmd);
 		
 		_commandHistory.push_back(entry);
 		while (_commandHistory.size() > _commandHistoryMaxSize) {
@@ -7029,42 +7036,86 @@ SocketResponse SocketServer::HandleMetrics(Emulator* emu, const SocketCommand& c
     return resp;
 }
 
+// Compact, bounded copy of request params for COMMAND_HISTORY. Long values
+// (WRITEBLOCK data, base64) are cut so the history stays small.
+string SocketServer::SummarizeParams(const SocketCommand& cmd) {
+	std::vector<std::pair<string, string>> items(cmd.params.begin(), cmd.params.end());
+	std::sort(items.begin(), items.end());
+	string out = "{";
+	bool first = true;
+	for (const auto& kv : items) {
+		string value = kv.second.size() > 96 ? kv.second.substr(0, 96) + "..." : kv.second;
+		string piece = string(first ? "" : ",") + "\"" + JsonEscape(kv.first) + "\":\"" + JsonEscape(value) + "\"";
+		if (out.size() + piece.size() > 480) {
+			out += first ? "\"truncated\":\"1\"" : ",\"truncated\":\"1\"";
+			break;
+		}
+		out += piece;
+		first = false;
+	}
+	return out + "}";
+}
+
 SocketResponse SocketServer::HandleCommandHistory(Emulator* emu, const SocketCommand& cmd) {
     SocketResponse resp;
-    
-    auto countIt = cmd.params.find("count");
-    size_t count = 20;
-    if (countIt != cmd.params.end()) {
-        try {
-            count = std::stoul(countIt->second);
-        } catch (...) {}
+
+    // count: newest N entries (default 20). since=<seq>: entries with seq > since,
+    // oldest first, returned as {"latestSeq","oldestSeq","entries"} so observers
+    // can poll without gaps. Without since the legacy array shape is kept.
+    bool sinceMode = cmd.params.find("since") != cmd.params.end();
+    uint64_t since = 0;
+    size_t count = sinceMode ? 256 : 20;
+    try {
+        if (sinceMode) since = std::stoull(cmd.params.at("since"));
+        auto countIt = cmd.params.find("count");
+        if (countIt != cmd.params.end()) count = std::stoul(countIt->second);
+    } catch (...) {
+        resp.success = false;
+        resp.error = "count and since must be non-negative integers";
+        resp.errorCode = SocketErrorCode::InvalidParameter;
+        return resp;
     }
-    
+
     stringstream ss;
-    ss << "[";
-    
+    uint64_t latest = 0, oldest = 0;
     {
         auto lock = _historyLock.AcquireSafe();
-        size_t start = _commandHistory.size() > count ? _commandHistory.size() - count : 0;
-        bool first = true;
-        for (size_t i = start; i < _commandHistory.size(); i++) {
-            if (!first) ss << ",";
-            first = false;
-            
+        latest = _commandHistorySeq;
+        oldest = _commandHistory.empty() ? latest + 1 : _commandHistory.front().seq;
+        size_t start = 0;
+        size_t stop = _commandHistory.size();
+        if (sinceMode) {
+            while (start < stop && _commandHistory[start].seq <= since) start++;
+            if (stop - start > count) stop = start + count;
+        } else if (stop > count) {
+            start = stop - count;
+        }
+        ss << "[";
+        for (size_t i = start; i < stop; i++) {
             const auto& entry = _commandHistory[i];
+            if (i != start) ss << ",";
             ss << "{";
             ss << "\"command\":\"" << JsonEscape(entry.command) << "\",";
             ss << "\"timestamp\":\"" << entry.timestamp << "\",";
             ss << "\"errorCode\":" << static_cast<int>(entry.errorCode) << ",";
-            ss << "\"latencyUs\":" << entry.latencyUs;
+            ss << "\"latencyUs\":" << entry.latencyUs << ",";
+            ss << "\"seq\":" << entry.seq << ",";
+            ss << "\"frame\":" << entry.frame << ",";
+            ss << "\"timeMs\":" << entry.timeMs << ",";
+            ss << "\"success\":" << (entry.success ? "true" : "false") << ",";
+            ss << "\"params\":" << (entry.paramsJson.empty() ? "{}" : entry.paramsJson);
             ss << "}";
         }
+        ss << "]";
     }
-    
-    ss << "]";
-    
+
     resp.success = true;
-    resp.data = ss.str();
+    if (sinceMode) {
+        resp.data = "{\"latestSeq\":" + std::to_string(latest) + ",\"oldestSeq\":" + std::to_string(oldest) +
+                    ",\"entries\":" + ss.str() + "}";
+    } else {
+        resp.data = ss.str();
+    }
     return resp;
 }
 

@@ -1,0 +1,466 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Oracle Probes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Oracle Probes: watch and replay agent-owned Mesen2-OOS sessions. Same look as the planning board.
+   Served by tools/oos_client/agent_spectator.py; the planning board proxies it at /probes. Observer only. */
+:root {
+  color-scheme: dark;
+  --bg: #0d121e; --panel: #141b2b; --panel-2: #1a2337; --line: #27324b;
+  --fg: #e7ecf6; --muted: #8e9ab5; --accent: #5fe3a1; --open: #ffb547; --bad: #ff6b6b;
+  --c-cmd: #6cc3ff; --c-ev: #b48cff; --c-note: #ffb547; --c-write: #ff9b4a; --c-ctl: #ff5d7a;
+  --f-display: "Silkscreen", "Courier New", monospace;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); min-height: 100dvh; }
+header.top { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; justify-content: space-between; padding: 10px 16px 6px; }
+h1 { margin: 0; font: 400 clamp(17px, 2vw, 22px)/1.1 var(--f-display); color: var(--accent); letter-spacing: .02em; }
+.nav { display: flex; flex-wrap: wrap; gap: 4px; }
+.nav a { font: 400 11px var(--f-display); letter-spacing: .05em; color: var(--muted); text-decoration: none; padding: 5px 9px; border-radius: 6px; border: 1px solid transparent; }
+.nav a:hover { color: var(--fg); border-color: var(--line); }
+.nav a[aria-current="page"] { color: var(--bg); background: var(--accent); }
+.build { font: 500 11px var(--f-mono); color: var(--muted); }
+.build b { color: var(--fg); font-weight: 500; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 6px 16px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.tgroup { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; max-width: 100%; }
+.tlabel { font: 400 10px var(--f-display); color: var(--muted); letter-spacing: .06em; margin-right: 2px; }
+.pill { --kc: var(--muted); font: 500 11.5px var(--f-body); color: var(--fg); background: transparent; border: 1px solid color-mix(in srgb, var(--kc) 60%, transparent); border-radius: 999px; padding: 2px 9px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; max-width: 100%; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--kc); flex: none; }
+.pill .n { color: var(--muted); font: 500 10.5px var(--f-mono); }
+.pill[aria-pressed="true"] { background: color-mix(in srgb, var(--kc) 22%, transparent); border-color: var(--kc); }
+.pill.act[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.pill.act[aria-pressed="true"] .n { color: var(--bg); }
+.pill.off { --kc: var(--muted); opacity: .7; }
+.pill.on { --kc: var(--accent); }
+select, textarea { background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 4px 9px; font: 13px var(--f-body); max-width: 100%; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 14px; padding: 14px 16px 24px; align-items: start; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+.screen { display: grid; gap: 10px; min-width: 0; }
+.vp { position: relative; background: #070a12; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: grid; place-items: center; aspect-ratio: 8 / 7; max-height: calc(100dvh - 260px); min-height: 200px; }
+.vp img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+.vp img[hidden] { display: none; }
+.vp .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); font: 400 12px/1.6 var(--f-display); }
+.vp .empty code { font: 12px var(--f-mono); color: var(--fg); display: block; margin-top: 8px; white-space: pre-wrap; text-align: left; background: var(--panel); border-radius: 6px; padding: 8px 10px; }
+.badge { position: absolute; left: 10px; top: 10px; font: 400 10px var(--f-display); letter-spacing: .06em; background: rgba(13,18,30,.85); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; color: var(--muted); }
+.badge.live { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 60%, transparent); }
+.badge.live::before { content: "● "; }
+.clock { position: absolute; right: 10px; top: 10px; font: 500 11px var(--f-mono); background: rgba(13,18,30,.85); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; }
+
+.scrub { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.scrub[hidden] { display: none; }
+.btn { font: 500 12px var(--f-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.btn.pri { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.track { position: relative; height: 26px; }
+.track input { position: absolute; inset: 0; width: 100%; margin: 0; accent-color: var(--accent); background: transparent; }
+.tick { position: absolute; bottom: 0; width: 3px; height: 8px; margin-left: -1px; border-radius: 1px; pointer-events: none; }
+.tick.note { background: var(--c-note); height: 12px; }
+.tick.ev { background: var(--c-ev); }
+.tlbl { font: 500 11px var(--f-mono); color: var(--muted); min-width: 92px; text-align: right; }
+
+.facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.fact { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; min-width: 0; }
+.fact dt { font: 400 9.5px var(--f-display); color: var(--muted); letter-spacing: .05em; }
+.fact dd { margin: 2px 0 0; font: 500 12.5px var(--f-mono); overflow-wrap: anywhere; }
+.fact.wide { grid-column: 1 / -1; }
+.fact dd.body { font: 13px/1.45 var(--f-body); }
+
+.note-form { display: grid; gap: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.note-form label { font: 400 10px var(--f-display); letter-spacing: .05em; color: var(--c-note); }
+.note-form textarea { width: 100%; min-height: 64px; resize: vertical; }
+.note-form .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.note-form .at { font: 500 11px var(--f-mono); color: var(--muted); }
+.err { color: #ff9b9b; font-size: 12px; }
+
+aside.tl { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); max-height: calc(100dvh - 130px); min-height: 320px; position: sticky; top: 10px; min-width: 0; }
+@media (max-width: 900px) { aside.tl { position: static; max-height: 70dvh; } }
+.tabs { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
+.tab { font: 400 10.5px var(--f-display); letter-spacing: .05em; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 6px 8px; cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tab .n { font: 500 10px var(--f-mono); margin-left: 4px; }
+.filt { display: flex; gap: 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.filt input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 3px 8px; font: 12.5px var(--f-body); }
+.list { overflow: auto; padding: 6px 6px 16px; display: grid; gap: 2px; align-content: start; }
+.it { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 2px 8px; padding: 5px 8px; border-radius: 6px; border-left: 3px solid var(--k, var(--line)); }
+.it:hover, .it:focus-visible { background: var(--panel-2); }
+.it.cur { background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); }
+.it.future { opacity: .45; }
+.it .t { font: 500 10.5px var(--f-mono); color: var(--muted); padding-top: 1px; }
+.it .m { min-width: 0; font: 500 12px var(--f-mono); overflow-wrap: anywhere; }
+.it .m small { color: var(--muted); font-weight: 400; }
+.it .x { grid-column: 2; font: 12.5px/1.4 var(--f-body); color: var(--fg); overflow-wrap: anywhere; }
+.it.cmd { --k: var(--c-cmd); } .it.cmd.write { --k: var(--c-write); } .it.cmd.ctl { --k: var(--c-ctl); } .it.cmd.fail .m { color: #ff9b9b; }
+.it.ev { --k: var(--c-ev); } .it.note { --k: var(--c-note); } .it.note.done { opacity: .6; }
+.st { font: 400 9px var(--f-display); letter-spacing: .05em; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+.st.open { color: var(--c-note); } .st.done { color: var(--accent); }
+.mini { all: unset; cursor: pointer; font: 500 11px var(--f-body); color: var(--muted); text-decoration: underline; margin-left: 8px; }
+.none { color: var(--muted); font-size: 12.5px; padding: 14px 10px; line-height: 1.5; }
+</style>
+
+<header class="top">
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <h1>Oracle Probes</h1>
+    <nav class="nav" aria-label="Sections"><a href="/">Progression</a><a href="/atlas">Atlas</a><a href="/probes" aria-current="page">Probes</a><a href="/#view=updates">Updates</a></nav>
+  </div>
+  <div class="build" id="build">Connecting to the probe recorder…</div>
+</header>
+<div class="toolbar" role="toolbar" aria-label="Probe controls">
+  <div class="tgroup" id="sessions"><span class="tlabel">SESSION</span></div>
+  <div class="tgroup"><span class="tlabel">MODE</span>
+    <button class="pill act" id="mLive" aria-pressed="true">Live</button>
+    <button class="pill act" id="mReplay" aria-pressed="false">Replay</button>
+  </div>
+  <div class="tgroup" id="runGroup" hidden><span class="tlabel">RUN</span><select id="run" aria-label="Recorded run"></select></div>
+  <div class="tgroup"><button class="pill" id="openNotes" style="--kc:var(--c-note)" aria-pressed="false"><span class="dot"></span>Open notes <span class="n" id="openN">0</span></button></div>
+</div>
+
+<main>
+  <section class="screen" aria-label="Emulator viewport">
+    <div class="vp">
+      <img id="img" alt="Emulator viewport" hidden>
+      <div class="empty" id="empty">Loading…</div>
+      <span class="badge" id="badge">Live</span>
+      <span class="clock" id="clock" hidden></span>
+    </div>
+    <div class="scrub" id="scrub" hidden>
+      <button class="btn pri" id="play" aria-label="Play">▶</button>
+      <select id="speed" aria-label="Playback speed"><option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option><option value="8">8×</option></select>
+      <div class="track" id="track"><input type="range" id="pos" min="0" max="1000" step="1" value="0" aria-label="Replay position"></div>
+      <span class="tlbl" id="tlbl">0:00</span>
+    </div>
+    <dl class="facts" id="facts"></dl>
+    <form class="note-form" id="noteForm">
+      <label for="noteText">NOTE ON THIS MOMENT</label>
+      <textarea id="noteText" placeholder="What should the probe do differently here? Agents read open notes before writing probes."></textarea>
+      <div class="row"><span class="at" id="noteAt">—</span><span><span class="err" id="noteErr"></span> <button class="btn pri" id="noteSave" type="submit">Save note</button></span></div>
+    </form>
+  </section>
+  <aside class="tl" aria-label="Timeline">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="all" aria-selected="true">All</button>
+      <button class="tab" role="tab" data-tab="cmd" aria-selected="false">Commands<span class="n" id="nCmd"></span></button>
+      <button class="tab" role="tab" data-tab="ev" aria-selected="false">Events<span class="n" id="nEv"></span></button>
+      <button class="tab" role="tab" data-tab="note" aria-selected="false">Notes<span class="n" id="nNote"></span></button>
+    </div>
+    <div class="filt"><input id="q" type="search" placeholder="Filter: READ, 0x7E, room…" aria-label="Filter timeline"><label class="mono" style="font:11px var(--f-mono);color:var(--muted);display:flex;gap:4px;align-items:center"><input type="checkbox" id="follow" checked>follow</label></div>
+    <div class="list" id="list"></div>
+  </aside>
+</main>
+
+<script>
+(() => {
+const BASE = location.pathname.startsWith('/probes') ? '/probes' : '';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const WRITE = /^(WRITE|WRITE16|WRITEBLOCK|LOADSTATE|SAVESTATE|INPUT|SET_|POKE)/;
+const CTL = /^(PAUSE|RESUME|STEP|FRAME|RESET|RUN|BREAKPOINT|BATCH|LOADSTATE|INPUT)/;
+const MODES = {0:'Title',2:'File select',7:'Dungeon',9:'Overworld',12:'Arrival',14:'Dialogue',18:'Death',21:'Cutscene'};
+const S = { status: null, sid: null, mode: 'live', tab: 'all', q: '', runs: [], run: null, rd: null, cur: 0, playing: false, openOnly: false, comments: [] };
+
+const hhmmss = t => new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+const dur = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const api = (p) => fetch(BASE + p, {cache: 'no-store'});
+
+function readHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('s')) S.sid = h.get('s');
+  if (h.get('run')) { S.mode = 'replay'; S.run = h.get('run'); S.jumpT = parseFloat(h.get('t')) || null; }
+}
+function writeHash() {
+  const h = new URLSearchParams();
+  if (S.sid) h.set('s', S.sid);
+  if (S.mode === 'replay' && S.run) { h.set('run', S.run); h.set('t', S.cur.toFixed(1)); }
+  history.replaceState(null, '', '#' + h.toString());
+}
+
+// ---------- status + sessions ----------
+async function pollStatus() {
+  try {
+    const r = await api('/api/status'); S.status = await r.json();
+    const ss = S.status.sessions;
+    const live = ss.filter(s => s.connected).length;
+    $('build').innerHTML = `recorder <b>up</b> · ${ss.length} session${ss.length === 1 ? '' : 's'} · <b>${live}</b> live · recording ${S.status.record_fps || 0} fps`;
+    if (!S.sid) S.sid = (ss.find(s => s.connected) || ss[0] || {}).id || null;
+    drawSessions();
+    if (S.mode === 'live') drawLive();
+  } catch (e) {
+    $('build').textContent = 'Probe recorder is not running';
+    if (S.mode === 'live') showEmpty('Probe recorder is not running.<code>python3 tools/oos_client/agent_spectator.py serve</code>');
+  }
+}
+function drawSessions() {
+  const box = $('sessions'); box.querySelectorAll('.pill').forEach(n => n.remove());
+  const seen = new Set();
+  const add = (id, label, on, title) => {
+    if (seen.has(id)) return; seen.add(id);
+    const b = document.createElement('button');
+    b.className = 'pill ' + (on ? 'on' : 'off'); b.setAttribute('aria-pressed', String(id === S.sid)); b.title = title || '';
+    b.innerHTML = `<span class="dot"></span>${esc(label)}`;
+    b.onclick = () => { S.sid = id; S.run = null; S.rd = null; writeHash(); drawSessions(); S.mode === 'live' ? drawLive() : loadRuns(); };
+    box.appendChild(b);
+  };
+  for (const s of (S.status?.sessions || [])) add(s.id, s.label, s.connected, s.connected ? 'Connected' : (s.error || 'Offline'));
+  for (const r of S.runs) add(r.session, r.label || r.session, false, 'Recorded runs only');
+}
+function sess() { return (S.status?.sessions || []).find(s => s.id === S.sid); }
+function showEmpty(html) { $('img').hidden = true; $('empty').hidden = false; $('empty').innerHTML = html; }
+
+// ---------- live ----------
+let liveUrl = null, liveBusy = false;
+async function pullFrame() {
+  if (S.mode !== 'live' || document.hidden || liveBusy) return;
+  const s = sess(); if (!s || !s.connected) return;
+  liveBusy = true;
+  try {
+    const r = await api('/api/frame?id=' + encodeURIComponent(s.id));
+    if (r.status === 200) {
+      const u = URL.createObjectURL(await r.blob());
+      $('img').src = u; $('img').hidden = false; $('empty').hidden = true;
+      if (liveUrl) URL.revokeObjectURL(liveUrl); liveUrl = u;
+    }
+  } catch (e) {} finally { liveBusy = false; }
+}
+function drawLive() {
+  $('badge').className = 'badge live'; $('badge').textContent = 'Live'; $('clock').hidden = true;
+  const s = sess();
+  if (!S.status?.sessions.length) {
+    showEmpty('No agent sessions registered.<code>python3 tools/oos_client/agent_spectator.py register \\\n  --id my-probe --socket /tmp/mesen2-XXXX.sock \\\n  --rom-sha1 SHA1 --label "Claude · D6 probe"</code>');
+  } else if (!s) {
+    showEmpty('Pick a session above.');
+  } else if (!s.connected) {
+    showEmpty(esc(s.label) + ' is offline.<br><br>' + esc(s.error || 'Waiting for its socket.'));
+  }
+  const g = s?.game || {}, e = s?.emulator || {};
+  facts([
+    ['Session', s ? s.label : '—'],
+    ['Game mode', g.game ? (MODES[g.game.mode] || g.game.mode) + (g.game.room_id ? ' · room ' + g.game.room_id : g.game.area_id != null ? ' · area ' + g.game.area_id : '') : (s?.game_state_available ? '—' : 'not attested')],
+    ['Frame', e.frame ?? '—'], ['Paused', e.paused == null ? '—' : e.paused ? 'yes' : 'no'],
+    ['Health', g.health ? `${g.health.current}/${g.health.max}` : '—'],
+    ['ROM', s?.rom?.sha1 ? s.rom.sha1.slice(0, 10) : '—'],
+    ['Run', s?.run ? `${s.run.id} · ${s.run.frames} frames · ${s.run.commands} cmds` : (S.status?.record_fps ? 'not recording' : 'recording off')],
+    ['Command log', s ? ({ok: 'from socket', unsupported: 'build too old (driver reports only)', unknown: '—'}[s.command_log] || '—') : '—'],
+    s?.driver && s.driver.command ? ['Latest published step', (typeof s.driver.command === 'string' ? s.driver.command : JSON.stringify(s.driver.command)) + (s.driver.note ? ' — ' + s.driver.note : ''), 'wide'] : null,
+    s?.fixtures?.length ? ['Fixtures', s.fixtures.join(' · '), 'wide'] : null,
+  ]);
+  const items = [];
+  for (const c of (s?.commands || [])) items.push(cmdItem(c));
+  for (const ev of (s?.events || [])) items.push(evItem(ev));
+  for (const n of S.comments.filter(n => n.session === S.sid && (!s?.run || n.run === s.run.id))) items.push(noteItem(n));
+  drawList(items, Date.now() / 1000);
+  $('noteAt').textContent = s?.run ? `Attaches to run ${s.run.id} at now` : 'No active run to attach to';
+  $('noteSave').disabled = !s?.run;
+}
+function facts(rows) {
+  $('facts').innerHTML = rows.filter(Boolean).map(([k, v, cls]) => `<div class="fact ${cls || ''}"><dt>${esc(k)}</dt><dd class="${cls ? 'body' : ''}">${esc(v)}</dd></div>`).join('');
+}
+
+// ---------- timeline items ----------
+function cmdItem(c) {
+  const p = c.params || {}; const keys = Object.keys(p).filter(k => k !== 'observer');
+  const ps = keys.map(k => `${k}=${p[k]}`).join(' ');
+  const cls = 'cmd' + (WRITE.test(c.command) ? ' write' : '') + (CTL.test(c.command) ? ' ctl' : '') + (c.ok === false ? ' fail' : '');
+  return {t: c.t, kind: 'cmd', cls, text: `${c.command} ${ps}`,
+          html: `<span class="m">${esc(c.command)} <small>${esc(ps)}</small>${c.ok === false ? ' <small>· error ' + esc(c.error_code) + '</small>' : ''}</span>`};
+}
+function evText(e) {
+  const a = e.after; const k = e.kind;
+  if (k === 'location' && a) return `${MODES[a.mode] || 'mode ' + a.mode}${a.room_id ? ' room ' + a.room_id : ''}${a.area_id != null ? ' area ' + a.area_id : ''}`;
+  if (k === 'health' && a) return `health ${e.before?.current ?? '?'} → ${a.current}`;
+  if (k === 'driver') return `step: ${typeof e.data?.command === 'string' ? e.data.command : JSON.stringify(e.data?.command || '')}${e.data?.note ? ' — ' + e.data.note : ''}`;
+  if (k === 'disconnected') return 'disconnected: ' + (e.reason || '');
+  if (k === 'paused') return a ? 'paused' : 'resumed';
+  if (k === 'lastLoad' || k === 'lastSave') return `${k === 'lastLoad' ? 'state loaded' : 'state saved'} ${a?.path || a?.slot || ''}`;
+  if (k === 'command_gap') return `missed ${e.missed} commands (history overflow)`;
+  return k + (e.note ? ': ' + e.note : '');
+}
+function evItem(e) { const t = evText(e); return {t: e.t, kind: 'ev', cls: 'ev', text: t, html: `<span class="m"><small>${esc(e.kind)}</small> ${esc(t)}</span>`}; }
+function noteItem(n) {
+  return {t: n.t, kind: 'note', cls: 'note' + (n.status === 'done' ? ' done' : ''), text: n.text, note: n,
+          html: `<span class="m"><small>note</small><span class="st ${n.status}">${n.status === 'done' ? 'DONE' : 'OPEN'}</span>${n.status === 'open' ? `<button class="mini" data-done="${esc(n.id)}">mark done</button>` : `<button class="mini" data-reopen="${esc(n.id)}">reopen</button>`}</span><span class="x">${esc(n.text)}${n.resolved_note ? '<br><small style="color:var(--accent)">' + esc(n.resolved_by || '') + ': ' + esc(n.resolved_note) + '</small>' : ''}</span>`};
+}
+let lastItems = [];
+function drawList(items, cur) {
+  items.sort((a, b) => a.t - b.t);
+  const counts = {cmd: 0, ev: 0, note: 0}; items.forEach(i => counts[i.kind]++);
+  $('nCmd').textContent = counts.cmd || ''; $('nEv').textContent = counts.ev || ''; $('nNote').textContent = counts.note || '';
+  const q = S.q.toLowerCase();
+  const shown = items.filter(i => (S.tab === 'all' || i.kind === S.tab) && (!q || i.text.toLowerCase().includes(q)));
+  lastItems = shown;
+  let curIdx = -1; shown.forEach((i, n) => { if (i.t <= cur) curIdx = n; });
+  const L = $('list');
+  if (!shown.length) { L.innerHTML = `<div class="none">${S.mode === 'live' ? 'Nothing yet. Commands appear when the agent talks to the socket (needs a Mesen build with COMMAND_HISTORY since=).' : 'Nothing recorded for this filter.'}</div>`; return; }
+  L.innerHTML = shown.map((i, n) => `<button class="it ${i.cls}${n === curIdx ? ' cur' : ''}${S.mode === 'replay' && i.t > cur ? ' future' : ''}" data-n="${n}"><span class="t">${hhmmss(i.t)}</span>${i.html}</button>`).join('');
+  if ($('follow').checked) {
+    // Scroll only the list (scrollIntoView would also scroll the page every second).
+    const c = L.querySelector('.it.cur') || (S.mode === 'live' ? L.lastElementChild : null);
+    if (c) { const top = c.offsetTop - L.offsetTop; if (top < L.scrollTop || top + c.offsetHeight > L.scrollTop + L.clientHeight) L.scrollTop = top - L.clientHeight / 2; }
+  }
+}
+$('list').addEventListener('click', async ev => {
+  const d = ev.target.closest('[data-done],[data-reopen]');
+  if (d) { ev.stopPropagation(); await setNote(d.dataset.done || d.dataset.reopen, d.dataset.done ? 'done' : 'open'); return; }
+  const b = ev.target.closest('.it'); if (!b) return;
+  const it = lastItems[+b.dataset.n]; if (!it) return;
+  if (it.note && (it.note.run !== S.run || S.mode !== 'replay')) { openRun(it.note.session, it.note.run, it.note.t); return; }
+  if (S.mode === 'replay') { $('follow').checked = false; seek(it.t); }
+});
+
+// ---------- replay ----------
+async function loadRuns() {
+  try { S.runs = await (await api('/api/runs')).json(); } catch (e) { S.runs = []; }
+  if (!S.sid && S.runs.length) S.sid = S.runs[0].session;
+  drawSessions();
+  const mine = S.runs.filter(r => r.session === S.sid);
+  $('run').innerHTML = mine.length ? mine.map(r => `<option value="${esc(r.id)}">${esc(new Date(r.started * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}))} · ${dur((r.ended || Date.now() / 1000) - r.started)} · ${r.frames}f/${r.commands}c${r.ended ? '' : ' · recording'}</option>`).join('') : '<option value="">No runs recorded</option>';
+  if (!S.run || !mine.some(r => r.id === S.run)) S.run = mine[0]?.id || null;
+  $('run').value = S.run || '';
+  if (S.run) await loadRun(); else { S.rd = null; showEmpty('No recorded runs for this session yet.'); facts([]); drawList([], 0); $('scrub').hidden = true; }
+}
+async function loadRun() {
+  const r = await api(`/api/run?id=${encodeURIComponent(S.sid)}&run=${encodeURIComponent(S.run)}`);
+  if (!r.ok) { showEmpty('Run not found.'); return; }
+  const rd = await r.json(); S.rd = rd;
+  rd.t0 = rd.meta.started;
+  const ends = [rd.meta.ended, ...rd.frames.map(f => f.t), ...rd.commands.map(c => c.t), ...rd.events.map(e => e.t)].filter(Boolean);
+  rd.t1 = Math.max(rd.t0 + 1, ...ends);
+  rd.items = [...rd.commands.map(cmdItem), ...rd.events.map(evItem), ...rd.comments.map(noteItem)];
+  $('scrub').hidden = false; $('pos').max = String(Math.round((rd.t1 - rd.t0) * 10));
+  $('track').querySelectorAll('.tick').forEach(n => n.remove());
+  const tick = (t, cls) => { const d = document.createElement('span'); d.className = 'tick ' + cls; d.style.left = ((t - rd.t0) / (rd.t1 - rd.t0) * 100) + '%'; $('track').appendChild(d); };
+  rd.events.filter(e => ['location', 'death', 'disconnected', 'lastLoad'].includes(e.kind)).forEach(e => tick(e.t, 'ev'));
+  rd.comments.forEach(c => tick(c.t, 'note'));
+  seek(S.jumpT && S.jumpT >= rd.t0 ? S.jumpT : rd.t0); S.jumpT = null;
+}
+function frameAt(t) {
+  const f = S.rd.frames; let lo = 0, hi = f.length - 1, best = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (f[m].t <= t) { best = m; lo = m + 1; } else hi = m - 1; }
+  return best;
+}
+let shownFrame = null;
+function seek(t) {
+  const rd = S.rd; if (!rd) return;
+  S.cur = Math.min(rd.t1, Math.max(rd.t0, t));
+  $('pos').value = String(Math.round((S.cur - rd.t0) * 10));
+  $('tlbl').textContent = `${dur(S.cur - rd.t0)} / ${dur(rd.t1 - rd.t0)}`;
+  $('badge').className = 'badge'; $('badge').textContent = 'Replay';
+  $('clock').hidden = false; $('clock').textContent = hhmmss(S.cur);
+  const i = frameAt(S.cur);
+  if (i < 0) showEmpty('No picture before this moment.');
+  else if (rd.frames[i].file !== shownFrame) {
+    shownFrame = rd.frames[i].file;
+    const url = n => `${BASE}/api/run_frame?id=${encodeURIComponent(S.sid)}&run=${encodeURIComponent(S.run)}&f=${n}`;
+    $('img').src = url(shownFrame); $('img').hidden = false; $('empty').hidden = true;
+    for (const nx of rd.frames.slice(i + 1, i + 4)) { const im = new Image(); im.src = url(nx.file); }
+  }
+  const fr = i >= 0 ? rd.frames[i] : null;
+  const lastCmd = [...rd.commands].reverse().find(c => c.t <= S.cur);
+  const lastLoc = [...rd.events].reverse().find(e => e.kind === 'location' && e.t <= S.cur);
+  const lastDrv = [...rd.events].reverse().find(e => e.kind === 'driver' && e.t <= S.cur);
+  facts([
+    ['Run', `${rd.meta.label} · ${rd.meta.id}`], ['Frame', fr?.frame ?? '—'],
+    ['Where', lastLoc ? evText(lastLoc) : '—'], ['ROM', rd.meta.rom?.sha1 ? rd.meta.rom.sha1.slice(0, 10) : '—'],
+    ['Last command', lastCmd ? cmdItem(lastCmd).text : '—', 'wide'],
+    lastDrv ? ['Published step', evText(lastDrv), 'wide'] : null,
+    rd.meta.end_reason ? ['Ended', rd.meta.end_reason, 'wide'] : null,
+  ]);
+  $('noteAt').textContent = `Attaches to ${hhmmss(S.cur)}${fr?.frame != null ? ' · frame ' + fr.frame : ''}`;
+  $('noteSave').disabled = false;
+  drawList(rd.items, S.cur);
+  writeHashSoon();
+}
+let hashTimer = null; function writeHashSoon() { clearTimeout(hashTimer); hashTimer = setTimeout(writeHash, 300); }
+$('pos').addEventListener('input', () => { $('follow').checked = true; seek(S.rd.t0 + (+$('pos').value) / 10); });
+$('run').addEventListener('change', () => { S.run = $('run').value; shownFrame = null; loadRun(); });
+let lastTs = 0;
+function frameLoop(ts) {
+  if (!S.playing) return;
+  const dt = lastTs ? (ts - lastTs) / 1000 : 0; lastTs = ts;
+  seek(S.cur + dt * (+$('speed').value));
+  if (S.cur >= S.rd.t1) { togglePlay(false); return; }
+  requestAnimationFrame(frameLoop);
+}
+function togglePlay(on) {
+  S.playing = on ?? !S.playing; $('play').textContent = S.playing ? '❚❚' : '▶'; $('play').setAttribute('aria-label', S.playing ? 'Pause' : 'Play');
+  if (S.playing) { if (S.cur >= S.rd.t1) seek(S.rd.t0); $('follow').checked = true; lastTs = 0; requestAnimationFrame(frameLoop); }
+}
+$('play').onclick = () => S.rd && togglePlay();
+document.addEventListener('keydown', e => {
+  if (S.mode !== 'replay' || !S.rd || /TEXTAREA|INPUT|SELECT/.test(document.activeElement?.tagName)) return;
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    e.preventDefault(); const i = frameAt(S.cur) + (e.key === 'ArrowRight' ? 1 : -1);
+    const f = S.rd.frames[Math.max(0, Math.min(S.rd.frames.length - 1, i))]; if (f) seek(f.t);
+  }
+});
+
+// ---------- notes ----------
+async function loadComments() {
+  try { S.comments = await (await api('/api/comments')).json(); } catch (e) { S.comments = []; }
+  const open = S.comments.filter(c => c.status === 'open');
+  $('openN').textContent = open.length;
+}
+$('noteForm').addEventListener('submit', async ev => {
+  ev.preventDefault(); $('noteErr').textContent = '';
+  const text = $('noteText').value.trim(); if (!text) { $('noteErr').textContent = 'Write the note first.'; return; }
+  let body;
+  if (S.mode === 'replay' && S.rd) { const i = frameAt(S.cur); body = {session: S.sid, run: S.run, t: S.cur, frame: i >= 0 ? S.rd.frames[i].frame : null, text}; }
+  else { const s = sess(); if (!s?.run) return; body = {session: s.id, run: s.run.id, t: Date.now() / 1000, frame: s.emulator?.frame ?? null, text}; }
+  $('noteSave').disabled = true;
+  try {
+    const r = await fetch(BASE + '/api/comment', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status);
+    $('noteText').value = ''; await loadComments();
+    if (S.mode === 'replay') { S.jumpT = S.cur; await loadRun(); } else drawLive();
+  } catch (e) { $('noteErr').textContent = 'Not saved: ' + e.message; }
+  finally { $('noteSave').disabled = false; }
+});
+async function setNote(id, status) {
+  const r = await fetch(BASE + '/api/comment_status', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status})});
+  if (!r.ok) return;
+  await loadComments();
+  if (S.mode === 'replay' && S.rd) { await loadRun(); } else if (S.openOnly) drawOpen(); else drawLive();
+}
+function drawOpen() {
+  const items = S.comments.filter(c => c.status === 'open').map(noteItem);
+  const saveTab = S.tab; S.tab = 'all'; drawList(items, Infinity); S.tab = saveTab;
+}
+$('openNotes').onclick = async () => {
+  S.openOnly = !S.openOnly; $('openNotes').setAttribute('aria-pressed', String(S.openOnly));
+  await loadComments(); S.openOnly ? drawOpen() : (S.mode === 'replay' ? seek(S.cur) : drawLive());
+};
+
+// ---------- mode + tabs ----------
+async function setMode(m) {
+  S.mode = m; togglePlay(false);
+  $('mLive').setAttribute('aria-pressed', String(m === 'live')); $('mReplay').setAttribute('aria-pressed', String(m === 'replay'));
+  $('runGroup').hidden = m !== 'replay'; $('scrub').hidden = m !== 'replay'; shownFrame = null;
+  writeHash();
+  if (m === 'replay') await loadRuns(); else { $('img').hidden = true; drawLive(); }
+}
+function openRun(sid, run, t) { S.sid = sid; S.run = run; S.jumpT = t; S.openOnly = false; $('openNotes').setAttribute('aria-pressed', 'false'); setMode('replay'); }
+$('mLive').onclick = () => setMode('live'); $('mReplay').onclick = () => setMode('replay');
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  S.tab = b.dataset.tab; document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+  S.openOnly ? drawOpen() : S.mode === 'replay' ? seek(S.cur) : drawLive();
+});
+$('q').addEventListener('input', () => { S.q = $('q').value; S.mode === 'replay' ? seek(S.cur) : drawLive(); });
+
+readHash();
+(async () => {
+  await loadComments(); await pollStatus();
+  try { S.runs = await (await api('/api/runs')).json(); } catch (e) {}
+  drawSessions();
+  await setMode(S.mode);
+  setInterval(async () => { await pollStatus(); S.tick = (S.tick || 0) + 1; if (S.tick % 10 === 0) loadComments(); }, 1000);
+  setInterval(pullFrame, 250);
+})();
+})();
+</script>
+<script src="/agents.js" defer></script>

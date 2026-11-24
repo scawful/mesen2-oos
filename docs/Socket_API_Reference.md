@@ -375,11 +375,20 @@ Get performance metrics and statistics.
 ```
 
 ### COMMAND_HISTORY
-Get recent command history for debugging.
+Get recent command history (last 1000 commands, all clients).
 ```json
 {"type":"COMMAND_HISTORY","count":"20"}
-→ [{"command":"READ","timestamp":"2026-01-24 10:30:45","errorCode":0,"latencyUs":1200},...]
+→ [{"command":"READ","timestamp":"2026-01-24 10:30:45","errorCode":0,"latencyUs":1200,
+    "seq":42,"frame":12345,"timeMs":1795480000123,"success":true,"params":{"addr":"0x7E0010"}},...]
 ```
+Poll without gaps with `since` (entries with `seq` greater than `since`, oldest first; `count` defaults to 256):
+```json
+{"type":"COMMAND_HISTORY","since":"41","count":"1000"}
+→ {"latestSeq":57,"oldestSeq":1,"entries":[{"seq":42,...}]}
+```
+`seq` is monotonic per Mesen process. `oldestSeq > since + 1` means entries were dropped. `params` values are
+cut to 96 characters and the object to about 480. The probe spectator (`tools/oos_client/agent_spectator.py`)
+tags its own reads with `"observer":"spectator"` and filters them out of the agent's command log.
 
 ### LOG_LEVEL
 Control logging verbosity.
