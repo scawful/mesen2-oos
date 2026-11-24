@@ -105,7 +105,10 @@ private:
 	uint16_t _latchRequestY = 0;
 
 	Timer _frameSkipTimer;
+	Timer _frameStartTimer;
 	bool _skipRender = false;
+	bool _lastFrameSkipped = false;
+	uint8_t _handheldBehindStreak = 0;
 	uint8_t _configVisibleLayers = 0xFF;
 
 	uint8_t _spritePriority[256] = {};

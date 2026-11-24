@@ -12,27 +12,43 @@
 #include "Core/Shared/ShortcutKeyHandler.h"
 #include "Core/Shared/TimingInfo.h"
 #include "Core/Shared/CheatManager.h"
+#include "Core/Shared/MemoryType.h"
 #include "Core/Shared/DebuggerRequest.h"
+#include "Core/Shared/Audio/SoundMixer.h"
 #include "Core/Netplay/GameClient.h"
 #include "Core/Netplay/GameServer.h"
 #include "Utilities/ArchiveReader.h"
 #include "Utilities/FolderUtilities.h"
+#include "Utilities/PNGHelper.h"
 #include "Utilities/StringUtilities.h"
+#include "Utilities/Video/AviWriter.h"
+#include "HandheldRuntimeSnapshot.h"
 #include "InteropLifecycle.h"
 #include "InteropNotificationListeners.h"
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <mutex>
+#include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 	#include "Windows/Renderer.h"
 	#include "Windows/SoundManager.h"
 	#include "Windows/WindowsKeyManager.h"
 	#include "Windows/WindowsMouseManager.h"
-#elif __APPLE__
+#elif defined(__APPLE__)
 	#include "Sdl/SdlSoundManager.h"
 	#include "MacOS/MacOSKeyManager.h"
 	#include "MacOS/MacOSMouseManager.h"
+#elif defined(__ANDROID__)
+	#include "Sdl/SdlRenderer.h"
+	#include "Sdl/SdlSoundManager.h"
+	#include "Sdl/SdlKeyManager.h"
+	#include "Sdl/SdlMouseManager.h"
 #else
 	#include "Sdl/SdlRenderer.h"
 	#include "Sdl/SdlSoundManager.h"
@@ -311,9 +327,12 @@ extern "C" {
 				#ifdef _WIN32
 					_keyManager.reset(new WindowsKeyManager(_emu.get(), (HWND)_windowHandle));
 					_mouseManager.reset(new WindowsMouseManager());
-				#elif __APPLE__
+				#elif defined(__APPLE__)
 					_keyManager.reset(new MacOSKeyManager(_emu.get()));
 					_mouseManager.reset(new MacOSMouseManager());
+				#elif defined(__ANDROID__)
+					_keyManager.reset(new SdlKeyManager(_emu.get()));
+					_mouseManager.reset(new SdlMouseManager());
 				#else
 					_keyManager.reset(new LinuxKeyManager(_emu.get()));
 					_mouseManager.reset(new LinuxMouseManager(_windowHandle));
@@ -457,6 +476,9 @@ extern "C" {
 	DllExport void __stdcall Pause()
 	{
 		INTEROP_EMU_LEASE_OR_RETURN();
+		// Belt-and-suspenders with Java clearFastForward(): never leave Turbo
+		// stuck if R2 ACTION_UP is lost while opening Workshop or backgrounding.
+		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, false);
 		if(!_emu->GetGameClient()->Connected()) {
 			_emu->Pause();
 		}
@@ -479,6 +501,513 @@ extern "C" {
 	DllExport void __stdcall Release()
 	{
 		ReleaseEmulator(false);
+	}
+
+	DllExport void __stdcall ApplyHandheldSnesDefaults()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		PreferencesConfig preferences = _emu->GetSettings()->GetPreferences();
+		preferences.RewindBufferSize = 0;
+		preferences.SaveStateSlotCount = 10;
+		_emu->GetSettings()->SetPreferences(preferences);
+
+		AudioConfig audio = _emu->GetSettings()->GetAudioConfig();
+		// Fast-forward keeps audio: SoundMixer resamples turbo output by the
+		// measured speed (pitched up) instead of muting it.
+		audio.ReduceSoundInFastForward = false;
+		audio.AudioLatency = 45;
+		_emu->GetSettings()->SetAudioConfig(audio);
+
+		// TurboSpeed is owned by the Android host (R2 / sticky FF preference).
+		// Leave the current EmulationConfig.TurboSpeed alone so ApplyHandheld
+		// does not wipe a user-selected ×2/×3/×4/MAX preset.
+
+		VideoConfig video = _emu->GetSettings()->GetVideoConfig();
+		video.VideoFilter = VideoFilterType::None;
+		video.ScanlineIntensity = 0;
+		video.VerticalSync = false;
+		video.UseBilinearInterpolation = false;
+		_emu->GetSettings()->SetVideoConfig(video);
+
+		SnesConfig cfg = _emu->GetSettings()->GetSnesConfig();
+		cfg.Port1.Type = ControllerType::SnesController;
+		auto mapKey = [](const char* name) -> uint16_t {
+			return KeyManager::GetKeyCode(name);
+		};
+		uint16_t selectKey = mapKey("Pad1 Select");
+		if(!selectKey) {
+			selectKey = mapKey("Pad1 Back");
+		}
+		cfg.Port1.Keys.Mapping1.A = mapKey("Pad1 A");
+		cfg.Port1.Keys.Mapping1.B = mapKey("Pad1 B");
+		cfg.Port1.Keys.Mapping1.X = mapKey("Pad1 X");
+		cfg.Port1.Keys.Mapping1.Y = mapKey("Pad1 Y");
+		cfg.Port1.Keys.Mapping1.L = mapKey("Pad1 L1");
+		cfg.Port1.Keys.Mapping1.R = mapKey("Pad1 R1");
+		cfg.Port1.Keys.Mapping1.Select = selectKey;
+		cfg.Port1.Keys.Mapping1.Start = mapKey("Pad1 Start");
+		cfg.Port1.Keys.Mapping1.Up = mapKey("Pad1 Up");
+		cfg.Port1.Keys.Mapping1.Down = mapKey("Pad1 Down");
+		cfg.Port1.Keys.Mapping1.Left = mapKey("Pad1 Left");
+		cfg.Port1.Keys.Mapping1.Right = mapKey("Pad1 Right");
+		cfg.Port1.Keys.Mapping2.A = mapKey("X");
+		cfg.Port1.Keys.Mapping2.B = mapKey("Z");
+		cfg.Port1.Keys.Mapping2.X = mapKey("S");
+		cfg.Port1.Keys.Mapping2.Y = mapKey("A");
+		cfg.Port1.Keys.Mapping2.L = mapKey("Q");
+		cfg.Port1.Keys.Mapping2.R = mapKey("W");
+		cfg.Port1.Keys.Mapping2.Select = mapKey("Tab");
+		cfg.Port1.Keys.Mapping2.Start = mapKey("Enter");
+		cfg.Port1.Keys.Mapping2.Up = mapKey("Up Arrow");
+		cfg.Port1.Keys.Mapping2.Down = mapKey("Down Arrow");
+		cfg.Port1.Keys.Mapping2.Left = mapKey("Left Arrow");
+		cfg.Port1.Keys.Mapping2.Right = mapKey("Right Arrow");
+		_emu->GetSettings()->SetSnesConfig(cfg);
+	}
+
+	DllExport void __stdcall HandheldSetFastForward(bool enabled)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->GetSettings()->SetFlagState(EmulationFlags::Turbo, enabled);
+	}
+
+	DllExport bool __stdcall HandheldIsFastForward()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetSettings()->CheckFlag(EmulationFlags::Turbo);
+	}
+
+	DllExport void __stdcall HandheldSetTurboSpeed(uint32_t percent)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		EmulationConfig emulation = _emu->GetSettings()->GetEmulationConfig();
+		// 0 = maximum / uncapped, matching desktop EmulationConfig.TurboSpeed.
+		emulation.TurboSpeed = percent > 5000 ? 5000 : percent;
+		_emu->GetSettings()->SetEmulationConfig(emulation);
+	}
+
+	DllExport uint32_t __stdcall HandheldGetTurboSpeed()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(300);
+		return _emu->GetSettings()->GetEmulationConfig().TurboSpeed;
+	}
+
+	DllExport void __stdcall HandheldSetPerformanceMode(bool enabled)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->GetSettings()->SetFlagState(EmulationFlags::HandheldPerformance, enabled);
+	}
+
+	DllExport bool __stdcall HandheldIsPerformanceMode()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetSettings()->CheckFlag(EmulationFlags::HandheldPerformance);
+	}
+
+	DllExport bool __stdcall HandheldSaveState(uint32_t stateIndex)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			return false;
+		}
+
+		SaveStateManager* states = _emu->GetSaveStateManager();
+		string path = states->GetStateFilepath(stateIndex);
+		string temporaryPath = path + ".tmp";
+		if(!states->SaveState(temporaryPath, false)) {
+			return false;
+		}
+		if(std::rename(temporaryPath.c_str(), path.c_str()) != 0) {
+			std::remove(temporaryPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldLoadState(uint32_t stateIndex)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			return false;
+		}
+		return _emu->GetSaveStateManager()->LoadState(stateIndex);
+	}
+
+	/** Save a state file atomically to an explicit path (used by handheld bug snapshots). */
+	DllExport bool __stdcall HandheldSaveStateFile(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning()) {
+			return false;
+		}
+		SaveStateManager* states = _emu->GetSaveStateManager();
+		string target(path);
+		string temporaryPath = target + ".tmp";
+		if(!states->SaveState(temporaryPath, false)) {
+			return false;
+		}
+		if(std::rename(temporaryPath.c_str(), target.c_str()) != 0) {
+			std::remove(temporaryPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	/** Load a state file by path (used for the auto-save, which sits one past the slot range). */
+	DllExport bool __stdcall HandheldLoadStateFile(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning()) {
+			return false;
+		}
+		return _emu->GetSaveStateManager()->LoadState(string(path), false);
+	}
+
+	DllExport void __stdcall HandheldGetSaveStatePath(
+		uint32_t stateIndex,
+		char* outBuffer,
+		uint32_t maxLength
+	) {
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(stateIndex < 1 || stateIndex > SaveStateManager::GetMaxIndex()) {
+			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
+			return;
+		}
+		StringUtilities::CopyToBuffer(
+			_emu->GetSaveStateManager()->GetStateFilepath(stateIndex),
+			outBuffer,
+			maxLength
+		);
+	}
+
+	DllExport void __stdcall HandheldReset()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		_emu->PowerCycle();
+	}
+
+	static bool HandheldMapWram(Emulator* emu, uint32_t cpuAddr, uint8_t*& outBytes, uint32_t& outOffset)
+	{
+		outBytes = nullptr;
+		outOffset = 0;
+		if(!emu || !emu->IsRunning()) {
+			return false;
+		}
+		const uint32_t bank = (cpuAddr >> 16) & 0xFF;
+		if(bank != 0x7E && bank != 0x7F) {
+			return false;
+		}
+		ConsoleMemoryInfo wram = emu->GetMemory(MemoryType::SnesWorkRam);
+		const uint32_t offset = cpuAddr & 0x1FFFF;
+		if(!wram.Memory || offset >= wram.Size) {
+			return false;
+		}
+		outBytes = static_cast<uint8_t*>(wram.Memory);
+		outOffset = offset;
+		return true;
+	}
+
+	// Direct WRAM poke for Workshop cheats. Avoids GetDebugger(true) so the
+	// handheld FPS path stays clean after applying items/flags.
+	DllExport bool __stdcall HandheldWriteByte(uint32_t cpuAddr, uint8_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset)) {
+			return false;
+		}
+		bytes[offset] = value;
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldWriteWord(uint32_t cpuAddr, uint16_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		ConsoleMemoryInfo wram = _emu->GetMemory(MemoryType::SnesWorkRam);
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset) || !wram.Memory || offset + 1 >= wram.Size) {
+			return false;
+		}
+		bytes[offset] = static_cast<uint8_t>(value & 0xFF);
+		bytes[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+		return true;
+	}
+
+	// Battery SRAM access for the Progression page (save-slot sync). Offsets
+	// are cartridge SRAM offsets ($70:0000 = 0), not CPU addresses.
+	DllExport int __stdcall HandheldReadSram(uint32_t offset)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		if(!_emu->IsRunning()) {
+			return -1;
+		}
+		ConsoleMemoryInfo sram = _emu->GetMemory(MemoryType::SnesSaveRam);
+		if(!sram.Memory || offset >= sram.Size) {
+			return -1;
+		}
+		return static_cast<uint8_t*>(sram.Memory)[offset];
+	}
+
+	DllExport bool __stdcall HandheldWriteSram(uint32_t offset, uint8_t value)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning()) {
+			return false;
+		}
+		ConsoleMemoryInfo sram = _emu->GetMemory(MemoryType::SnesSaveRam);
+		if(!sram.Memory || offset >= sram.Size) {
+			return false;
+		}
+		static_cast<uint8_t*>(sram.Memory)[offset] = value;
+		return true;
+	}
+
+	DllExport int __stdcall HandheldReadByte(uint32_t cpuAddr)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(-1);
+		uint8_t* bytes = nullptr;
+		uint32_t offset = 0;
+		if(!HandheldMapWram(_emu.get(), cpuAddr, bytes, offset)) {
+			return -1;
+		}
+		return bytes[offset];
+	}
+
+	DllExport bool __stdcall HandheldReadRuntimeSnapshot(HandheldRuntimeSnapshot& snapshot)
+	{
+		snapshot = {};
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+
+		snapshot.FrameCount = _emu->GetFrameCount();
+		snapshot.Paused = _emu->IsPaused();
+		StringUtilities::CopyToBuffer(
+			_emu->GetHash(HashType::Sha1),
+			snapshot.RomSha1,
+			sizeof(snapshot.RomSha1)
+		);
+
+		ConsoleMemoryInfo mem = _emu->GetMemory(MemoryType::SnesWorkRam);
+		if(!mem.Memory) {
+			return false;
+		}
+
+		auto readByte = [&](uint32_t offset) -> int32_t {
+			if(offset >= mem.Size) {
+				return -1;
+			}
+			return static_cast<uint8_t*>(mem.Memory)[offset];
+		};
+		auto readWord = [&](uint32_t offset) -> int32_t {
+			if(offset + 1 >= mem.Size) {
+				return -1;
+			}
+			const uint8_t* ptr = static_cast<const uint8_t*>(mem.Memory);
+			return static_cast<int32_t>(ptr[offset]) | (static_cast<int32_t>(ptr[offset + 1]) << 8);
+		};
+		snapshot.Mode = readByte(0x0010);
+		snapshot.Submode = readByte(0x0011);
+		snapshot.Indoor = readByte(0x001B);
+		snapshot.Area = readByte(0x008A);
+		snapshot.Room = readWord(0x00A0);
+		snapshot.SavedWorld = readByte(0xF3CA);
+		snapshot.SnesFrame = readByte(0x001A);
+		snapshot.SnesLagFlag = readByte(0x0012);
+		snapshot.LinkX = readWord(0x0022);
+		snapshot.LinkY = readWord(0x0020);
+		snapshot.LinkLayer = readByte(0x00EE);
+		snapshot.LinkDir = readByte(0x002F);
+		snapshot.LinkState = readByte(0x005D);
+		snapshot.LinkForm = readByte(0x02B2);
+		snapshot.Health = readByte(0xF36D);
+		snapshot.MaxHealth = readByte(0xF36C);
+		snapshot.Magic = readByte(0xF36E);
+		snapshot.Rupees = readWord(0xF360);
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldTakeScreenshot(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning() || !_emu->GetVideoDecoder()) {
+			return false;
+		}
+		std::stringstream pngStream;
+		vector<uint32_t> overlayPixels;
+		uint32_t overlayW = 0;
+		uint32_t overlayH = 0;
+		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->GetDebugOverlayMask() != 0
+			&& _emu->GetVideoRenderer()->CopyLastFrame(overlayPixels, overlayW, overlayH)) {
+			PNGHelper::WritePNG(pngStream, overlayPixels.data(), overlayW, overlayH, 24);
+		} else {
+			_emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+		}
+		string pngData = pngStream.str();
+		if(pngData.empty()) {
+			return false;
+		}
+		string target(path);
+		string tmpPath = target + ".tmp";
+		{
+			std::ofstream out(tmpPath, std::ios::out | std::ios::binary | std::ios::trunc);
+			if(!out.good()) {
+				return false;
+			}
+			out.write(pngData.data(), static_cast<std::streamsize>(pngData.size()));
+			out.flush();
+			if(!out.good()) {
+				out.close();
+				std::remove(tmpPath.c_str());
+				return false;
+			}
+		}
+		if(std::rename(tmpPath.c_str(), target.c_str()) != 0) {
+			std::remove(tmpPath.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	DllExport bool __stdcall HandheldStartVideoRecording(const char* path, bool recordInputHud, bool recordSystemHud)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->IsRunning() || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		if(_emu->GetVideoRenderer()->IsFileRecording()) {
+			return false;
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordInputHud = recordInputHud;
+		options.RecordSystemHud = recordSystemHud;
+		return _emu->GetVideoRenderer()->StartRecording(string(path), options);
+	}
+
+	DllExport void __stdcall HandheldStopVideoRecording()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsFileRecording()) {
+			_emu->GetVideoRenderer()->StopRecording();
+		}
+	}
+
+	DllExport bool __stdcall HandheldIsVideoRecording()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsFileRecording();
+	}
+
+	DllExport void __stdcall HandheldGetVideoRecordingPath(char* outBuffer, uint32_t maxLength)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(!_emu->GetVideoRenderer() || !_emu->GetVideoRenderer()->IsFileRecording()) {
+			StringUtilities::CopyToBuffer("", outBuffer, maxLength);
+			return;
+		}
+		StringUtilities::CopyToBuffer(_emu->GetVideoRenderer()->GetRecordingFile(), outBuffer, maxLength);
+	}
+
+	DllExport bool __stdcall HandheldStartReplayBuffer(uint32_t windowSeconds, bool recordInputHud)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		if(_emu->GetVideoRenderer()->IsFileRecording()) {
+			return false;
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordInputHud = recordInputHud;
+		options.RecordSystemHud = false;
+		return _emu->GetVideoRenderer()->StartReplayBuffer(windowSeconds, options);
+	}
+
+	DllExport void __stdcall HandheldStopReplayBuffer()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->StopReplayBuffer();
+		}
+	}
+
+	DllExport bool __stdcall HandheldIsReplayBufferActive()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		return _emu->GetVideoRenderer() && _emu->GetVideoRenderer()->IsReplayBufferActive();
+	}
+
+	DllExport uint32_t __stdcall HandheldGetReplayBufferedSeconds()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetVideoRenderer() ? _emu->GetVideoRenderer()->GetReplayBufferedSeconds() : 0;
+	}
+
+	DllExport bool __stdcall HandheldDumpReplayBuffer(const char* path)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!path || path[0] == '\0' || !_emu->GetVideoRenderer()) {
+			return false;
+		}
+		return _emu->GetVideoRenderer()->DumpReplayBuffer(string(path));
+	}
+
+	DllExport void __stdcall HandheldSetDebugOverlayMask(uint32_t mask)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		if(_emu->GetVideoRenderer()) {
+			_emu->GetVideoRenderer()->SetDebugOverlayMask(mask);
+		}
+	}
+
+	DllExport uint32_t __stdcall HandheldGetDebugOverlayMask()
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(0);
+		return _emu->GetVideoRenderer() ? _emu->GetVideoRenderer()->GetDebugOverlayMask() : 0;
+	}
+
+	DllExport void __stdcall HandheldSetRamCheats(const uint32_t* addrs, const uint8_t* values, uint32_t count)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN();
+		CheatManager* cheats = _emu->GetCheatManager();
+		if(!cheats) {
+			return;
+		}
+		if(!addrs || !values || count == 0) {
+			cheats->ClearCheats(false);
+			return;
+		}
+		vector<CheatCode> codes;
+		codes.reserve(count);
+		for(uint32_t i = 0; i < count; ++i) {
+			CheatCode code = {};
+			code.Type = CheatType::SnesProActionReplay;
+			snprintf(code.Code, sizeof(code.Code), "%06X%02X", addrs[i] & 0xFFFFFFu, values[i] & 0xFFu);
+			codes.push_back(code);
+		}
+		cheats->SetCheats(codes);
+	}
+
+	DllExport bool __stdcall HandheldStepFrames(uint32_t frames)
+	{
+		INTEROP_EMU_LEASE_OR_RETURN_VALUE(false);
+		if(!_emu->IsRunning() || _emu->GetGameClient()->Connected()) {
+			return false;
+		}
+		uint32_t count = std::clamp<uint32_t>(frames, 1, 600);
+		uint32_t target = _emu->GetFrameCount() + count;
+		_emu->Resume();
+		const uint32_t timeoutMs = std::max<uint32_t>(1000, count * 30);
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+		while(_emu->IsRunning() && _emu->GetFrameCount() < target && std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		_emu->Pause();
+		return _emu->GetFrameCount() >= target;
 	}
 
 	DllExport INotificationListener* __stdcall RegisterNotificationCallback(NotificationListenerCallback callback)

@@ -326,8 +326,10 @@ void Emulator::OnBeforeSendFrame()
 
 void Emulator::ProcessEndOfFrame()
 {
-	// Broadcast frame_complete event
-	if (_socketServer && _socketServer->IsRunning()) {
+	// Broadcast frame_complete event only when a client is listening — the
+	// handheld socket is always running, and stringstream construction was
+	// paying every frame for an empty subscription map.
+	if (_socketServer && _socketServer->IsRunning() && SocketServer::HasEventSubscribers()) {
 		stringstream ss;
 		ss << "{\"frame\":" << GetFrameCount() << "}";
 		SocketServer::BroadcastEvent("frame_complete", ss.str());
@@ -605,6 +607,10 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	_rom.PatchFile = (string)patchFile;
 	_rom.Format = console->GetRomFormat();
 	_rom.DipSwitches = console->GetDipSwitchInfo();
+	{
+		auto hashLock = _romHashLock.AcquireSafe();
+		_romSha1.clear();
+	}
 
 	if(_rom.Format == RomFormat::Spc || _rom.Format == RomFormat::Nsf || _rom.Format == RomFormat::Gbs || _rom.Format == RomFormat::PceHes) {
 		_audioPlayerHud.reset(new AudioPlayerHud(this));
@@ -857,12 +863,22 @@ void Emulator::TryLoadRom(VirtualFile& romFile, LoadRomResult& result, unique_pt
 
 string Emulator::GetHash(HashType type)
 {
+	if(type == HashType::Sha1) {
+		auto hashLock = _romHashLock.AcquireSafe();
+		if(_romSha1.empty()) {
+			shared_ptr<IConsole> console = _console.lock();
+			_romSha1 = console ? console->GetHash(type) : "";
+			if(_romSha1.empty()) {
+				_romSha1 = _rom.RomFile.GetSha1Hash();
+			}
+		}
+		return _romSha1;
+	}
+
 	shared_ptr<IConsole> console = _console.lock();
 	string hash = console ? console->GetHash(type) : "";
 	if(hash.size()) {
 		return hash;
-	} else if(type == HashType::Sha1) {
-		return _rom.RomFile.GetSha1Hash();
 	} else if(type == HashType::Sha1Cheat) {
 		return _rom.RomFile.GetSha1Hash();
 	}
@@ -1042,6 +1058,17 @@ void Emulator::Pause()
 
 bool Emulator::TryPause(uint32_t timeoutMs)
 {
+	// Any pause path (JNI, socket, Workshop) must drop hold-to-turbo so R2
+	// release races cannot leave unlimited speed active after the menu opens.
+	_settings->SetFlagState(EmulationFlags::Turbo, false);
+#ifdef __ANDROID__
+	EmulationConfig cfg = _settings->GetEmulationConfig();
+	if(cfg.EmulationSpeed != 100) {
+		cfg.EmulationSpeed = 100;
+		_settings->SetEmulationConfig(cfg);
+	}
+#endif
+
 	shared_ptr<Debugger> debugger = _debugger.lock();
 	if(debugger) {
 		// Bound the actual break acquisition, not a separate preflight wait.

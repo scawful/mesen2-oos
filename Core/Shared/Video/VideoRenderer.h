@@ -19,6 +19,7 @@ class InputHud;
 class WatchHud;
 
 class IVideoRecorder;
+class Mp4VideoRecorder;
 enum class VideoCodec;
 
 struct RecordAviOptions
@@ -87,6 +88,11 @@ private:
 	uint32_t _cameraFrameWidth = 0;
 	uint32_t _cameraFrameHeight = 0;
 
+	safe_ptr<Mp4VideoRecorder> _replayRecorder;
+
+	atomic<uint32_t> _debugOverlayMask{ 0 };
+	vector<uint32_t> _debugOverlayBuffer;
+
 	void RenderThread();
 	bool DrawScriptHud(RenderedFrame& frame);
 	
@@ -119,11 +125,11 @@ public:
 	void RegisterRenderingDevice(IRenderingDevice *renderer);
 	void UnregisterRenderingDevice(IRenderingDevice *renderer);
 
-	void StartRecording(string filename, RecordAviOptions options);
-	bool StartRecording(string filename, RecordAviOptions options, bool throughCamera);
+	bool StartRecording(string filename, RecordAviOptions options, bool throughCamera = false);
 	void AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount, uint32_t sampleRate);
 	void StopRecording();
 	bool IsRecording();
+	bool IsFileRecording();
 	bool IsRecordingThroughCamera() { return _recordThroughCamera; }
 	string GetRecordingFile();
 	bool NeedsRecordingSound();
@@ -138,4 +144,14 @@ public:
 	bool StartLiveStream(string videoPath, string audioPath, uint32_t frameInterval, uint32_t downscale, string& error);
 	void StopLiveStream();
 	shared_ptr<LiveStreamSink> GetLiveStream();
+
+	bool StartReplayBuffer(uint32_t windowSeconds, RecordAviOptions options);
+	void StopReplayBuffer();
+	bool IsReplayBufferActive();
+	uint32_t GetReplayBufferedSeconds();
+	bool DumpReplayBuffer(string filename);
+
+	void SetDebugOverlayMask(uint32_t mask);
+	uint32_t GetDebugOverlayMask();
+	bool CopyLastFrame(vector<uint32_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 };

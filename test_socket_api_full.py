@@ -52,6 +52,10 @@ def test_state(sock):
         assert "success" in data["lastLoad"]
 
 def test_health(sock):
+    before = send_command(sock, "STATE")
+    assert before["success"]
+    debugging_before = before["data"].get("debugging", False)
+
     res = send_command(sock, "HEALTH")
     assert res["success"]
     data = res["data"]
@@ -59,6 +63,14 @@ def test_health(sock):
     assert "running" in data
     if "diagnostics" in data:
         assert "registeredAgents" in data["diagnostics"]
+
+    after = send_command(sock, "STATE")
+    assert after["success"]
+    assert after["data"].get("debugging", False) is debugging_before
+    if not debugging_before:
+        assert data["debugging"] is False
+        assert data["pc"] is None
+        assert data["disasmOk"] is False
 
 # --- Control Tests ---
 

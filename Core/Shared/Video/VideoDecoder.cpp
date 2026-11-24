@@ -16,6 +16,7 @@
 #include "Shared/RenderedFrame.h"
 #include "Shared/Video/SystemHud.h"
 #include "SNES/CartTypes.h"
+#include <thread>
 
 VideoDecoder::VideoDecoder(Emulator* emu)
 {
@@ -183,11 +184,19 @@ void VideoDecoder::UpdateFrame(RenderedFrame frame, bool sync, bool forRewind)
 	}
 
 	if(_frameChanged) {
-		//Last frame isn't done decoding yet - sometimes Signal() introduces a 25-30ms delay
-		while(_frameChanged) {
-			//Spin until decode is done
+		const bool turboDrop = !sync && !forRewind
+			&& _emu->GetSettings()->CheckFlag(EmulationFlags::Turbo);
+		if(turboDrop) {
+			// Fast-forward: replace the pending decode instead of stalling the
+			// emulation thread on a busy Cortex-A55 decode worker.
+		} else {
+			//Last frame isn't done decoding yet - sometimes Signal() introduces a 25-30ms delay
+			while(_frameChanged) {
+				// Yield so the decode thread can run on a shared Cortex-A55.
+				std::this_thread::yield();
+			}
+			//At this point, we are sure that the decode thread is no longer busy
 		}
-		//At this point, we are sure that the decode thread is no longer busy
 	}
 
 	_emu->OnBeforeSendFrame();

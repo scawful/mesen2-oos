@@ -202,3 +202,13 @@ build-pause/
 
 .gradle/
 local.properties
+
+# Android PGO profiles
+Android/pgo-data/
+
+# Android local SDK path
+Android/local.properties
+Android/.gradle/
+
+# RG353P build outputs, rollback copies and install logs (kept local)
+Android/build-logs/

@@ -126,8 +126,12 @@ void SnesCpu::IdleTakeBranch()
 void SnesCpu::ProcessCpuCycle()
 {
 	_state.CycleCount++;
+	if(_dmaController->HasPendingTransfer()){
+		_state.IrqLock = _dmaController->ProcessPendingTransfers();
+	} else {
+		_state.IrqLock = false;
+	}
 	DetectNmiSignalEdge();
-	_state.IrqLock = _dmaController->ProcessPendingTransfers();
 }
 
 uint16_t SnesCpu::ReadVector(uint16_t vector)

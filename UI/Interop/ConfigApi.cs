@@ -56,6 +56,7 @@ namespace Mesen.Interop
 		InBackground = 0x08,
 		ConsoleMode = 0x10,
 		TextInputFocused = 0x20,
+		HandheldPerformance = 0x40,
 	}
 
 	public enum DebuggerFlags : UInt32

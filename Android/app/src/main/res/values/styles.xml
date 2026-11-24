@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@color/night_moss</item>
+        <item name="android:colorBackground">@color/night_moss</item>
+        <item name="android:keepScreenOn">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

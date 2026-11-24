@@ -357,17 +357,25 @@ SocketResponse SocketServer::HandleCamera(Emulator* emu, const SocketCommand& cm
 SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cmd)
 {
 	SocketServer* server = emu->GetSocketServer();
+	if(!server) {
+		return Fail("Socket server unavailable", SocketErrorCode::InternalError);
+	}
 	// Serialize both recording APIs against the same owner and encoder state.
 	auto lock = server->_lock.AcquireSafe();
 	VideoRenderer* renderer = emu->GetVideoRenderer();
 	SoundMixer* mixer = emu->GetSoundMixer();
+	if(!renderer || !mixer) {
+		return Fail("Video or audio subsystem unavailable", SocketErrorCode::InternalError);
+	}
 	string action = Lower(cmd.GetParam("action", "status"));
 
 	auto status = [&]() {
 		stringstream ss;
-		ss << "{\"video\":{\"active\":" << (renderer->IsRecording() ? "true" : "false");
+		ss << "{\"video\":{\"active\":" << (renderer->IsFileRecording() ? "true" : "false");
 		ss << ",\"path\":\"" << Escape(renderer->GetRecordingFile()) << "\"";
 		ss << ",\"camera\":" << (renderer->IsRecordingThroughCamera() ? "true" : "false") << "}";
+		ss << ",\"replay\":{\"active\":" << (renderer->IsReplayBufferActive() ? "true" : "false");
+		ss << ",\"seconds\":" << renderer->GetReplayBufferedSeconds() << "}";
 		ss << ",\"audio\":{\"active\":" << (mixer->IsRecording() ? "true" : "false");
 		ss << ",\"path\":\"" << Escape(mixer->IsRecording() ? WavPath : "") << "\"}}";
 		return ss.str();
@@ -377,25 +385,74 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 		return Ok(status());
 	}
 
+	if(action == "replay_start") {
+		if(!emu->IsRunning()) {
+			return Fail("No ROM loaded", SocketErrorCode::EmulatorNotRunning);
+		}
+		if(!server->_videoRecordOwner.empty()) {
+			return Fail("Recording is owned by VIDEO_RECORD; stop it with the owner token", SocketErrorCode::InvalidState);
+		}
+		if(renderer->IsFileRecording()) {
+			return Fail("Stop active file recording before starting replay buffer", SocketErrorCode::InvalidState);
+		}
+		uint32_t seconds = 20;
+		string error;
+		if(cmd.HasParam("seconds") && !ParseUInt(cmd, "seconds", seconds, error)) {
+			return Fail(error);
+		}
+		RecordAviOptions options = {};
+		options.Codec = VideoCodec::None;
+		options.CompressionLevel = 6;
+		options.RecordSystemHud = ParseBool(cmd.GetParam("system_hud", "false"));
+		options.RecordInputHud = ParseBool(cmd.GetParam("input_hud", "false"));
+		if(!renderer->StartReplayBuffer(seconds, options)) {
+			return Fail("Replay buffer unavailable on this platform", SocketErrorCode::InternalError);
+		}
+		return Ok(status());
+	}
+
+	if(action == "replay_stop") {
+		renderer->StopReplayBuffer();
+		return Ok(status());
+	}
+
+	if(action == "replay_dump") {
+		if(!renderer->IsReplayBufferActive()) {
+			return Fail("Replay buffer is not active", SocketErrorCode::InvalidState);
+		}
+		string path = cmd.GetParam("path");
+		string error;
+		if(!ValidateOutputPath(cmd, path, error)) {
+			return Fail(error);
+		}
+		if(!renderer->DumpReplayBuffer(path)) {
+			return Fail("Replay buffer has no complete keyframe yet", SocketErrorCode::InvalidState);
+		}
+		stringstream ss;
+		ss << "{\"dumped\":true,\"path\":\"" << Escape(path) << "\",\"seconds\":" << renderer->GetReplayBufferedSeconds() << "}";
+		return Ok(ss.str());
+	}
+
 	if(action == "stop") {
 		string kind = Lower(cmd.GetParam("kind", "all"));
 		if(kind != "all" && kind != "video" && kind != "audio") {
 			return Fail("kind must be video, audio or all");
 		}
 		if(kind != "audio" && !server->_videoRecordOwner.empty()) {
-			return Fail("Recording is owned by VIDEO_RECORD; stop it with the owner token");
+			return Fail("Recording is owned by VIDEO_RECORD; stop it with the owner token", SocketErrorCode::InvalidState);
 		}
-		if(kind != "audio" && renderer->IsRecording()) {
+		if(kind != "audio" && renderer->IsFileRecording()) {
 			renderer->StopRecording();
 		}
 		if(kind != "video" && mixer->IsRecording()) {
 			mixer->StopRecording();
+			WavPath.clear();
 		}
 		return Ok(status());
 	}
 
 	if(action != "start") {
-		return Fail("Unknown action: " + action + " (start/stop/status)");
+		return Fail("Unknown action: " + action + " (start/stop/status/replay_start/replay_stop/replay_dump)");
 	}
 	if(!emu->IsRunning()) {
 		return Fail("No ROM loaded", SocketErrorCode::EmulatorNotRunning);
@@ -407,21 +464,34 @@ SocketResponse SocketServer::HandleRecord(Emulator* emu, const SocketCommand& cm
 		return Fail(error);
 	}
 
-	string ext = FolderUtilities::GetExtension(path);
-	string kind = Lower(cmd.GetParam("kind", ext == ".gif" ? "gif" : (ext == ".wav" ? "wav" : "avi")));
+	string ext = Lower(FolderUtilities::GetExtension(path));
+#ifdef __ANDROID__
+	string defaultKind = ext == ".gif" ? "gif" : (ext == ".wav" ? "wav" : (ext == ".avi" ? "avi" : "mp4"));
+#else
+	string defaultKind = ext == ".gif" ? "gif" : (ext == ".wav" ? "wav" : (ext == ".mp4" ? "mp4" : "avi"));
+#endif
+	string kind = Lower(cmd.GetParam("kind", defaultKind));
 	if(kind == "wav") {
 		if(mixer->IsRecording()) {
-			return Fail("An audio recording is already active");
+			return Fail("An audio recording is already active", SocketErrorCode::InvalidState);
 		}
 		mixer->StartRecording(path);
 		WavPath = path;
 		return Ok(status());
 	}
-	if(kind != "avi" && kind != "gif") {
-		return Fail("kind must be avi, gif or wav");
+	if(kind != "mp4" && kind != "avi" && kind != "gif") {
+		return Fail("kind must be mp4, avi, gif or wav");
 	}
-	if(renderer->IsRecording()) {
-		return Fail("A video recording is already active");
+#ifndef __ANDROID__
+	if(kind == "mp4") {
+		return Fail("mp4 recording is only supported on Android");
+	}
+#endif
+	if(!server->_videoRecordOwner.empty()) {
+		return Fail("Recording is owned by VIDEO_RECORD; stop it with the owner token", SocketErrorCode::InvalidState);
+	}
+	if(renderer->IsFileRecording()) {
+		return Fail("A video recording is already active", SocketErrorCode::InvalidState);
 	}
 
 	RecordAviOptions options = {};
@@ -655,7 +725,15 @@ SocketResponse SocketServer::HandleCaptureScreenshot(Emulator* emu, const Socket
 			return Fail("Failed to capture screenshot", SocketErrorCode::InternalError);
 		}
 	} else {
-		emu->GetVideoDecoder()->TakeScreenshot(png);
+		vector<uint32_t> overlayPixels;
+		uint32_t overlayW = 0;
+		uint32_t overlayH = 0;
+		if(emu->GetVideoRenderer() && emu->GetVideoRenderer()->GetDebugOverlayMask() != 0
+			&& emu->GetVideoRenderer()->CopyLastFrame(overlayPixels, overlayW, overlayH)) {
+			PNGHelper::WritePNG(png, overlayPixels.data(), overlayW, overlayH, 24);
+		} else {
+			emu->GetVideoDecoder()->TakeScreenshot(png);
+		}
 	}
 
 	string data = png.str();
@@ -667,13 +745,29 @@ SocketResponse SocketServer::HandleCaptureScreenshot(Emulator* emu, const Socket
 		return Ok("\"" + Base64(data) + "\"");
 	}
 
-	ofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-	file.write(data.data(), data.size());
-	if(!file.good()) {
-		return Fail("Could not write " + path, SocketErrorCode::InternalError);
+	string tmpPath = path + ".tmp";
+	{
+		ofstream file(tmpPath, std::ios::out | std::ios::binary | std::ios::trunc);
+		if(!file.good()) {
+			return Fail("Could not open " + path, SocketErrorCode::InternalError);
+		}
+		file.write(data.data(), static_cast<std::streamsize>(data.size()));
+		file.flush();
+		if(!file.good()) {
+			file.close();
+			std::error_code ec;
+			std::filesystem::remove(tmpPath, ec);
+			return Fail("Could not write " + path, SocketErrorCode::InternalError);
+		}
+	}
+	std::error_code ec;
+	std::filesystem::rename(tmpPath, path, ec);
+	if(ec) {
+		std::filesystem::remove(tmpPath, ec);
+		return Fail("Could not finalize " + path, SocketErrorCode::InternalError);
 	}
 	stringstream ss;
-	ss << "{\"path\":\"" << Escape(path) << "\",\"bytes\":" << data.size();
+	ss << "{\"written\":true,\"path\":\"" << Escape(path) << "\",\"bytes\":" << data.size();
 	if(width) {
 		ss << ",\"width\":" << width << ",\"height\":" << height;
 	}

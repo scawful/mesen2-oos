@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <algorithm>
+#include <chrono>
 #include "Shared/Audio/SoundMixer.h"
 #include "Shared/Audio/AudioPlayerHud.h"
 #include "Shared/Emulator.h"
@@ -63,6 +65,31 @@ void SoundMixer::StopAudio(bool clearBuffer)
 	}
 }
 
+bool SoundMixer::ShouldDiscardHostAudio()
+{
+	EmuSettings* settings = _emu->GetSettings();
+	AudioPlayerHud* audioPlayer = _emu->GetAudioPlayerHud();
+	if(audioPlayer || _waveRecorder || _emu->GetVideoRenderer()->NeedsRecordingSound()) {
+		return false;
+	}
+	if(settings->GetPreferences().RewindBufferSize != 0) {
+		return false;
+	}
+
+	AudioConfig cfg = settings->GetAudioConfig();
+	uint32_t masterVolume = cfg.MasterVolume;
+	if(settings->CheckFlag(EmulationFlags::InBackground)) {
+		if(cfg.MuteSoundInBackground) {
+			masterVolume = 0;
+		} else if(cfg.ReduceSoundInBackground) {
+			masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
+		}
+	} else if(cfg.ReduceSoundInFastForward && settings->CheckFlag(EmulationFlags::TurboOrRewind)) {
+		masterVolume = cfg.VolumeReduction == 100 ? 0 : masterVolume * (100 - cfg.VolumeReduction) / 100;
+	}
+	return masterVolume == 0;
+}
+
 void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_t sourceRate)
 {
 	if(sampleCount == 0) {
@@ -90,8 +117,22 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 	_leftSample = samples[0];
 	_rightSample = samples[1];
 
+	// Handheld turbo mutes output (VolumeReduction=100) and disables rewind.
+	// Must Stop (clear) the device once — returning without feeding the SDL ring
+	// lets ReadFromBuffer loop stale PCM. Do not re-Stop every SPC frame.
+	if(masterVolume == 0 && !isRecording && !audioPlayer
+			&& settings->GetPreferences().RewindBufferSize == 0) {
+		if(!_audioStoppedForMute) {
+			StopAudio(true);
+			_audioStoppedForMute = true;
+		}
+		return;
+	}
+	_audioStoppedForMute = false;
+
 	int16_t *out = _sampleBuffer;
-	uint32_t count = _resampler->Resample(samples, sampleCount, sourceRate, cfg.SampleRate, out, 0x10000);
+	double resampleSourceRate = GetTurboSourceRate(sampleCount, sourceRate);
+	uint32_t count = _resampler->Resample(samples, sampleCount, (uint32_t)resampleSourceRate, cfg.SampleRate, out, 0x10000);
 
 	uint32_t targetRate = (uint32_t)(cfg.SampleRate * _resampler->GetRateAdjustment());
 	for(IAudioProvider* provider : _audioProviders) {
@@ -148,6 +189,47 @@ void SoundMixer::PlayAudioBuffer(int16_t* samples, uint32_t sampleCount, uint32_
 			}
 		}
 	}
+}
+
+double SoundMixer::GetTurboSourceRate(uint32_t sampleCount, uint32_t sourceRate)
+{
+	EmuSettings* settings = _emu->GetSettings();
+	bool turbo = settings->CheckFlag(EmulationFlags::Turbo) && !_waveRecorder && !_emu->GetVideoRenderer()->NeedsRecordingSound();
+	auto now = std::chrono::steady_clock::now();
+	if(!turbo) {
+		_turboAudioActive = false;
+		return sourceRate;
+	}
+	if(!_turboAudioActive) {
+		_turboAudioActive = true;
+		_turboWindowStart = now;
+		_turboWindowSamples = 0;
+		// Keep the last measured speed as the first guess (RG353P max is ~1.5x).
+		_turboSpeedRatio = std::clamp(_turboSpeedRatio, 1.0, 8.0);
+		if(_turboSpeedRatio <= 1.0) {
+			_turboSpeedRatio = 1.5;
+		}
+	}
+
+	_turboWindowSamples += sampleCount;
+	double elapsed = std::chrono::duration<double>(now - _turboWindowStart).count();
+	if(elapsed >= 0.1) {
+		double measured = (double)_turboWindowSamples / ((double)sourceRate * elapsed);
+		measured = std::clamp(measured, 1.0, 8.0);
+		_turboSpeedRatio = _turboSpeedRatio * 0.7 + measured * 0.3;
+		_turboWindowStart = now;
+		_turboWindowSamples = 0;
+	}
+
+	// Steer the device buffer toward the configured latency: more queued audio
+	// than requested means we are producing too much, so compress harder.
+	double ratio = _turboSpeedRatio;
+	AudioStatistics stats = GetStatistics();
+	if(stats.AverageLatency > 0) {
+		double gapMs = stats.AverageLatency - (double)settings->GetAudioConfig().AudioLatency;
+		ratio *= std::clamp(1.0 + gapMs / 500.0, 0.9, 1.15);
+	}
+	return sourceRate * ratio;
 }
 
 void SoundMixer::ProcessEqualizer(int16_t* samples, uint32_t sampleCount, uint32_t targetRate)

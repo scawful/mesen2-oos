@@ -125,7 +125,8 @@ private:
 	int32_t _stopCode = 0;
 	bool _stopRequested = false;
 
-	// Keep release-only state at the end to preserve existing member offsets.
+	// Keep newly added lifecycle/cache state at the end to preserve existing
+	// member offsets.
 	SimpleLock _releaseLock;
 	bool _releaseStarted = false;
 
@@ -137,6 +138,11 @@ private:
 	string _oracleSaveName;
 	string _lastSaveBackupPath;
 	bool _liveLoadBackupPending = false;
+
+	// SHA-1 identifies the loaded source ROM and is immutable until the next
+	// successful load. Status surfaces poll it frequently on handhelds.
+	SimpleLock _romHashLock;
+	string _romSha1;
 
 	void WaitForLock();
 	void WaitForPauseEnd();

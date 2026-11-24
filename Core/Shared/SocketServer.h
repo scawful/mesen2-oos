@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <deque>
 #include <set>
+#include <chrono>
 
 class Emulator;
 
@@ -221,6 +222,9 @@ private:
 	atomic<bool> _running;
 	int _serverFd = -1;
 	string _socketPath;
+	bool _useTcp = false;
+	uint16_t _tcpPort = 0;
+	string _tcpBind;
 	SimpleLock _lock;
 	string _videoRecordOwner;
 	string _videoRecordPath;
@@ -310,6 +314,15 @@ private:
 	// Initialize validation rules (called once)
 	static void InitializeValidationRules();
 
+	// Debugger auto-detach guard: socket reads attach the debugger, which slows
+	// emulation (RG353P: 60 -> ~18 fps). When the socket attached it and no client
+	// has been connected for kAutoDetachIdle with no socket breakpoints/watches/
+	// logpoints/traces left, detach it again.
+	bool _socketStartedDebugger = false;
+	std::chrono::steady_clock::time_point _lastClientActivity = std::chrono::steady_clock::now();
+	bool HasActiveSocketDebugState();
+	void MaybeAutoDetachDebugger(size_t clientCount);
+
 	void ServerLoop();
 	bool HandleClient(int clientFd);
 	bool ParseCommand(const string& json, SocketCommand& cmd, string& error);
@@ -321,6 +334,7 @@ private:
 	static SocketResponse HandleHealth(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandlePause(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleResume(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleStopDebugger(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleReset(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleLoadRom(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleRead(Emulator* emu, const SocketCommand& cmd);
@@ -335,6 +349,8 @@ private:
 	static SocketResponse HandleLoadScript(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleExecLua(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleScreenshot(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleRecord(Emulator* emu, const SocketCommand& cmd);
+	static SocketResponse HandleOverlay(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleGetCpuState(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleStateInspector(Emulator* emu, const SocketCommand& cmd);
 	static SocketResponse HandleSetInput(Emulator* emu, const SocketCommand& cmd);
@@ -454,6 +470,8 @@ public:
 	void Stop();
 	bool IsRunning() const { return _running; }
 	string GetSocketPath() const { return _socketPath; }
+	bool IsTcp() const { return _useTcp; }
+	uint16_t GetTcpPort() const { return _tcpPort; }
 
 	// Status file management
 	void UpdateStatusFile();
@@ -467,6 +485,7 @@ public:
 	static void LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, uint8_t size, uint64_t cycleCount, uint16_t stackPointer, uint8_t opcode = 0, Emulator* emu = nullptr);
 	static void CheckLogpoints(CpuType cpuType, uint32_t pc, Emulator* emu);
 	static void BroadcastEvent(string eventType, string data);
+	static bool HasEventSubscribers();
 	static bool IsPRegisterWatchEnabled() { return _pRegisterWatchEnabled.load(std::memory_order_relaxed); }
 	static bool HasMemoryWatch(uint32_t addr);
 	static bool HasLogpoints() { return _hasLogpoints.load(std::memory_order_relaxed); }

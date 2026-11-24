@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mesen OOS</string>
+    <string name="hud_brand">Mesen</string>
+    <string name="hud_waiting">No game loaded</string>
+    <string name="home_requested">Request sent. Finish adding it in your launcher.</string>
+    <string name="home_added">Added to Home.</string>
+    <string name="home_unsupported">This launcher cannot add a Home shortcut. Add Oracle from its app list.</string>
+    <string name="home_failed">Could not request a Home shortcut.</string>
+    <string name="progression_running">Applying preset: %1$s</string>
+</resources>

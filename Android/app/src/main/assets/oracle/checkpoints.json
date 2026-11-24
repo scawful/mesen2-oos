@@ -1,0 +1,1561 @@
+{
+  "schema": "oracle-debug-checkpoints/1",
+  "description": "Story checkpoints for the Mesen2-OOS Cheats & Warps panel and mesen2_client.py checkpoint. Order follows AFS knowledge/planning/story_canon_beat_sheet.md. See Data/debug/README.md. b67 (0392d772) adds editor jumps for the three shrines, D8 Sky entrance $29, Wayward Village and its bar doors, the four Magic Bean areas, and Ranch archery. Special pages $83/$8B, $90/$98, $A8/$A9, and $B0/$B1/$B8/$B9 stay in todo: area warp refuses $80+, and the b67 image is built with ENABLE_DEBUG_TOOLS off so WarpDispatcher is absent.",
+  "rom_tested": {
+    "path": "Roms/Playtest/oos-v0.9.0-b17.sfc",
+    "sha256": "a0fdd4220d4da24b9c8cd087f5cb68a9758b85fbf733655f7888d0fa844b008c"
+  },
+  "apply": "Resolve the 'after' chain (oldest first) and apply every write in order to WRAM $7EF000-$7EF4FF. 'value' stores the byte, 'set_bits' ORs, 'clear_bits' ANDs out. Then copy $7EF000-$7EF4FF to the active SRAM slot (main + mirror, new inverse checksum at +$4FE); other slots are untouched. Then warp to 'location' (an entrance id, or an overworld area from warps.json).",
+  "evidence_legend": "Each write cites file:line (with the symbol for Core/sram.asm) or a beat-sheet row. Line numbers were read on 2026-09-26 from the working tree; Core/sram.asm symbol lines rechecked 2026-11-10. AFS paths are under ~/.context/projects/oracle-of-secrets. inferred=true: the docs are silent or disagree, and the value is a best guess; 'why' says what it rests on.",
+  "checkpoints": [
+    {
+      "id": "intro-bed",
+      "label": "New file: Link's house before the plea",
+      "beat": 3,
+      "location": {
+        "entrance": "0x01"
+      },
+      "expect": {
+        "modules": [
+          "0x07",
+          "0x0C",
+          "0x0D"
+        ],
+        "room": "0x0104"
+      },
+      "notes": "Warping into room $104 with GameState 0 and OOSPROG2 bit $10 clear re-runs the bed block (AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/Plans/intro_plan_2026-09-24.md:33); with IntroState 0 the arrival gate then starts the new-game scenes (Core/Cutscene/opening.asm:84-96). On b17 (arrival + experiment flags on) the scene waits for text input; Start skips it (Core/Cutscene/experiment.asm:18).",
+      "writes": [
+        {
+          "addr": "0x7EF3C5",
+          "value": "0x00",
+          "name": "GameState",
+          "evidence": "Core/sram.asm:72 (!GameState_Start); Dungeons/custom_tag.asm:99"
+        },
+        {
+          "addr": "0x7EF39E",
+          "value": "0x00",
+          "name": "IntroState",
+          "evidence": "Core/sram.asm:480 (IntroState); Core/Cutscene/opening.asm:87 (plea not delivered)"
+        },
+        {
+          "addr": "0x7EF3D6",
+          "value": "0x00",
+          "name": "OOSPROG",
+          "evidence": "Core/sram.asm:267 (StoryProgress)"
+        },
+        {
+          "addr": "0x7EF3C6",
+          "value": "0x00",
+          "name": "OOSPROG2",
+          "evidence": "Core/sram.asm:270 (StoryProgress2); intro_plan_2026-09-24.md:33 (bed block needs bit $10 clear)"
+        },
+        {
+          "addr": "0x7EF3D4",
+          "value": "0x00",
+          "name": "MakuTreeQuest",
+          "evidence": "Core/sram.asm:276 (MakuTreeQuest)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x00",
+          "name": "MapIcon",
+          "evidence": "Core/sram.asm:193 (!MapIcon_MakuTree)"
+        },
+        {
+          "addr": "0x7EF37A",
+          "value": "0x00",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:385 (Crystals)"
+        },
+        {
+          "addr": "0x7EF374",
+          "value": "0x00",
+          "name": "Pendants",
+          "evidence": "Core/sram.asm:384 (Pendants)"
+        },
+        {
+          "addr": "0x7EF3D7",
+          "value": "0x00",
+          "name": "SideQuestProgress",
+          "evidence": "Core/sram.asm:296 (SideQuestProgress)"
+        },
+        {
+          "addr": "0x7EF3D8",
+          "value": "0x00",
+          "name": "SideQuestProgress2",
+          "evidence": "Core/sram.asm:297 (SideQuestProgress2)"
+        },
+        {
+          "addr": "0x7EF300",
+          "value": "0x00",
+          "name": "KydrogFaroreRemoved",
+          "evidence": "Core/sram.asm:227 (KydrogFaroreRemoved)"
+        },
+        {
+          "addr": "0x7EF301",
+          "value": "0x00",
+          "name": "DekuMaskQuestDone",
+          "evidence": "Core/sram.asm:231 (DekuMaskQuestDone)"
+        },
+        {
+          "addr": "0x7EF302",
+          "value": "0x00",
+          "name": "ZoraMaskQuestDone",
+          "evidence": "Core/sram.asm:235 (ZoraMaskQuestDone)"
+        },
+        {
+          "addr": "0x7EF3A7",
+          "value": "0x00",
+          "name": "EonOwlFlags",
+          "evidence": "Core/sram.asm:540 (EonOwlFlags) (zero on new files)"
+        },
+        {
+          "addr": "0x7EF3CC",
+          "value": "0x00",
+          "name": "FollowerId",
+          "evidence": "Core/sram.asm:628 (FollowerId); Dungeons/custom_tag.asm:100"
+        },
+        {
+          "addr": "0x7EF3CA",
+          "value": "0x00",
+          "name": "SavedWorld",
+          "evidence": "Core/sram.asm:566 (SavedWorld) (bit 6 = Abyss)"
+        },
+        {
+          "addr": "0x7EF359",
+          "value": "0x00",
+          "name": "Sword",
+          "evidence": "Core/sram.asm:337 (Sword); AFS knowledge/planning/story_canon_beat_sheet.md line 43 (sword comes from the Abyss tutorial)"
+        },
+        {
+          "addr": "0x7EF35A",
+          "value": "0x00",
+          "name": "Shield",
+          "evidence": "Core/sram.asm:338 (Shield); AFS knowledge/planning/story_canon_beat_sheet.md line 43"
+        },
+        {
+          "addr": "0x7EF357",
+          "value": "0x00",
+          "name": "MoonPearl",
+          "evidence": "Core/sram.asm:335 (MoonPearl); AFS knowledge/planning/story_canon_beat_sheet.md row 7"
+        },
+        {
+          "addr": "0x7EF356",
+          "value": "0x00",
+          "name": "Flippers",
+          "evidence": "Core/sram.asm:334 (Flippers)"
+        },
+        {
+          "addr": "0x7EF340",
+          "value": "0x00",
+          "name": "Bow",
+          "evidence": "Core/sram.asm:308 (Bow)"
+        },
+        {
+          "addr": "0x7EF344",
+          "value": "0x00",
+          "name": "MagicPowder",
+          "evidence": "Core/sram.asm:312 (MagicPowder)"
+        },
+        {
+          "addr": "0x7EF34C",
+          "value": "0x00",
+          "name": "Ocarina",
+          "evidence": "Items/ocarina.asm:437-443 (0 = no Ocarina)"
+        },
+        {
+          "addr": "0x7EF349",
+          "value": "0x00",
+          "name": "DekuMask",
+          "evidence": "Core/sram.asm:317 (DekuMask)"
+        },
+        {
+          "addr": "0x7EF347",
+          "value": "0x00",
+          "name": "ZoraMask",
+          "evidence": "Core/sram.asm:315 (ZoraMask)"
+        },
+        {
+          "addr": "0x7EF34E",
+          "value": "0x00",
+          "name": "Book",
+          "evidence": "Core/sram.asm:322 (Book)"
+        },
+        {
+          "addr": "0x7EF355",
+          "value": "0x00",
+          "name": "Boots",
+          "evidence": "Core/sram.asm:333 (Boots)"
+        },
+        {
+          "addr": "0x7EF34B",
+          "value": "0x00",
+          "name": "Hammer",
+          "evidence": "Core/sram.asm:319 (Hammer)"
+        },
+        {
+          "addr": "0x7EF354",
+          "value": "0x00",
+          "name": "Gloves",
+          "evidence": "Core/sram.asm:332 (Gloves)"
+        },
+        {
+          "addr": "0x7EF350",
+          "value": "0x00",
+          "name": "Somaria",
+          "evidence": "Core/sram.asm:324 (Somaria)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x18",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "3 hearts: the runtime save (Roms/device-saves/snesclassic/20260926T111512Z-CLV-H-OOSRA slot 1) has $20 after the Maku Tree's heart container (Sprites/NPCs/maku_tree.asm:147)"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x18",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "loom-beach",
+      "label": "Awake: Loom Beach, Impa waiting",
+      "beat": 4,
+      "after": "intro-bed",
+      "location": {
+        "area": "0x33"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x33"
+      },
+      "notes": "Lands outside Link's house (exit room $0104). Impa is on Loom Beach (msg $25, beat sheet row 4).",
+      "writes": [
+        {
+          "addr": "0x7EF39E",
+          "value": "0x02",
+          "name": "IntroState",
+          "evidence": "Dungeons/custom_tag.asm:63 (plea, then wake-up each add 1)"
+        },
+        {
+          "addr": "0x7EF3C6",
+          "value": "0x90",
+          "name": "OOSPROG2",
+          "evidence": "Dungeons/custom_tag.asm:89 (bit $10 legacy house flag); Dungeons/custom_tag.asm:95 (bit $80 Part 0 storm, read only when !ENABLE_PART0_STORM = 1)"
+        },
+        {
+          "addr": "0x7EF30F",
+          "set_bits": "0x01",
+          "name": "Part00Flags",
+          "evidence": "Core/part00.asm HouseVillager_Talk: with IntroState 2 and bit $01 clear the house villager opens $202 (B) on the next frame, and the checkpoint's reload through room $0104 then refuses (module $0E). Bit $01 = B already said (awake and out of the house)."
+        },
+        {
+          "addr": "0x7E005D",
+          "value": "0x00",
+          "name": "LinkState",
+          "evidence": "intro-bed leaves Link in LinkState_Sleeping ($16, $037C = 0). IntroState 2 skips HouseTag_WakeUpPlayer (Dungeons/custom_tag.asm), so nothing resets it and Link_SnoringInBed ($079A62) keeps spawning ancilla $21 (Z) at the landing spot."
+        }
+      ]
+    },
+    {
+      "id": "village-impa",
+      "label": "Impa following: Wayward Village (hole here, Farore one screen west)",
+      "beat": 5,
+      "after": "loom-beach",
+      "location": {
+        "area": "0x23"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x23"
+      },
+      "notes": "Lands at the exit of cave room $00FE, next to the village hole (entrance $80, AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/Plans/impa_follower_hints_2026-09-25.md:23); Impa's hint $1C8 may open (module $0E). This is also the Farore-meeting state (beat 6): Farore's sprite stands on area $2A, one screen west (impa_follower_hints_2026-09-25.md:24). $2A has no exit-table room, and the beat sheet's special area $80 cannot be warp-loaded (Data/debug/README.md, Limits). Kydrog and Farore spawn while KydrogFaroreRemoved = 0 (Sprites/Bosses/kydrog.asm:95).",
+      "writes": [
+        {
+          "addr": "0x7EF3CC",
+          "value": "0x01",
+          "name": "FollowerId",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/Plans/impa_follower_hints_2026-09-25.md:16 (Impa = follower $01)"
+        }
+      ]
+    },
+    {
+      "id": "abyss-arrival",
+      "label": "Abyss arrival after Kydrog's ambush",
+      "beat": 7,
+      "after": "village-impa",
+      "location": {
+        "area": "0x40"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x40"
+      },
+      "notes": "Same exit the banish uses (Kydrog_WarpPlayerAway loads room $20's exit, Sprites/Bosses/kydrog.asm:166). With GameState 2 and OOSPROG < 2 a continue also starts in the Abyss (Overworld/overworld.asm:105-109). The storm bit stays set in the Abyss and ends back on Kalyxo (Overworld/storm.asm:10-18); b17 and older cleared it at the Farore beat instead. The first Eon Owl (EonOwlFlags bit 0) is not placed yet.",
+      "writes": [
+        {
+          "addr": "0x7EF3C5",
+          "value": "0x02",
+          "name": "GameState",
+          "evidence": "Sprites/NPCs/farore.asm:221; Core/sram.asm:74 (!GameState_KydrogComplete)"
+        },
+        {
+          "addr": "0x7EF3C6",
+          "value": "0x94",
+          "name": "OOSPROG2",
+          "evidence": "bit $04 Sprites/Bosses/kydrog.asm:181; bits $10 and $80 kept (storm lasts through the Abyss, Overworld/storm.asm:10-18, Core/sram.asm:107 (!Story2_Part0Storm))"
+        },
+        {
+          "addr": "0x7EF300",
+          "value": "0x01",
+          "name": "KydrogFaroreRemoved",
+          "evidence": "Sprites/Bosses/kydrog.asm:178"
+        },
+        {
+          "addr": "0x7EF3CC",
+          "value": "0x00",
+          "name": "FollowerId",
+          "evidence": "Sprites/Bosses/kydrog.asm:175 (Impa removed)"
+        },
+        {
+          "addr": "0x7EF3CA",
+          "value": "0x40",
+          "name": "SavedWorld",
+          "evidence": "Sprites/Bosses/kydrog.asm:153; Overworld/overworld.asm:109"
+        }
+      ]
+    },
+    {
+      "id": "origins",
+      "label": "Shrine of Origins (Abyss tutorial)",
+      "beat": 7,
+      "after": "abyss-arrival",
+      "location": {
+        "entrance": "0x76"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0005"
+      },
+      "notes": "Entrance $76 -> room $05 (Roms/TestBuilds/rc-intro-origins-goron-2026-09-25/playtest.md). The Moon Pearl is obtained inside Origins (beat sheet line 47), so it is still 0 here.",
+      "writes": []
+    },
+    {
+      "id": "abyss-owl",
+      "label": "Moon Pearl found: Eon Owl on area $50 points to the sword",
+      "beat": 7,
+      "after": "origins",
+      "location": {
+        "area": "0x50"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x50"
+      },
+      "notes": "The second Owl appearance (msg $E6) is on map $50 and only spawns while Sword = 0 (Sprites/NPCs/eon_owl.asm:73-76); AFS knowledge/planning/decisions.org 'Abyss segment', item 2. The area warp lands outside the Shrine of Courage door (room $53).",
+      "writes": [
+        {
+          "addr": "0x7EF357",
+          "value": "0x01",
+          "name": "MoonPearl",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 7; AFS knowledge/planning/story_canon_beat_sheet.md line 47 (Pearl from Origins)"
+        },
+        {
+          "addr": "0x7EF3A7",
+          "set_bits": "0x01",
+          "name": "EonOwlFlags",
+          "evidence": "Core/sram.asm:541 (!EonOwl_ArrivalTalked) (first Owl comes before the Pearl; the flag is read only when !ENABLE_EON_OWL_ONE_SHOT = 1)"
+        }
+      ]
+    },
+    {
+      "id": "kalyxo-return",
+      "label": "Back on Kalyxo: outside the Hall of Secrets, before the Maku Tree briefing",
+      "beat": 8,
+      "after": "abyss-owl",
+      "location": {
+        "area": "0x0E"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x0E"
+      },
+      "notes": "Abyss tutorial done: sword and shield (beat sheet line 43 'Abyss -> Origins -> Owl -> sword/shield -> return'). Beat sheet row 8 pairs the Maku Tree briefing with the Hall of Secrets; the Maku Tree sprite is in special area $80 (Docs/World/SpecialAreas/index.md:84), which a warp cannot load. OOSPROG is still 0, so a continue returns to the Abyss until the Maku Tree is met (Overworld/overworld.asm:105-109).",
+      "writes": [
+        {
+          "addr": "0x7EF359",
+          "value": "0x01",
+          "name": "Sword",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md line 43; runtime save slot 1 = 1"
+        },
+        {
+          "addr": "0x7EF35A",
+          "value": "0x01",
+          "name": "Shield",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md line 43; runtime save slot 1 = 1"
+        },
+        {
+          "addr": "0x7EF3A7",
+          "set_bits": "0x02",
+          "name": "EonOwlFlags",
+          "evidence": "Core/sram.asm:542 (!EonOwl_SwordTalked) ($E6 Owl done)"
+        },
+        {
+          "addr": "0x7EF3C6",
+          "clear_bits": "0x80",
+          "name": "OOSPROG2",
+          "evidence": "storm ends back on Kalyxo (Overworld/storm.asm:10-18, Part0Storm_EndIfBackOnKalyxo); runtime save slot 1 = $14"
+        },
+        {
+          "addr": "0x7EF3CA",
+          "value": "0x00",
+          "name": "SavedWorld",
+          "evidence": "Core/sram.asm:566 (SavedWorld) (back on Kalyxo)"
+        }
+      ]
+    },
+    {
+      "id": "d1-entrance",
+      "label": "D1 Mushroom Grotto entrance (after the Maku Tree briefing)",
+      "beat": 9,
+      "after": "kalyxo-return",
+      "location": {
+        "entrance": "0x26"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x004A"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF3D4",
+          "value": "0x01",
+          "name": "MakuTreeQuest",
+          "evidence": "Sprites/NPCs/maku_tree.asm:136"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x01",
+          "name": "MapIcon",
+          "evidence": "Sprites/NPCs/maku_tree.asm:137 (Mushroom Grotto)"
+        },
+        {
+          "addr": "0x7EF3D6",
+          "value": "0x02",
+          "name": "OOSPROG",
+          "evidence": "Sprites/NPCs/maku_tree.asm:138 (bit $02 Hall of Secrets); runtime save slot 1 = $02"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x20",
+          "name": "MaxHealth",
+          "evidence": "Sprites/NPCs/maku_tree.asm:147 (heart container); runtime save slot 1 = $20"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x20",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d1-boss-ready",
+      "label": "D1 Mushroom Grotto boss ready (Manhandla, room $5A)",
+      "beat": 9,
+      "after": "d1-entrance",
+      "location": {
+        "entrance": "0x26"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x004A"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF0B5",
+          "clear_bits": "0x08",
+          "name": "Room5ABossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D1 entrance with the room $5A boss-defeated bit cleared so the fight repeats. Macro boss_d1 then falls into room $5A and places Link at room-local ($178, $1B0) in the Manhandla quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera."
+    },
+    {
+      "id": "d2-entrance",
+      "label": "D2 Tail Palace entrance (D1 done, Ocarina chain done)",
+      "beat": 11,
+      "after": "d1-entrance",
+      "location": {
+        "entrance": "0x15"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x005F"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x02",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:118 (!Crystal_D1_MushroomGrotto); AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Debugging/Issues/world_map_icons_2026-09-26.md section 5.0 (ROM: entrance $26 = dungeon $0C -> bit $02, entrance $27 = dungeon $0E -> bit $01)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x02",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28 (MapIcon = crystal count + 1, set by the Maku Tree)"
+        },
+        {
+          "addr": "0x7EF340",
+          "value": "0x01",
+          "name": "Bow",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:13 (D1 yields Bow + Mushroom)"
+        },
+        {
+          "addr": "0x7EF344",
+          "value": "0x02",
+          "name": "MagicPowder",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:13 (Mushroom -> Witches -> Magic Powder); Core/sram.asm:312 (MagicPowder) (2 = Powder); AFS knowledge/planning/story_canon_beat_sheet.md row 10"
+        },
+        {
+          "addr": "0x7EF34C",
+          "value": "0x02",
+          "name": "Ocarina",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 10 (Ocarina, Song of Healing); Items/ocarina.asm:440 (2 = Healing)"
+        },
+        {
+          "addr": "0x7EF349",
+          "value": "0x01",
+          "name": "DekuMask",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 10"
+        },
+        {
+          "addr": "0x7EF301",
+          "value": "0x01",
+          "name": "DekuMaskQuestDone",
+          "evidence": "Core/sram.asm:231 (DekuMaskQuestDone) (set by deku_scrub.asm)"
+        },
+        {
+          "addr": "0x7EF3D7",
+          "set_bits": "0x05",
+          "name": "SideQuestProgress",
+          "evidence": "Docs/Technical/Flag_Ledger.md SideQuest_MetMaskSalesman ($01), SideQuest_DekuScrubFound ($04)"
+        },
+        {
+          "addr": "0x7EF3D8",
+          "set_bits": "0x14",
+          "name": "SideQuestProgress2",
+          "evidence": "Docs/Technical/Flag_Ledger.md SideQuest2_SongOfHealing ($04), SideQuest2_DekuSoulFreed ($10)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x28",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x28",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d2-boss-ready",
+      "label": "D2 Tail Palace boss ready (Moldorm, room $DE)",
+      "beat": 11,
+      "after": "d2-entrance",
+      "location": {
+        "entrance": "0x15"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x005F"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF1BD",
+          "clear_bits": "0x08",
+          "name": "RoomDEBossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D2 entrance with the room $DE boss-defeated bit cleared so the fight repeats. Macro boss_d2 then falls into room $DE and places Link at room-local ($078, $090) in the Moldorm quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera. Docs/World/Dungeons/TailPalace_Map.md lists the boss as TBD; the dungeon data sheet names Moldorm, and room $DE is the only Tail Palace room with a boss sprite."
+    },
+    {
+      "id": "d3-entrance",
+      "label": "D3 Kalyxo Castle entrance (D2 done, Book of Secrets)",
+      "beat": 13,
+      "after": "d2-entrance",
+      "location": {
+        "entrance": "0x2B"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0059"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x12",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:121 (!Crystal_D2_TailPalace)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x03",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF34E",
+          "value": "0x01",
+          "name": "Book",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 12 (Book of Secrets before D3)"
+        },
+        {
+          "addr": "0x7EF355",
+          "value": "0x01",
+          "name": "Boots",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:88 (sick child -> boots -> Book of Secrets -> D3)"
+        },
+        {
+          "addr": "0x7EF379",
+          "set_bits": "0x04",
+          "name": "AbilityFlags",
+          "evidence": "Core/sram.asm:333 (Boots) (Boots also need the Ability bit); Core/sram.asm:393 (AbilityFlags) ('lrtu pbsh', b = Run = $04)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x30",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x30",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d3-boss-ready",
+      "label": "D3 Kalyxo Castle boss ready (Armos Knights, room $29)",
+      "beat": 13,
+      "after": "d3-entrance",
+      "location": {
+        "entrance": "0x2B"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0059"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF053",
+          "clear_bits": "0x08",
+          "name": "Room29BossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D3 entrance with the room $29 boss-defeated bit cleared so the fight repeats. Macro boss_d3 then falls into room $29 and places Link at room-local ($178, $1B0) in the Armos Knights quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera. DECIDED 2026-11-06: Armos become the boss-gate mini-boss and the Captain's phantom becomes the D3 boss (AFS knowledge/planning/decisions.org); this tests the current Armos room."
+    },
+    {
+      "id": "d4-entrance",
+      "label": "D4 Zora Temple entrance (D3 done, Shrine of Wisdom done)",
+      "beat": 15,
+      "after": "d3-entrance",
+      "location": {
+        "entrance": "0x25"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0028"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x52",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:123 (!Crystal_D3_KalyxoCastle)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x04",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF359",
+          "value": "0x02",
+          "name": "Sword",
+          "inferred": true,
+          "why": "Meadow Blade from D3 (AFS knowledge/planning/story_canon_beat_sheet.md row 13); level 2 from Overworld/overworld.asm:76 'Get Lv2 Sword from chest'. The beat sheet says the blade caps at L3; how it reaches L3 is not documented"
+        },
+        {
+          "addr": "0x7EF356",
+          "value": "0x01",
+          "name": "Flippers",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 14; AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:17"
+        },
+        {
+          "addr": "0x7EF374",
+          "value": "0x01",
+          "name": "Pendants",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 14; Core/sram.asm:157 (!Pendant_Wisdom)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x38",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x38",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d4-boss-ready",
+      "label": "D4 Zora Temple boss ready (Arrghus, room $06)",
+      "beat": 15,
+      "after": "d4-entrance",
+      "location": {
+        "entrance": "0x25"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0028"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF00D",
+          "clear_bits": "0x08",
+          "name": "Room06BossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D4 entrance with the room $06 boss-defeated bit cleared so the fight repeats. Macro boss_d4 then falls into room $06 and places Link at room-local ($078, $1B0) in the Arrghus quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera. The D4 warden redesign is default-off and not in this room; this tests the current Arrghus arena."
+    },
+    {
+      "id": "d5-entrance",
+      "label": "D5 Glacia Estate entrance (D4 done, Song of Storms)",
+      "beat": 17,
+      "after": "d4-entrance",
+      "location": {
+        "entrance": "0x34"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x00DB"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x72",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:122 (!Crystal_D4_ZoraTemple)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x05",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF347",
+          "value": "0x01",
+          "name": "ZoraMask",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 15"
+        },
+        {
+          "addr": "0x7EF302",
+          "value": "0x01",
+          "name": "ZoraMaskQuestDone",
+          "evidence": "Core/sram.asm:235 (ZoraMaskQuestDone) (set by zora_princess.asm)"
+        },
+        {
+          "addr": "0x7EF34C",
+          "value": "0x03",
+          "name": "Ocarina",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 16 (Song of Storms post-D4); Items/ocarina.asm:441 (3 = Healing, Storms)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x40",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x40",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d5-boss-ready",
+      "label": "D5 Glacia Estate boss ready (Twinrova, room $AC)",
+      "beat": 17,
+      "after": "d5-entrance",
+      "location": {
+        "entrance": "0x34"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x00DB"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF159",
+          "clear_bits": "0x08",
+          "name": "RoomACBossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        },
+        {
+          "addr": "0x7EF3CC",
+          "value": "0x00",
+          "name": "Follower",
+          "evidence": "Sprites/Bosses/twinrova.asm:84 (maiden present kills the Twinrova prep)"
+        }
+      ],
+      "notes": "Stops at the D5 entrance with the room $AC boss-defeated bit cleared so the fight repeats. Macro boss_d5 then falls into room $AC and places Link at room-local ($178, $1B0) in the Twinrova quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera. Twinrova prep removes itself when the Blind Maiden follower ($7EF3CC = $06) is present (Sprites/Bosses/twinrova.asm:84); the follower write selects the direct fight, which opens with Twinrova's text."
+    },
+    {
+      "id": "d6-entrance",
+      "label": "D6 Goron Mines entrance (D5 done, Shrine of Power done)",
+      "beat": 20,
+      "after": "d5-entrance",
+      "location": {
+        "entrance": "0x27"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0098"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x76",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:119 (!Crystal_D5_GlaciaEstate)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x06",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF374",
+          "value": "0x03",
+          "name": "Pendants",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 19; Core/sram.asm:158 (!Pendant_Power)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x48",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x48",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d6-boss-ready",
+      "label": "D6 Goron Mines boss ready (King Dodongo, room $C8)",
+      "beat": 20,
+      "after": "d6-entrance",
+      "location": {
+        "entrance": "0x27"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0098"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF191",
+          "clear_bits": "0x08",
+          "name": "RoomC8BossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D6 entrance with the room $C8 boss-defeated bit cleared so the fight repeats. Macro boss_d6 then falls into room $C8 and places Link at room-local ($178, $1B0) in the King Dodongo quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera."
+    },
+    {
+      "id": "d7-entrance",
+      "label": "D7 Dragon Ship entrance (D6 done, Song of Soaring)",
+      "beat": 23,
+      "after": "d6-entrance",
+      "location": {
+        "entrance": "0x35"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x00D6"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x77",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:117 (!Crystal_D6_GoronMines); AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Debugging/Issues/world_map_icons_2026-09-26.md section 5.0 (ROM: entrance $26 = dungeon $0C -> bit $02, entrance $27 = dungeon $0E -> bit $01)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x07",
+          "name": "MapIcon",
+          "evidence": "Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF34B",
+          "value": "0x01",
+          "name": "Hammer",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:18 (D6 reward is Hammer)"
+        },
+        {
+          "addr": "0x7EF354",
+          "value": "0x02",
+          "name": "Gloves",
+          "evidence": "AFS scratchpad/archive/repo-slim-2026-10-06/repo/Docs/Planning/item_flow_balance_check.md:93 (Titan's Mitt is the immediate post-D6 reward); Core/sram.asm:332 (Gloves) (2 = Titan's Mitt)"
+        },
+        {
+          "addr": "0x7EF34C",
+          "value": "0x04",
+          "name": "Ocarina",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 22 (Song of Soaring before the Dragon Ship); Items/ocarina.asm:442"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x50",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x50",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "d7-boss-ready",
+      "label": "D7 Dragon Ship boss ready (Kydrog, room $A4)",
+      "beat": 23,
+      "after": "d7-entrance",
+      "location": {
+        "entrance": "0x35"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x00D6"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF149",
+          "clear_bits": "0x08",
+          "name": "RoomA4BossDefeated",
+          "evidence": "usdasm bank_01 $01B6E5 loads $0402 = (room save & $0FF0) << 4, so save bit $0800 is $0403 bit $80; SpritePrep_Boss $068F1C and Core/sprite_macros.asm BossPrep_DefeatedRemnant skip the boss when it is set"
+        }
+      ],
+      "notes": "Stops at the D7 entrance with the room $A4 boss-defeated bit cleared so the fight repeats. Macro boss_d7 then falls into room $A4 and places Link at room-local ($078, $1B0) in the Kydrog quadrant. A bare fall keeps the entrance's room-local X/Y and camera, which miss this arena. The macro writes set Link, the camera bytes Underworld_AdjustCameraArbitrary ($02A2F0) moves, the quadrant ($A9/$AA) and the Sprite_CancelHookshot restore point ($0FC2/$0FC4); they assume this entrance's spawn point and camera. Docs/World/Dungeons/DragonShip_Map.md lists the pirate-form fight as to-build (beat 23)."
+    },
+    {
+      "id": "d8-entrance",
+      "label": "D8 Fortress of Secrets entrance (D7, Shrine of Courage, Master Sword)",
+      "beat": 27,
+      "after": "d7-entrance",
+      "location": {
+        "entrance": "0x37"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x000C"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "value": "0x7F",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:120 (!Crystal_D7_DragonShip)"
+        },
+        {
+          "addr": "0x7EF3C7",
+          "value": "0x08",
+          "name": "MapIcon",
+          "evidence": "Core/sram.asm:201 (!MapIcon_Fortress); Core/progression.asm:28"
+        },
+        {
+          "addr": "0x7EF3C5",
+          "value": "0x03",
+          "name": "GameState",
+          "inferred": true,
+          "why": "Core/sram.asm:75 (!GameState_FaroreRescued) defines 3 = D7 complete; set on D7 crystal pickup by KydrogBoss_D7CrystalCommit (Sprites/Bosses/kydrog_boss.asm, !ENABLE_D7_FARORE_RESCUE_SEQUENCE = 1)"
+        },
+        {
+          "addr": "0x7EF350",
+          "value": "0x01",
+          "name": "Somaria",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 23 (D7 gives the Somaria Rod)"
+        },
+        {
+          "addr": "0x7EF374",
+          "value": "0x07",
+          "name": "Pendants",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 24; Core/sram.asm:159 (!Pendant_Courage)"
+        },
+        {
+          "addr": "0x7EF359",
+          "value": "0x04",
+          "name": "Sword",
+          "evidence": "AFS knowledge/planning/story_canon_beat_sheet.md row 25 (the pedestal pull grants L4)"
+        },
+        {
+          "addr": "0x7EF3CA",
+          "value": "0x40",
+          "name": "SavedWorld",
+          "evidence": "Fortress door is on Abyss area $5E (Data/debug/warps.json entrance 0x37)"
+        },
+        {
+          "addr": "0x7EF36C",
+          "value": "0x58",
+          "name": "MaxHealth",
+          "inferred": true,
+          "why": "one heart container per boss, as in vanilla; no Oracle doc lists boss heart containers"
+        },
+        {
+          "addr": "0x7EF36D",
+          "value": "0x58",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health"
+        }
+      ]
+    },
+    {
+      "id": "maku-seed-ready",
+      "label": "All 8 essences (D8 Sky done): Maku Tree gives the Maku Seed",
+      "beat": 27,
+      "after": "d8-entrance",
+      "location": {
+        "area": "0x0E"
+      },
+      "expect": {
+        "modules": [
+          "0x09"
+        ],
+        "area": "0x0E"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF37A",
+          "set_bits": "0x80",
+          "name": "Crystals",
+          "evidence": "Core/sram.asm:130 (!Crystal_D8_Sky)"
+        },
+        {
+          "addr": "0x7EF3D4",
+          "clear_bits": "0x02",
+          "name": "MakuTreeQuest",
+          "evidence": "Core/sram.asm:278 (!MakuTree_HasSeed); Sprites/NPCs/maku_tree.asm:166 grants it when Crystals = $FF and the bit is clear"
+        }
+      ],
+      "notes": "Lands outside the Hall of Secrets (same area as kalyxo-return); talk to the Maku Tree for the seed message. Not natively checked on the experimental ROM."
+    },
+    {
+      "id": "fortress-open",
+      "label": "Maku Seed held: Fortress of Secrets open (entrance $37)",
+      "beat": 27,
+      "after": "maku-seed-ready",
+      "location": {
+        "entrance": "0x37"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x000C"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF3D4",
+          "set_bits": "0x02",
+          "name": "MakuTreeQuest",
+          "evidence": "Overworld/overlays.asm:1113 opens the Fortress only with !MakuTree_HasSeed"
+        }
+      ],
+      "notes": "d8-entrance predates the D8 Sky essence and the seed gate; this applies both. Not natively checked on the experimental ROM."
+    },
+    {
+      "id": "d8-sky-boss-room",
+      "label": "D8 Sky boss room $96 (authored arena and boss)",
+      "beat": 27,
+      "after": "maku-seed-ready",
+      "location": {
+        "entrance": "0x37",
+        "room": "0x96"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0096"
+      },
+      "writes": [],
+      "notes": "The main test ROM includes the authored D8 tower rooms and sprite $C3 in room $96. D8Boss_LoadGfx supplies its custom graphics with D8_BOSS enabled. Do not spawn a second boss. This checkpoint uses Mesen2 OOS 19ab830c or newer for location.room. Native entry and reload acceptance remain pending."
+    },
+    {
+      "id": "kydreeok-fight",
+      "label": "Kydreeok fight: outside the room $00 hole (walk left 8 tiles, then up)",
+      "beat": 27,
+      "after": "d8-entrance",
+      "location": {
+        "area": "0x57"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x57"
+      },
+      "writes": [
+        {
+          "addr": "0x7EF36D",
+          "value": "0x58",
+          "name": "CurrentHealth",
+          "inferred": true,
+          "why": "full health for the boss test"
+        }
+      ],
+      "notes": "The area warp lands outside the D8 Final Boss Route door at ($0F70,$04F0) (Data/debug/warps.json area 0x57). The room $00 hole is about 120 px left and 10 px up; from ($0EF8,$04E8) holding up drops Link into room $00, where Kydreeok (sprite $7A) starts (b45 run, AFS scratchpad/handoffs/kydreeok_dragon_2026-10-19/evidence/log.txt). The hole and the room $00 layout are placeholders (the finale room plan is open)."
+    },
+    {
+      "id": "jump-kalyxo-05",
+      "label": "Kalyxo east peak $05",
+      "location": {
+        "area": "0x05"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x05"
+      },
+      "notes": "Editor jump. No story writes. Area is Data/debug/warps.json via Snow Mountain Cave. Landing may open a message; module 0x0E is allowed.",
+      "writes": []
+    },
+    {
+      "id": "jump-kalyxo-1d",
+      "label": "Kalyxo crossroads $1D",
+      "location": {
+        "area": "0x1D"
+      },
+      "expect": {
+        "modules": [
+          "0x09"
+        ],
+        "area": "0x1D"
+      },
+      "notes": "Editor jump. No story writes. Area is Data/debug/warps.json via Deluxe Fairy Fountain East.",
+      "writes": []
+    },
+    {
+      "id": "jump-kalyxo-2f",
+      "label": "Kalyxo Tail Palace approach $2F",
+      "location": {
+        "area": "0x2F"
+      },
+      "expect": {
+        "modules": [
+          "0x09"
+        ],
+        "area": "0x2F"
+      },
+      "notes": "Editor jump. No story writes. Area is Data/debug/warps.json via D2 Tail Palace.",
+      "writes": []
+    },
+    {
+      "id": "jump-shrine-power",
+      "label": "Shrine of Power room $84",
+      "location": {
+        "entrance": "0x09"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0084"
+      },
+      "notes": "Editor jump through entrance $09 -> room $84 (ROM entrance table $0F8000). b67 door table $1BB96F puts this door on Goron Desert area $B0 tile $0AAA, not the entrances.asm OW $4B comment. On project ROM c606f8d9 and earlier, exit wiring forced GBC form (mask 6, $0FFF=1). On 566e8b62+ warp_entrance(0x09) kept mask 0. Re-check $02B2 and $0FFF on the b67 ROM. No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-shrine-wisdom",
+      "label": "Shrine of Wisdom room $C9",
+      "location": {
+        "entrance": "0x33"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x00C9"
+      },
+      "notes": "Editor jump through entrance $33 -> room $C9. b67 door table has one door, area $63 tile $035E. Inner room $009A has no entrance row. No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-shrine-courage",
+      "label": "Shrine of Courage room $53 (Mirror Shield)",
+      "location": {
+        "entrance": "0x0C"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0053"
+      },
+      "notes": "b67 editor jump. Entrance $0C -> room $53 (Menu/menu_draw.asm shrine row: Mirror Shield, room $053). Door table area $A6. The Shield write is Option D: Items/mirror_shield_palette.asm loads SP-5 color 8 only when Shield == 3.",
+      "writes": [
+        {
+          "addr": "0x7EF35A",
+          "value": "0x03",
+          "name": "Shield",
+          "evidence": "Core/sram.asm:340 (Shield 3 = Mirror); Items/mirror_shield_palette.asm:70"
+        }
+      ]
+    },
+    {
+      "id": "jump-d8-sky",
+      "label": "D8 Sky Tower entrance room $90 (area $87 door)",
+      "location": {
+        "entrance": "0x29"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0090"
+      },
+      "notes": "b67. ROM entrance table word $29 is room $0090; the door is area $87 tile $071E. Exit of room $90 is area $87. Distinct from d8-entrance (Fortress $37 -> room $0C) and from d8-sky-boss-room ($96). entrances.asm:569 still says this id is available. Farore's D8 companion follows in rooms $90-$95 when indoors, dungeon id $040C is 4, and Crystals bit $80 is clear (Sprites/NPCs/farore_d8_companion.asm D8Farore_Presence).",
+      "writes": []
+    },
+    {
+      "id": "jump-wayward-village",
+      "label": "Wayward Village area $23 (cat and dog)",
+      "location": {
+        "area": "0x23"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x23"
+      },
+      "notes": "Editor jump. Area warp via room $FE. Village Cat ($28) and Village Dog ($25) are scoped to OW $23 and the village houses (Sprites/NPCs/village_animals.asm). No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-wayward-tavern",
+      "label": "Wayward Village tavern front door $42",
+      "location": {
+        "entrance": "0x42"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0103"
+      },
+      "notes": "South front door of room $0103 (Overworld/village_bar_exit.asm: Link Y >= $2100 leaves through door $42). Cat and dog hooks include this room.",
+      "writes": []
+    },
+    {
+      "id": "jump-wayward-bar-back",
+      "label": "Wayward Village bar backdoor $43",
+      "location": {
+        "entrance": "0x43"
+      },
+      "expect": {
+        "modules": [
+          "0x07"
+        ],
+        "room": "0x0103"
+      },
+      "notes": "North backdoor of the same room $0103 (Overworld/entrances.asm:204-216 routes tile $11DA to entrance $43; village_bar_exit.asm leaves through door $43 when Link Y < $2100). Shares the room with the front door and the cottage half ($22 >= $0700 is entrance $44).",
+      "writes": []
+    },
+    {
+      "id": "jump-bean-spot0",
+      "label": "Magic Bean spot 0, Ranch $00",
+      "location": {
+        "area": "0x00"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x00"
+      },
+      "notes": "Editor jump. Spot 0 progress is MagicBeanProgress $7EF39B (Core/sram.asm:475). No story writes; planting state is left as it is.",
+      "writes": []
+    },
+    {
+      "id": "jump-bean-spot1",
+      "label": "Magic Bean spot 1, Tail Pond $2D",
+      "location": {
+        "area": "0x2D"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x2D"
+      },
+      "notes": "Editor jump. Spot 1 is MagicBeanSpot1 $7EF3C0 (Core/sram.asm:886). No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-bean-spot2",
+      "label": "Magic Bean spot 2, Mountainside $15",
+      "location": {
+        "area": "0x15"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x15"
+      },
+      "notes": "Editor jump. Spot 2 is MagicBeanSpot2 $7EF3C1 (Core/sram.asm:887). No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-bean-spot3",
+      "label": "Magic Bean spot 3, Loom Beach $33",
+      "location": {
+        "area": "0x33"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x33"
+      },
+      "notes": "Editor jump. Spot 3 is MagicBeanSpot3 $7EF3C2 (Core/sram.asm:888). Area warp uses room $104, which the cheat client treats as a table exit. No story writes.",
+      "writes": []
+    },
+    {
+      "id": "jump-horse-archery",
+      "label": "Toto Ranch archery course (Horse minigame, course 0)",
+      "location": {
+        "area": "0x00"
+      },
+      "expect": {
+        "modules": [
+          "0x09",
+          "0x0E"
+        ],
+        "area": "0x00"
+      },
+      "notes": "Lands on Ranch $00, the course-0 map (Masks/horse_minigame.asm HorseGame_CourseId 0). Bow must be nonzero or the kid uses message $0229. Horse form is CurrentMask $02B2 = 9 (Masks/horse_form.asm) and does not survive the area reload; equip it after landing. SideQuest2 bit $80 is the first-clear heart piece and is not set here.",
+      "writes": [
+        {
+          "addr": "0x7EF340",
+          "value": "0x02",
+          "name": "Bow",
+          "evidence": "Core/sram.asm:310 (Bow 2 = bow and arrows); Masks/horse_minigame.asm:514 refuses the course when Bow is 0"
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "id": "abyss-owl-arrival",
+      "label": "Eon Owl, first appearance on the Abyss arrival area (points to the Shrine of Origins)",
+      "beat": 7,
+      "reason": "Decided 2026-09-26 (AFS knowledge/planning/decisions.org 'Abyss segment', item 2). The flag exists (Core/sram.asm:541 (!EonOwl_ArrivalTalked)) but the Owl is not placed yet; add the checkpoint when it is."
+    },
+    {
+      "id": "jump-kalyxo-12",
+      "label": "Kalyxo $12",
+      "reason": "No exit-table room in Data/debug/warps.json, so warp-area cannot land it."
+    },
+    {
+      "id": "jump-kalyxo-1a",
+      "label": "Kalyxo $1A",
+      "reason": "No exit-table room in Data/debug/warps.json."
+    },
+    {
+      "id": "jump-kalyxo-1c",
+      "label": "Kalyxo $1C",
+      "reason": "No exit-table room in Data/debug/warps.json."
+    },
+    {
+      "id": "jump-kalyxo-32",
+      "label": "Kalyxo $32",
+      "reason": "No overworld area row in this tree's warps.json. Entrance $1A loads the beach cave, not the map."
+    },
+    {
+      "id": "jump-garrison-83",
+      "label": "Garrison top $83 (tall area with $8B)",
+      "reason": "b67 SpecialSoaring cache names TallArea $83+$8B (Items/special_soaring.asm). Area warp refuses $80+. Util/item_cheat.asm loads this only when ENABLE_DEBUG_TOOLS is 1. The b67 image keeps that flag at 0, so $3CB400 is empty and fly cannot land here."
+    },
+    {
+      "id": "jump-garrison-8b",
+      "label": "Garrison bottom $8B",
+      "reason": "Paired with $83. Same area-warp refusal. Edge guard: $8B connects north to $83 and west to $8A (Overworld/special_overworld/edge_guard.asm)."
+    },
+    {
+      "id": "jump-seazora-90",
+      "label": "Sea Zora north $90",
+      "reason": "b67 edge guard: $90 connects south to $98. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-seazora-98",
+      "label": "Sea Zora south $98",
+      "reason": "b67 edge guard: $98 connects north to $90, east to $99, south to $A0. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-deku-a8",
+      "label": "Deku west $A8",
+      "reason": "b67 edge guard: $A8 connects east to $A9 and south to $B0. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-deku-a9",
+      "label": "Deku east $A9",
+      "reason": "b67 edge guard: $A9 connects west to $A8 and south to $B1. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-lyra-b0",
+      "label": "Goron Desert NW $B0 (parent of $B0/$B1/$B8/$B9)",
+      "reason": "b67 64x64 desert. Shrine rooms $76/$83/$84/$86 exit to $B0 (headless module $08 from room $84 landed module $0B area $B0). warp-area still refuses $80+, and ENABLE_DEBUG_TOOLS=0 leaves WarpDispatcher out, so this stays a todo rather than a checkpoint id."
+    },
+    {
+      "id": "jump-lyra-b1",
+      "label": "Goron Desert NE $B1",
+      "reason": "Quadrant of parent $B0. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-goron-b8",
+      "label": "Goron Desert SW $B8",
+      "reason": "Quadrant of parent $B0. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-lyra-b9",
+      "label": "Goron Desert SE $B9",
+      "reason": "Quadrant of parent $B0. Area warp refuses $80+. Harbor stairs continue east to $BA."
+    },
+    {
+      "id": "jump-lyra-b2",
+      "label": "Lyra Sea east of the desert $B2",
+      "reason": "b67 edge guard names $B2 the sea page east of $B1, not the old coast label. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-lyra-ba",
+      "label": "Harbor / sea $BA",
+      "reason": "b67 edge guard: $BA connects west to $B9 by the harbor stairs. Area warp refuses $80+."
+    },
+    {
+      "id": "jump-d8-08c",
+      "label": "D8 room $08C",
+      "reason": "No entrance in warps.json points at room $08C."
+    },
+    {
+      "id": "jump-d8-0a0",
+      "label": "D8 room $0A0",
+      "reason": "No entrance in warps.json points at room $0A0."
+    },
+    {
+      "id": "jump-sky-8c",
+      "label": "Sky landing $8C",
+      "reason": "Areas $80+ are excluded from area warp. The b67 image does not include WarpDispatcher (ENABLE_DEBUG_TOOLS=0), so fly cannot load $8C."
+    }
+  ]
+}

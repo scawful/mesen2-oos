@@ -27,8 +27,10 @@
 #include "Shared/Video/VideoDecoder.h"
 #include "Shared/Video/VideoRenderer.h"
 #include "Shared/Video/DebugHud.h"
-#include "Utilities/HexUtilities.h"
+#include "Shared/Audio/SoundMixer.h"
 #include "Utilities/Video/AviWriter.h"
+#include "Utilities/PNGHelper.h"
+#include "Utilities/HexUtilities.h"
 #include "Utilities/VirtualFile.h"
 #include "Utilities/FolderUtilities.h"
 #include "SNES/SnesPpuTypes.h"
@@ -40,7 +42,11 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <cstdlib>
+#include <cstring>
 #include <poll.h>
 #include <chrono>
 #include <cctype>
@@ -240,13 +246,52 @@ string SocketResponse::ToJson() const {
 	return ss.str();
 }
 
+static uint16_t ParseTcpPortFromEnv()
+{
+	const char* env = std::getenv("MESEN2_TCP_PORT");
+#ifdef __ANDROID__
+	if(!env || !*env) {
+		env = "27015";
+	}
+#endif
+	if(!env || !*env) {
+		return 0;
+	}
+	int port = atoi(env);
+	if(port <= 0 || port > 65535) {
+		return 0;
+	}
+	return static_cast<uint16_t>(port);
+}
+
+static string ParseTcpBindFromEnv()
+{
+#ifdef __ANDROID__
+	// Android exposes state-loading, memory-writing, input, and Lua commands.
+	// Keep that control plane device-local; hosts must use adb forwarding.
+	return "127.0.0.1";
+#else
+	const char* env = std::getenv("MESEN2_TCP_BIND");
+	if(env && *env) {
+		return env;
+	}
+	return "127.0.0.1";
+#endif
+}
+
 SocketServer::SocketServer(Emulator* emu) : _emu(emu), _running(false) {
-	// Create socket path (allow override via env var for deterministic agents)
-	const char* envPath = std::getenv("MESEN2_SOCKET_PATH");
-	if (envPath && strlen(envPath) > 0) {
-		_socketPath = envPath;
+	_tcpPort = ParseTcpPortFromEnv();
+	_useTcp = _tcpPort != 0;
+	if(_useTcp) {
+		_tcpBind = ParseTcpBindFromEnv();
+		_socketPath = "tcp://" + _tcpBind + ":" + std::to_string(_tcpPort);
 	} else {
-		_socketPath = "/tmp/mesen2-" + std::to_string(getpid()) + ".sock";
+		const char* envPath = std::getenv("MESEN2_SOCKET_PATH");
+		if(envPath && strlen(envPath) > 0) {
+			_socketPath = envPath;
+		} else {
+			_socketPath = "/tmp/mesen2-" + std::to_string(getpid()) + ".sock";
+		}
 	}
 	RegisterHandlers();
 }
@@ -301,6 +346,7 @@ void SocketServer::InitializeValidationRules() {
 	SocketServer::_validationRules["HEALTH"] = defaultRule;
 	SocketServer::_validationRules["PAUSE"] = defaultRule;
 	SocketServer::_validationRules["RESUME"] = defaultRule;
+	SocketServer::_validationRules["STOP_DEBUGGER"] = defaultRule;
 	SocketServer::_validationRules["RESET"] = defaultRule;
 	CommandValidation loadRomRule = defaultRule;
 	loadRomRule.requiredParams.insert("path");
@@ -309,6 +355,8 @@ void SocketServer::InitializeValidationRules() {
 	SocketServer::_validationRules["CPU"] = defaultRule;
 	SocketServer::_validationRules["GAMESTATE"] = defaultRule;
 	SocketServer::_validationRules["SPRITES"] = defaultRule;
+	SocketServer::_validationRules["RECORD"] = defaultRule;
+	SocketServer::_validationRules["OVERLAY"] = defaultRule;
 }
 
 SocketServer::~SocketServer() {
@@ -321,6 +369,7 @@ void SocketServer::RegisterHandlers() {
 	_handlers["HEALTH"] = HandleHealth;
 	_handlers["PAUSE"] = HandlePause;
 	_handlers["RESUME"] = HandleResume;
+	_handlers["STOP_DEBUGGER"] = HandleStopDebugger;
 	_handlers["RESET"] = HandleReset;
 	_handlers["LOADROM"] = HandleLoadRom;
 	_handlers["OFFER_ROM"] = HandleOfferRom;
@@ -341,6 +390,8 @@ void SocketServer::RegisterHandlers() {
 	_handlers["EXEC_LUA"] = HandleExecLua;
 	_handlers["HELP"] = HandleHelp;
 	_handlers["SCREENSHOT"] = HandleScreenshot;
+	_handlers["RECORD"] = HandleRecord;
+	_handlers["OVERLAY"] = HandleOverlay;
 	_handlers["CPU"] = HandleGetCpuState;
 	_handlers["STATEINSPECT"] = HandleStateInspector;
 	_handlers["INPUT"] = HandleSetInput;
@@ -509,26 +560,56 @@ void SocketServer::LogMemoryWrite(uint32_t pc, uint32_t addr, uint16_t value, ui
 void SocketServer::Start() {
 	if (_running) return;
 
-	// Remove existing socket file
-	unlink(_socketPath.c_str());
+	if(_useTcp) {
+		_serverFd = socket(AF_INET, SOCK_STREAM, 0);
+		if(_serverFd < 0) {
+			MessageManager::Log("[SocketServer] Failed to create TCP socket");
+			return;
+		}
 
-	// Create Unix domain socket
-	_serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (_serverFd < 0) {
-		MessageManager::Log("[SocketServer] Failed to create socket");
-		return;
-	}
+		int reuse = 1;
+		setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+		setsockopt(_serverFd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+#endif
 
-	struct sockaddr_un addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, _socketPath.c_str(), sizeof(addr.sun_path) - 1);
+		struct sockaddr_in addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(_tcpPort);
+		if(inet_pton(AF_INET, _tcpBind.c_str(), &addr.sin_addr) != 1) {
+			MessageManager::Log("[SocketServer] Invalid TCP bind address: " + _tcpBind);
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
 
-	if (bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-		MessageManager::Log("[SocketServer] Failed to bind socket: " + _socketPath);
-		close(_serverFd);
-		_serverFd = -1;
-		return;
+		if(bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+			MessageManager::Log("[SocketServer] Failed to bind TCP " + _socketPath + ": " + string(strerror(errno)));
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
+	} else {
+		unlink(_socketPath.c_str());
+
+		_serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
+		if(_serverFd < 0) {
+			MessageManager::Log("[SocketServer] Failed to create socket");
+			return;
+		}
+
+		struct sockaddr_un addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sun_family = AF_UNIX;
+		strncpy(addr.sun_path, _socketPath.c_str(), sizeof(addr.sun_path) - 1);
+
+		if(bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+			MessageManager::Log("[SocketServer] Failed to bind socket: " + _socketPath);
+			close(_serverFd);
+			_serverFd = -1;
+			return;
+		}
 	}
 
 	if (listen(_serverFd, 5) < 0) {
@@ -579,10 +660,10 @@ void SocketServer::Stop() {
 	}
 	_serverThread.reset();
 
-	// Remove socket file
-	unlink(_socketPath.c_str());
+	if(!_useTcp) {
+		unlink(_socketPath.c_str());
+	}
 
-	// Remove status file
 	string statusPath = GetStatusFilePath();
 	unlink(statusPath.c_str());
 
@@ -595,6 +676,18 @@ void SocketServer::Stop() {
 
 string SocketServer::GetStatusFilePath() const
 {
+	if(_useTcp) {
+		const char* overridePath = std::getenv("MESEN2_STATUS_PATH");
+		if(overridePath && *overridePath) {
+			return overridePath;
+		}
+#ifdef __ANDROID__
+		return "/data/local/tmp/mesen2-tcp-" + std::to_string(_tcpPort) + ".status";
+#else
+		return "/tmp/mesen2-tcp-" + std::to_string(_tcpPort) + ".status";
+#endif
+	}
+
 	string statusPath = _socketPath;
 	size_t pos = statusPath.rfind(".sock");
 	if(pos != string::npos && pos == statusPath.size() - 5) {
@@ -650,6 +743,65 @@ void SocketServer::UpdateStatusFile()
 	WriteFileAtomic(statusPath, ss.str());
 }
 
+bool SocketServer::HasActiveSocketDebugState() {
+	{
+		auto lock = _breakpointLock.AcquireSafe();
+		if(!_breakpoints.empty()) return true;
+	}
+	{
+		auto lock = _pRegisterLock.AcquireSafe();
+		if(_pRegisterWatchEnabled.load(std::memory_order_relaxed)) return true;
+	}
+	{
+		auto lock = _memoryWatchLock.AcquireSafe();
+		if(!_memoryWatches.empty()) return true;
+	}
+	{
+		auto lock = _logpointLock.AcquireSafe();
+		if(!_logpoints.empty()) return true;
+	}
+	{
+		auto lock = _watchTriggerLock.AcquireSafe();
+		if(!_watchTriggers.empty()) return true;
+	}
+	auto dbg = _emu->GetDebugger(false);
+	Debugger* debugger = dbg.GetDebugger();
+	if(debugger) {
+		if(debugger->GetScriptManager() && debugger->GetScriptManager()->HasScript()) {
+			return true;
+		}
+		for(CpuType cpuType : _emu->GetCpuTypes()) {
+			ITraceLogger* logger = debugger->GetTraceLogger(cpuType);
+			if(logger && logger->IsEnabled()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void SocketServer::MaybeAutoDetachDebugger(size_t clientCount) {
+	static constexpr auto kAutoDetachIdle = std::chrono::seconds(3);
+	auto now = std::chrono::steady_clock::now();
+	if(clientCount > 0) {
+		_lastClientActivity = now;
+		return;
+	}
+	if(!_socketStartedDebugger || !_emu) {
+		return;
+	}
+	if(!_emu->IsDebugging()) {
+		_socketStartedDebugger = false;
+		return;
+	}
+	if(now - _lastClientActivity < kAutoDetachIdle || HasActiveSocketDebugState()) {
+		return;
+	}
+	_emu->StopDebugger();
+	_socketStartedDebugger = false;
+	MessageManager::Log("[Socket] Auto-detached debugger: no socket client for 3s");
+}
+
 void SocketServer::ServerLoop() {
 	vector<struct pollfd> pfds;
 	pfds.push_back({ _serverFd, POLLIN, 0 });
@@ -669,6 +821,11 @@ void SocketServer::ServerLoop() {
 			UpdateStatusFile();
 			lastStatusUpdate = now;
 		}
+
+#ifdef __ANDROID__
+		// Android only: desktop debugger windows can share a socket-attached debugger.
+		MaybeAutoDetachDebugger(pfds.size() - 1);
+#endif
 
 		if (ret == 0) continue; // Timeout, check _running flag
 
@@ -783,6 +940,8 @@ bool SocketServer::HandleClient(int clientFd) {
 	}
 
 	SocketResponse response;
+	_lastClientActivity = std::chrono::steady_clock::now();
+	const bool debuggerBefore = _emu && _emu->IsDebugging();
 	if (handler) {
 		try {
 			response = handler(_emu, cmd);
@@ -796,6 +955,13 @@ bool SocketServer::HandleClient(int clientFd) {
 			response.error = "Unknown internal error";
 			response.errorCode = SocketErrorCode::InternalError;
 			response.retryable = false;
+		}
+		if(_emu) {
+			if(!debuggerBefore && _emu->IsDebugging()) {
+				_socketStartedDebugger = true;
+			} else if(!_emu->IsDebugging()) {
+				_socketStartedDebugger = false;
+			}
 		}
 	} else {
 		response.success = false;
@@ -934,15 +1100,7 @@ SocketResponse SocketServer::HandleState(Emulator* emu, const SocketCommand& cmd
 	ss << "\"frame\":" << emu->GetFrameCount() << ",";
 	ss << "\"fps\":" << fixed << setprecision(2) << emu->GetFps() << ",";
 	ss << "\"consoleType\":" << static_cast<int>(emu->GetConsoleType());
-
-	// If debugging, get more state
-	if (emu->IsDebugging()) {
-		auto dbg = emu->GetDebugger(false);
-		if (dbg.GetDebugger()) {
-			// Could add breakpoint count, etc.
-			ss << ",\"debugging\":true";
-		}
-	}
+	ss << ",\"debugging\":" << (emu->IsDebugging() ? "true" : "false");
 
 	SaveLoadResult lastSave;
 	SaveLoadResult lastLoad;
@@ -985,8 +1143,10 @@ SocketResponse SocketServer::HandleHealth(Emulator* emu, const SocketCommand& cm
 	string pcValue = "null";
 	CpuType cpuType = CpuType::Snes;
 
-	if(running) {
-		auto dbg = emu->GetDebugger(true);
+	// HEALTH must remain observational. Only include debugger-backed PC and
+	// disassembly details when a debugger was already active.
+	if(running && debugging) {
+		auto dbg = emu->GetDebugger(false);
 		if(dbg.GetDebugger()) {
 			auto cpuTypes = emu->GetCpuTypes();
 			if(!cpuTypes.empty()) {
@@ -1189,6 +1349,23 @@ SocketResponse SocketServer::HandleResume(Emulator* emu, const SocketCommand& cm
 	}
 	resp.success = true;
 	resp.data = "\"OK\"";
+	return resp;
+}
+
+// Handheld/agents: GAMESTATE/SPRITES/etc. call GetDebugger(true) and leave the
+// debugger attached, which tanks RG353P FPS. Allow an explicit detach without
+// resetting the game.
+SocketResponse SocketServer::HandleStopDebugger(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	const bool wasDebugging = emu->IsDebugging();
+	if(wasDebugging) {
+		emu->StopDebugger();
+	}
+	resp.success = true;
+	stringstream ss;
+	ss << "{\"wasDebugging\":" << (wasDebugging ? "true" : "false")
+		<< ",\"debugging\":" << (emu->IsDebugging() ? "true" : "false") << "}";
+	resp.data = ss.str();
 	return resp;
 }
 
@@ -2708,9 +2885,17 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 		return HandleCaptureScreenshot(emu, cmd);
 	}
 
-	// Capture screenshot to PNG stream
+	// Capture screenshot to PNG stream (include active zero-debugger overlay when enabled)
 	std::stringstream pngStream;
-	emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+	vector<uint32_t> overlayPixels;
+	uint32_t overlayW = 0;
+	uint32_t overlayH = 0;
+	if (emu->GetVideoRenderer() && emu->GetVideoRenderer()->GetDebugOverlayMask() != 0
+		&& emu->GetVideoRenderer()->CopyLastFrame(overlayPixels, overlayW, overlayH)) {
+		PNGHelper::WritePNG(pngStream, overlayPixels.data(), overlayW, overlayH, 24);
+	} else {
+		emu->GetVideoDecoder()->TakeScreenshot(pngStream);
+	}
 
 	string pngData = pngStream.str();
 	if (pngData.empty()) {
@@ -2763,6 +2948,51 @@ SocketResponse SocketServer::HandleScreenshot(Emulator* emu, const SocketCommand
 
 	resp.success = true;
 	resp.data = "\"" + encoded + "\"";
+	return resp;
+}
+
+SocketResponse SocketServer::HandleOverlay(Emulator* emu, const SocketCommand& cmd) {
+	SocketResponse resp;
+	VideoRenderer* renderer = emu ? emu->GetVideoRenderer() : nullptr;
+	if (!renderer) {
+		resp.success = false;
+		resp.error = "Video renderer unavailable";
+		resp.errorCode = SocketErrorCode::InternalError;
+		return resp;
+	}
+
+	uint32_t mask = renderer->GetDebugOverlayMask();
+	if (cmd.HasParam("mask")) {
+		try {
+			mask = static_cast<uint32_t>(std::stoul(cmd.GetParam("mask"), nullptr, 0)) & 0x07u;
+		} catch (...) {
+			resp.success = false;
+			resp.error = "Invalid overlay mask";
+			resp.errorCode = SocketErrorCode::InvalidParameter;
+			return resp;
+		}
+	}
+	if (cmd.HasParam("hitboxes")) {
+		if (ParseBoolValue(cmd.GetParam("hitboxes"))) mask |= 0x01u;
+		else mask &= ~0x01u;
+	}
+	if (cmd.HasParam("collision")) {
+		if (ParseBoolValue(cmd.GetParam("collision"))) mask |= 0x02u;
+		else mask &= ~0x02u;
+	}
+	if (cmd.HasParam("grid")) {
+		if (ParseBoolValue(cmd.GetParam("grid"))) mask |= 0x04u;
+		else mask &= ~0x04u;
+	}
+	renderer->SetDebugOverlayMask(mask);
+
+	stringstream ss;
+	ss << "{\"mask\":" << mask
+	   << ",\"hitboxes\":" << ((mask & 0x01u) ? "true" : "false")
+	   << ",\"collision\":" << ((mask & 0x02u) ? "true" : "false")
+	   << ",\"grid\":" << ((mask & 0x04u) ? "true" : "false") << "}";
+	resp.success = true;
+	resp.data = ss.str();
 	return resp;
 }
 
@@ -3097,7 +3327,9 @@ SocketResponse SocketServer::HandleSetInput(Emulator* emu, const SocketCommand& 
 		}
 	}
 
-	// Set the input override via debugger
+	// Set the input override via debugger. INPUT attaches the debugger when
+	// it was not already running; use STOP_DEBUGGER after finite-frame presses
+	// (or mesen2_client press, which auto-detaches) to recover handheld FPS.
 	dbg.GetDebugger()->SetInputOverrides(playerIndex, state, frameCount);
 
 	resp.success = true;
@@ -3313,7 +3545,6 @@ SocketResponse SocketServer::HandleRunFrame(Emulator* emu, const SocketCommand& 
 		resp.errorCode = SocketErrorCode::InvalidParameter;
 		return resp;
 	}
-
 	uint32_t defaultWaitMs = std::min<uint32_t>(60000, static_cast<uint32_t>(frameCount) * 50 + DebugBreakHelper::DefaultTimeoutMs);
 	bool wait = false;
 	uint32_t timeoutMs = defaultWaitMs;
@@ -3602,6 +3833,11 @@ SocketResponse SocketServer::HandleSpeed(Emulator* emu, const SocketCommand& cmd
 	}
 
 	settings->SetEmulationConfig(config);
+
+#ifdef __ANDROID__
+	// Match R2 hold-to-turbo: mute + skip resample when Workshop sets SPEED≠1x.
+	settings->SetFlagState(EmulationFlags::Turbo, multiplier != 1.0);
+#endif
 
 	resp.success = true;
 	resp.data = "\"OK\"";
@@ -5286,6 +5522,7 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "HEALTH") subResp = HandleHealth(emu, subCmd);
 		else if (subCmd.type == "PAUSE") subResp = HandlePause(emu, subCmd);
 		else if (subCmd.type == "RESUME") subResp = HandleResume(emu, subCmd);
+		else if (subCmd.type == "STOP_DEBUGGER") subResp = HandleStopDebugger(emu, subCmd);
 		else if (subCmd.type == "RESET") subResp = HandleReset(emu, subCmd);
 		else if (subCmd.type == "LOADROM") subResp = HandleLoadRom(emu, subCmd);
 		else if (subCmd.type == "LOG") subResp = HandleEmuLog(emu, subCmd);
@@ -5301,6 +5538,8 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "SAVESTATE_LABEL") subResp = HandleSaveStateLabel(emu, subCmd);
 		else if (subCmd.type == "LOADSTATE") subResp = HandleLoadState(emu, subCmd);
 		else if (subCmd.type == "SCREENSHOT") subResp = HandleScreenshot(emu, subCmd);
+		else if (subCmd.type == "RECORD") subResp = HandleRecord(emu, subCmd);
+		else if (subCmd.type == "OVERLAY") subResp = HandleOverlay(emu, subCmd);
 		else if (subCmd.type == "CPU") subResp = HandleGetCpuState(emu, subCmd);
 		else if (subCmd.type == "INPUT") subResp = HandleSetInput(emu, subCmd);
 		else if (subCmd.type == "EVAL") subResp = HandleEval(emu, subCmd);
@@ -5333,7 +5572,6 @@ SocketResponse SocketServer::HandleBatch(Emulator* emu, const SocketCommand& cmd
 		else if (subCmd.type == "GAMESTATE") subResp = HandleGameState(emu, subCmd);
 		else if (subCmd.type == "SPRITES") subResp = HandleSprites(emu, subCmd);
 		else if (subCmd.type == "CAMERA") subResp = HandleCamera(emu, subCmd);
-		else if (subCmd.type == "RECORD") subResp = HandleRecord(emu, subCmd);
 		else if (subCmd.type == "MOVIE") subResp = HandleMovie(emu, subCmd);
 		else if (subCmd.type == "SUBSCRIBE") subResp = HandleSubscribe(emu, subCmd);
 		else if (subCmd.type == "DEBUG_LOG") subResp = HandleDebugLog(emu, subCmd);
@@ -5773,6 +6011,12 @@ SocketResponse SocketServer::HandleSubscribe(Emulator* emu, const SocketCommand&
 	}
 
 	return resp;
+}
+
+bool SocketServer::HasEventSubscribers()
+{
+	auto lock = _eventLock.AcquireSafe();
+	return !_eventSubscriptions.empty();
 }
 
 void SocketServer::BroadcastEvent(string eventType, string data) {
@@ -7045,6 +7289,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"HEALTH", "Detailed health check with PC and disasm sample", "", "{\"type\":\"HEALTH\"}"},
 			{"PAUSE", "Pause emulation", "", "{\"type\":\"PAUSE\"}"},
 			{"RESUME", "Resume emulation", "", "{\"type\":\"RESUME\"}"},
+			{"STOP_DEBUGGER", "Detach debugger without resetting the game", "", "{\"type\":\"STOP_DEBUGGER\"}"},
 			{"RESET", "Reset the emulator", "", "{\"type\":\"RESET\"}"},
 			{"LOADROM", "Load ROM from path", "path, patch (optional), stop (optional), powercycle (optional)", "{\"type\":\"LOADROM\",\"path\":\"/path/to/rom.sfc\"}"},
 			{"OFFER_ROM", "Offer a new ROM to the player (UI banner: Load now / Later); replaces any pending offer", "path, label (optional), notes (optional)", "{\"type\":\"OFFER_ROM\",\"path\":\"/path/to/rom.sfc\",\"label\":\"v10\"}"},
@@ -7069,9 +7314,10 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 			{"BREAKPOINT", "Manage breakpoints", "action (add/list/remove/enable/disable/clear), addr, bptype, condition", "{\"type\":\"BREAKPOINT\",\"action\":\"add\",\"addr\":\"0x008000\",\"bptype\":\"exec\"}"},
 			{"TRACE", "Get or control execution trace log", "action (start/stop/status/clear) or count/offset; format/condition/labels/indent", "{\"type\":\"TRACE\",\"action\":\"start\",\"clear\":\"true\"}"},
 			{"BATCH", "Execute multiple commands at once", "commands (JSON array as string)", "{\"type\":\"BATCH\",\"commands\":\"[{\\\"type\\\":\\\"PING\\\"}]\"}"},
-			{"SCREENSHOT", "Capture screen as base64 PNG, or write it to a file", "path (optional, absolute .png), camera (optional, frame through CAMERA), overwrite (optional)", "{\"type\":\"SCREENSHOT\",\"path\":\"/tmp/shot.png\",\"camera\":\"true\"}"},
+			{"SCREENSHOT", "Capture screen as base64 PNG, or write it to a file (includes active OVERLAY when camera=false)", "path (optional, absolute .png), camera (optional, frame through CAMERA), overwrite (optional)", "{\"type\":\"SCREENSHOT\",\"path\":\"/tmp/shot.png\",\"camera\":\"true\"}"},
 			{"CAMERA", "Virtual capture camera for recordings, screenshots and LIVE (never changes game state)", "action (get/set/pan/reset); set: mode (full/manual/follow), width, height, x, y, zoom, clamp, filter (nearest/bilinear), smoothing, deadzone_x, deadzone_y, follow_x, follow_y, scroll_x, scroll_y, offset_x, offset_y, memtype, size; pan: x, y, zoom, frames, ease (smooth/linear)", "{\"type\":\"CAMERA\",\"action\":\"set\",\"mode\":\"follow\",\"width\":\"1280\",\"height\":\"720\",\"zoom\":\"2\",\"follow_x\":\"0x7E0022\",\"follow_y\":\"0x7E0020\",\"scroll_x\":\"0x7E00E2\",\"scroll_y\":\"0x7E00E8\"}"},
-			{"RECORD", "Record video (AVI/GIF, with audio) or audio (WAV) to a file", "action (start/stop/status); start: path (absolute), kind (avi/gif/wav, default from extension), codec (zmbv/cscd/raw), compression, camera, system_hud, input_hud, overwrite; stop: kind (video/audio/all)", "{\"type\":\"RECORD\",\"action\":\"start\",\"path\":\"/tmp/clip.avi\",\"camera\":\"true\"}"},
+			{"RECORD", "Record video (.mp4 on Android, .avi/.gif), replay ring, or audio (.wav) to a file", "action (start/stop/status/replay_start/replay_stop/replay_dump); start: path (absolute), kind (mp4/avi/gif/wav, default from extension), codec (zmbv/cscd/raw), compression, camera, system_hud, input_hud, overwrite; replay_start: seconds, input_hud; replay_dump: path, overwrite; stop: kind (video/audio/all)", "{\"type\":\"RECORD\",\"action\":\"start\",\"path\":\"/tmp/clip.avi\",\"camera\":\"true\"}"},
+			{"OVERLAY", "Toggle zero-debugger WRAM debug overlay (hitboxes, dungeon collision, 16x16 grid)", "mask (0-7), hitboxes, collision, grid", "{\"type\":\"OVERLAY\",\"hitboxes\":\"true\"}"},
 			{"MOVIE", "Record or play a Mesen input movie (.mmo); input_row is the movie row of the next frame", "action (status/record/play/stop); record: path (absolute .mmo), from (current/save/power, default current), author, description, overwrite; play: path (absolute .mmo), pause (default true)", "{\"type\":\"MOVIE\",\"action\":\"play\",\"path\":\"/tmp/run.mmo\",\"pause\":\"true\"}"},
 			{"LIVE", "Stream camera video (BGRA) and audio (s16le stereo) to named pipes for an external encoder", "action (start/stop/status); start: video (FIFO path), audio (FIFO path, optional), every (frame interval)", "{\"type\":\"LIVE\",\"action\":\"start\",\"video\":\"/tmp/live/video.fifo\",\"audio\":\"/tmp/live/audio.fifo\"}"},
 			{"PROJECT", "Show the yaze project (.yaze) the ROM was loaded from; load one with LOADROM path=<file>.yaze", "", "{\"type\":\"PROJECT\"}"},
@@ -7129,12 +7375,12 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 
 	// List all commands
 	static const vector<string> commands = {
-		"PING", "STATE", "HEALTH", "PAUSE", "RESUME", "RESET", "FRAME", "STEP",
+		"PING", "STATE", "HEALTH", "PAUSE", "RESUME", "STOP_DEBUGGER", "RESET", "FRAME", "STEP",
 		"OFFER_ROM", "OFFER_ROM_STATUS", "OFFER_ROM_CLEAR", "LOAD_ROM_LIVE", "LOG",
 		"READ", "READ16", "READBLOCK", "READBLOCK_BINARY", "WRITE", "WRITE16", "WRITEBLOCK",
 		"MEMORY_SIZE",
 		"CPU", "EVAL", "SET_PC", "DISASM", "BREAKPOINT", "TRACE", "BATCH",
-		"SCREENSHOT", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
+		"SCREENSHOT", "RECORD", "OVERLAY", "SAVESTATE", "SAVESTATE_LABEL", "LOADSTATE",
 		"SNAPSHOT", "DIFF", "SEARCH", "LABELS",
 		"P_WATCH", "P_LOG", "P_ASSERT",
 		"DEBUG_LOG",
@@ -7144,7 +7390,7 @@ SocketResponse SocketServer::HandleHelp(Emulator* emu, const SocketCommand& cmd)
 		"ROMINFO", "SPEED", "REWIND", "CHEAT", "INPUT",
 		"STATEINSPECT", "LOGPOINT", "SUBSCRIBE", "EXEC_LUA", "LOADSCRIPT", "HELP",
 		"GAMESTATE", "SPRITES", "VIDEO_RECORD",
-		"CAMERA", "RECORD", "MOVIE", "LIVE", "PROJECT"
+		"CAMERA", "MOVIE", "LIVE", "PROJECT"
 	};
 
 	stringstream ss;
@@ -7222,24 +7468,23 @@ SocketResponse SocketServer::HandleGameState(Emulator* emu, const SocketCommand&
 		return resp;
 	}
 
-	auto dbg = emu->GetDebugger(false);
-	if (!dbg.GetDebugger()) {
+	ConsoleMemoryInfo workRam = emu->GetMemory(MemoryType::SnesWorkRam);
+	if (!workRam.Memory || workRam.Size < 0x20000) {
 		resp.success = false;
-		resp.error = "Debugger not available";
+		resp.error = "SNES work RAM is unavailable";
 		return resp;
 	}
-
-	MemoryDumper* dumper = dbg.GetDebugger()->GetMemoryDumper();
+	auto* workRamBytes = static_cast<uint8_t*>(workRam.Memory);
 
 	// Helper to read a byte
-	auto readByte = [dumper](uint32_t addr) -> uint8_t {
-		return dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
+	auto readByte = [workRamBytes](uint32_t addr) -> uint8_t {
+		return workRamBytes[addr & 0x1FFFF];
 	};
 
 	// Helper to read a word (little-endian)
-	auto readWord = [dumper](uint32_t addrLow) -> uint16_t {
-		uint8_t lo = dumper->GetMemoryValue(MemoryType::SnesMemory, addrLow);
-		uint8_t hi = dumper->GetMemoryValue(MemoryType::SnesMemory, addrLow + 1);
+	auto readWord = [readByte](uint32_t addrLow) -> uint16_t {
+		uint8_t lo = readByte(addrLow);
+		uint8_t hi = readByte(addrLow + 1);
 		return lo | (hi << 8);
 	};
 
@@ -7330,14 +7575,13 @@ SocketResponse SocketServer::HandleSprites(Emulator* emu, const SocketCommand& c
 		return resp;
 	}
 
-	auto dbg = emu->GetDebugger(false);
-	if (!dbg.GetDebugger()) {
+	ConsoleMemoryInfo workRam = emu->GetMemory(MemoryType::SnesWorkRam);
+	if (!workRam.Memory || workRam.Size < 0x20000) {
 		resp.success = false;
-		resp.error = "Debugger not available";
+		resp.error = "SNES work RAM is unavailable";
 		return resp;
 	}
-
-	MemoryDumper* dumper = dbg.GetDebugger()->GetMemoryDumper();
+	auto* workRamBytes = static_cast<uint8_t*>(workRam.Memory);
 
 	// Parse optional slot filter
 	int slotFilter = -1;
@@ -7354,8 +7598,8 @@ SocketResponse SocketServer::HandleSprites(Emulator* emu, const SocketCommand& c
 	}
 
 	// Helper to read a byte
-	auto readByte = [dumper](uint32_t addr) -> uint8_t {
-		return dumper->GetMemoryValue(MemoryType::SnesMemory, addr);
+	auto readByte = [workRamBytes](uint32_t addr) -> uint8_t {
+		return workRamBytes[addr & 0x1FFFF];
 	};
 
 	// Read sprites

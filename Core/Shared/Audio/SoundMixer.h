@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "Core/Shared/Interfaces/IAudioDevice.h"
 #include "Utilities/safe_ptr.h"
+#include <chrono>
 
 class Emulator;
 class Equalizer;
@@ -28,6 +29,18 @@ private:
 	unique_ptr<CrossFeedFilter> _crossFeedFilter;
 	unique_ptr<ReverbFilter> _reverbFilter;
 
+	// Sticky so muted turbo does not call SDL_PauseAudioDevice every SPC frame.
+	bool _audioStoppedForMute = false;
+
+	// Audible fast-forward: emulated speed measured from incoming SPC samples
+	// per wall-clock second. Used to resample turbo audio back to real time
+	// (pitched up) so the device buffer neither overflows nor goes silent.
+	bool _turboAudioActive = false;
+	double _turboSpeedRatio = 1.0;
+	uint64_t _turboWindowSamples = 0;
+	std::chrono::steady_clock::time_point _turboWindowStart;
+	double GetTurboSourceRate(uint32_t sampleCount, uint32_t sourceRate);
+
 	void ProcessEqualizer(int16_t *samples, uint32_t sampleCount, uint32_t targetRate);
 
 public:
@@ -36,6 +49,8 @@ public:
 
 	void PlayAudioBuffer(int16_t *samples, uint32_t sampleCount, uint32_t sourceRate);
 	void StopAudio(bool clearBuffer = false);
+	/** True when PlayAudioBuffer would discard host output (muted turbo/background). */
+	bool ShouldDiscardHostAudio();
 
 	void RegisterAudioDevice(IAudioDevice *audioDevice);
 

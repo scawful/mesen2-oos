@@ -373,37 +373,6 @@ void Spc::DspWriteRam(uint16_t addr, uint8_t value)
 	_ram[addr] = value;
 }
 
-void Spc::Run()
-{
-	if(!_enabled) {
-		//Used to temporarily disable the SPC when overclocking is enabled
-		return;
-	} else if(_state.StopState != SnesCpuStopState::Running) {
-		//STOP or SLEEP were executed - execution is stopped forever.
-		_emu->ProcessHaltedCpu<CpuType::Spc>();
-		return;
-	}
-
-	uint64_t targetCycle = (uint64_t)(_memoryManager->GetMasterClock() * _clockRatio);
-	while(_state.Cycle < targetCycle) {
-		ProcessCycle();
-	}
-}
-
-void Spc::ProcessCycle()
-{
-	if(_opStep == SpcOpStep::ReadOpCode) {
-#ifndef DUMMYSPC
-		_emu->ProcessInstruction<CpuType::Spc>();
-#endif 
-		_opCode = GetOpCode();
-		_opStep = SpcOpStep::Addressing;
-		_opSubStep = 0;
-	} else {
-		Exec();
-	}
-}
-
 void Spc::ProcessEndFrame()
 {
 	Run();
@@ -412,7 +381,16 @@ void Spc::ProcessEndFrame()
 
 	uint16_t sampleCount = _dsp->GetSampleCount();
 	if(sampleCount != 0) {
-		_emu->GetSoundMixer()->PlayAudioBuffer(_dsp->GetSamples(), sampleCount / 2, _spcSampleRate);
+		SoundMixer* mixer = _emu->GetSoundMixer();
+		// SPC/DSP still run for game logic; skip host mix/resample when turbo
+		// mute would discard the buffer anyway.
+		if(!mixer->ShouldDiscardHostAudio()) {
+			mixer->PlayAudioBuffer(_dsp->GetSamples(), sampleCount / 2, _spcSampleRate);
+		} else {
+			// Keep left/right sample probes quiet and ensure the device ring is cleared once.
+			int16_t silence[2] = { 0, 0 };
+			mixer->PlayAudioBuffer(silence, 1, _spcSampleRate);
+		}
 	}
 	_dsp->ResetOutput();
 }

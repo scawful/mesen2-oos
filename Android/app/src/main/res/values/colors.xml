@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="night_moss">#16191F</color>
+    <color name="night_moss_scrim">#F016191F</color>
+    <color name="slate_face">#FF20242C</color>
+    <color name="triforce_gold">#70B7FF</color>
+    <color name="parchment">#EDF0F5</color>
+    <color name="forest_edge">#315B85</color>
+    <color name="socket_teal">#A9C9EA</color>
+    <color name="hud_ink">#B9C1CC</color>
+</resources>
