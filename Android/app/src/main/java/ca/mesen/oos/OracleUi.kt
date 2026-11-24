@@ -1788,7 +1788,7 @@ class OracleUi internal constructor(
             CheatCell("Max Kit", "ALL", false, accentTone = true) { runInventoryAction(Inventory.MAX_EVERYTHING) },
             CheatCell("Full Heal", "HP", false) { runInventoryAction(Inventory.FULL_HEAL) },
             CheatCell("999 Rupees", "R", false) { runInventoryAction(Inventory.RUPEES_999) },
-            CheatCell("All Masks", "6", false) { runInventoryAction(Inventory.ALL_MASKS) },
+            CheatCell("All Masks", "9", false) { runInventoryAction(Inventory.ALL_MASKS) },
         )
 
         val swordNames = arrayOf("None", "L1", "L2", "L3", "L4")
@@ -1854,7 +1854,18 @@ class OracleUi internal constructor(
             },
         )
 
-        return listOf(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9)
+        val stalfos = (gear[Inventory.STALFOS_MASK_OWNED] ?: 0) > 0
+        val frog = (gear[Inventory.FROG_MASK_OWNED] ?: 0) > 0
+        val fierceDeity = (gear[Inventory.FIERCE_DEITY_MASK_OWNED] ?: 0) > 0
+        val fdActive = (gear[Inventory.ACTIVE_FORM] ?: 0) == Inventory.FORM_FIERCE_DEITY
+        val row10 = listOf(
+            CheatCell("Stalfos Mask", if (stalfos) "ON" else "", stalfos) { cycleLiveGear("Stalfos Mask", Inventory.STALFOS_MASK_OWNED, 1) },
+            CheatCell("Frog Mask", if (frog) "ON" else "", frog) { cycleLiveGear("Frog Mask", Inventory.FROG_MASK_OWNED, 1) },
+            CheatCell("Fierce Deity", if (fierceDeity) "ON" else "", fierceDeity) { cycleLiveGear("Fierce Deity", Inventory.FIERCE_DEITY_MASK_OWNED, 1) },
+            CheatCell("Equip FD", if (fdActive) "ON" else "NOW", fdActive, accentTone = true) { runInventoryAction(Inventory.EQUIP_FIERCE_DEITY) },
+        )
+
+        return listOf(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9, row10)
     }
 
     private fun cheatsKey(key: Key) {
@@ -3905,6 +3916,8 @@ class OracleUi internal constructor(
             Inventory.BOOTS, Inventory.FLIPPERS, Inventory.MOON_PEARL,
             Inventory.ZORA_MASK, Inventory.BUNNY_HOOD, Inventory.DEKU_MASK,
             Inventory.STONE_MASK, Inventory.WOLF_MASK, Inventory.GARO_MASK_OWNED,
+            Inventory.STALFOS_MASK_OWNED, Inventory.FROG_MASK_OWNED, Inventory.FIERCE_DEITY_MASK_OWNED,
+            Inventory.ACTIVE_FORM,
             Inventory.CRYSTALS, Inventory.PENDANTS,
         )
 

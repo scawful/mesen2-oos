@@ -95,6 +95,35 @@ final class PresetDataTest {
         check(emu.readByte(Inventory.HEALTH_MAX) == 0xA0 && emu.readByte(Inventory.HEALTH_CURRENT) == 0xA0
                 && emu.readByte(Inventory.HEART_PIECES) == 3, "FULL 20 hearts + 3 pieces");
 
+        // 2026-11-23 expanded fields
+        check(emu.readByte(Inventory.FOUND_RINGS) == 0x3F, "FULL FOUNDRINGS=$3F");
+        check(emu.readByte(Inventory.BOUND_MASK) == 0x09, "FULL BoundMask=Fierce Deity (9)");
+        check(emu.readByte(Inventory.SONG_BITS) == 0xBF, "FULL SongBits=$BF");
+        check(emu.readByte(0x7EF3B9) == 0x01 && emu.readByte(0x7EF3BA) == 0x1F
+                && emu.readByte(0x7EF3BB) == 0x22, "FULL 2-item bindings (Y=Clockwork Beetle, X=Tempest Harp)");
+        check(emu.readByte(Inventory.SLINGSHOT_BOW_FLAGS) == 0x83, "FULL SlingshotBowFlags=$83");
+        check(emu.readByte(Inventory.SPECIAL_TRAVEL_SPOTS) == 0x7F
+                && emu.readByte(Inventory.KORL_UNLOCKED) == 0x01
+                && emu.readByte(Inventory.ABYSS_TRAVEL_SPOTS) == 0xFF, "FULL SW/Abyss travel + KORL");
+        check(emu.readByte(Inventory.KEYS_DUNGEON_1C) == 0x03
+                && emu.readByte(Inventory.KEYS_DUNGEON_1E) == 0x03, "FULL Dungeon 1C/1E keys");
+        check(emu.readByte(Inventory.CLOCKWORK_BEETLE_OWNED) == 0x01
+                && emu.readByte(Inventory.SWITCH_HOOK_COL21_OWNED) == 0x01
+                && emu.readByte(Inventory.LENS_OF_TRUTH_OWNED) == 0x01
+                && emu.readByte(Inventory.TEMPEST_HARP_OWNED) == 0x01, "FULL Col 21 items");
+        check(emu.readByte(Inventory.STALFOS_MASK_OWNED) == 0x01
+                && emu.readByte(Inventory.FROG_MASK_OWNED) == 0x01
+                && emu.readByte(Inventory.FIERCE_DEITY_MASK_OWNED) == 0x01, "FULL extra masks");
+        check(emu.readByte(Inventory.FOUND_RINGS_EX) == 0x07
+                && emu.readByte(Inventory.MAGIC_RINGS_EX) == 0x07, "FULL extra rings");
+        for (int addr = 0x7EF46B; addr <= 0x7EF47A; addr++) {
+            check(emu.readByte(addr) == 0x03, "FULL OOSD keys at $" + Integer.toHexString(addr));
+        }
+        for (int addr = 0x7EF47B; addr <= 0x7EF480; addr++) {
+            check(emu.readByte(addr) == 0xFF, "FULL OOSD compass/bigkey/map at $" + Integer.toHexString(addr));
+        }
+        check(emu.readByte(Inventory.EON_JABU_QUEST) == 0xA4, "FULL EonJabuQuest=$A4");
+
         // Verify SRAM persistence + valid $5A5A checksum in slot 1 main & mirror
         byte[] block = new byte[Progression.SAVE_SIZE];
         for (int i = 0; i < Progression.SAVE_SIZE; i++) {

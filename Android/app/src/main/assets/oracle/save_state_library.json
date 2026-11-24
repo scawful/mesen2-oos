@@ -3,7 +3,7 @@
     {
       "id": "1772077576_Agent_D6_Room_0x88_Fresh_S2",
       "path": "oos_1772077576_Agent_D6_Room_0x88_Fresh_S2.mss",
-      "label": "Agent D6 Room 0x88 Fresh S2",
+      "label": "Kalyxo: Agent D6 Room 0x88 Fresh S2",
       "created_at": 1772077576,
       "tags": [
         "dungeon",
@@ -35,7 +35,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Goron Mines (Hammer Chest)",
+        "location": "Kalyxo room $088 Goron Mines",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "canon",
@@ -47,12 +47,12 @@
     {
       "id": "1772077521_Agent_D6_Room_0x87_Fresh",
       "path": "oos_1772077521_Agent_D6_Room_0x87_Fresh.mss",
-      "label": "Agent D6 Room 0x87 Fresh",
+      "label": "Kalyxo: Agent D6 Room 0x88 Fresh",
       "created_at": 1772077521,
       "tags": [
         "dungeon",
         "d6",
-        "room-87",
+        "room-88",
         "minecart",
         "agent-fresh"
       ],
@@ -79,7 +79,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Goron Mines (Hammer Chest)",
+        "location": "Kalyxo room $088 Goron Mines",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "deprecated",
@@ -87,17 +87,17 @@
       "verified_by": "agent",
       "verified_at": 1772077521,
       "md5": "921cc592eeff55cf202ca745184973c1",
-      "deprecation_reason": "label mismatch (captured room 0x88)"
+      "deprecation_reason": "label mismatch (captured room 0x88); label corrected to the captured room 2026-11-21"
     },
     {
       "id": "1772077491_Agent_D6_Room_0x88_Fresh",
       "path": "oos_1772077491_Agent_D6_Room_0x88_Fresh.mss",
-      "label": "Agent D6 Room 0x88 Fresh",
+      "label": "Kalyxo: Agent D6 Room 0x87 Fresh",
       "created_at": 1772077491,
       "tags": [
         "dungeon",
         "d6",
-        "room-88",
+        "room-87",
         "minecart",
         "agent-fresh"
       ],
@@ -124,7 +124,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Goron Mines (West Hall)",
+        "location": "Kalyxo room $087 Goron Mines",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "deprecated",
@@ -132,7 +132,7 @@
       "verified_by": "agent",
       "verified_at": 1772077492,
       "md5": "808525ac7bfbe076c877a0a4f96b0e17",
-      "deprecation_reason": "label mismatch (captured room 0x87)"
+      "deprecation_reason": "label mismatch (captured room 0x87); label corrected to the captured room 2026-11-21"
     },
     {
       "id": "1772077449_Agent_D6_OW_Entrance_Warp_Fresh",
@@ -169,14 +169,16 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Area 0x0E",
+        "location": "invalid state: see deprecation_reason",
         "summary": "Mode: Overworld | GameState: 2"
       },
-      "status": "canon",
+      "status": "deprecated",
       "captured_by": "agent",
       "verified_by": "agent",
       "verified_at": 1772077450,
-      "md5": "5671a30746a7981eaf8fd4b0c3186d2c"
+      "md5": "5671a30746a7981eaf8fd4b0c3186d2c",
+      "deprecation_reason": "2026-11-21 label audit: poked state: area $0E with WORLDFLAG 1, Link X/Y $0200/$0200 off-area (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "id": "1772077444_Agent_D4_OW_Waterfall_Fresh",
@@ -213,14 +215,16 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Area 0x1E",
+        "location": "invalid state: see deprecation_reason",
         "summary": "Mode: Overworld | GameState: 2"
       },
-      "status": "canon",
+      "status": "deprecated",
       "captured_by": "agent",
       "verified_by": "agent",
       "verified_at": 1772077445,
-      "md5": "3105ac6bafd1fb96fa0c67b24389166d"
+      "md5": "3105ac6bafd1fb96fa0c67b24389166d",
+      "deprecation_reason": "2026-11-21 label audit: poked state: area $1E (Kalyxo) with WORLDFLAG 1 (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "id": "1772077440_Agent_D3_Entry_Attempt_Fresh",
@@ -256,14 +260,16 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Area 0x10",
+        "location": "invalid state: see deprecation_reason",
         "summary": "Mode: Overworld | GameState: 2"
       },
-      "status": "canon",
+      "status": "deprecated",
       "captured_by": "agent",
       "verified_by": "agent",
       "verified_at": 1772077440,
-      "md5": "7ddf36920ac9c668ed955ec7cb192a2d"
+      "md5": "7ddf36920ac9c668ed955ec7cb192a2d",
+      "deprecation_reason": "2026-11-21 label audit: poked state: area $10 with WORLDFLAG 1, Link X/Y $0200/$0200 off-area (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "id": "1772077436_Agent_D3_OW_Entrance_Fresh",
@@ -300,19 +306,21 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Area 0x10",
+        "location": "invalid state: see deprecation_reason",
         "summary": "Mode: Overworld | GameState: 2"
       },
-      "status": "canon",
+      "status": "deprecated",
       "captured_by": "agent",
       "verified_by": "agent",
       "verified_at": 1772077437,
-      "md5": "6aea6587247d03df5e0c7f114c7dfa11"
+      "md5": "6aea6587247d03df5e0c7f114c7dfa11",
+      "deprecation_reason": "2026-11-21 label audit: poked state: area $10 with WORLDFLAG 1, Link X/Y $0200/$0200 off-area (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "id": "1772076682_Agent_Gameplay_Baseline_Fresh",
       "path": "oos_1772076682_Agent_Gameplay_Baseline_Fresh.mss",
-      "label": "Agent Gameplay Baseline Fresh",
+      "label": "Eon Abyss: Agent Gameplay Baseline Fresh",
       "created_at": 1772076682,
       "tags": [
         "gameplay",
@@ -342,7 +350,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Temporal Pyramid",
+        "location": "Eon Abyss $40 Temporal Gate",
         "summary": "Mode: Overworld | GameState: 2"
       },
       "status": "canon",
@@ -354,7 +362,7 @@
     {
       "id": "1772076625_Agent_Zora_Inside_Fresh_S2",
       "path": "oos_1772076625_Agent_Zora_Inside_Fresh_S2.mss",
-      "label": "Agent Zora Inside Fresh S2",
+      "label": "Kalyxo: Agent Zora Inside Fresh S2",
       "created_at": 1772076625,
       "tags": [
         "dungeon",
@@ -386,7 +394,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Zora Temple (Entrance)",
+        "location": "Kalyxo room $028 Zora Temple",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "canon",
@@ -398,7 +406,7 @@
     {
       "id": "1772076622_Agent_D6_Inside_Entry_Fresh_S2",
       "path": "oos_1772076622_Agent_D6_Inside_Entry_Fresh_S2.mss",
-      "label": "Agent D6 Inside Entry Fresh S2",
+      "label": "Kalyxo: Agent D6 Inside Entry Fresh S2",
       "created_at": 1772076622,
       "tags": [
         "dungeon",
@@ -431,7 +439,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Goron Mines (Entrance)",
+        "location": "Kalyxo room $098 Goron Mines",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "canon",
@@ -443,7 +451,7 @@
     {
       "id": "1772076583_Agent_Zora_Inside_Fresh",
       "path": "oos_1772076583_Agent_Zora_Inside_Fresh.mss",
-      "label": "Agent Zora Inside Fresh",
+      "label": "Kalyxo: Agent Zora Inside Fresh",
       "created_at": 1772076583,
       "tags": [
         "dungeon",
@@ -475,7 +483,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Zora Temple (Entrance)",
+        "location": "Kalyxo room $028 Zora Temple",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "deprecated",
@@ -488,7 +496,7 @@
     {
       "id": "1772076583_Agent_Zora_Outside_Fresh",
       "path": "oos_1772076583_Agent_Zora_Outside_Fresh.mss",
-      "label": "Agent Zora Outside Fresh",
+      "label": "Kalyxo: Agent Zora Outside Fresh",
       "created_at": 1772076583,
       "tags": [
         "dungeon",
@@ -520,7 +528,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Area 0x1E",
+        "location": "Kalyxo $1E Sunken City",
         "summary": "Mode: Overworld | GameState: 2"
       },
       "status": "canon",
@@ -532,7 +540,7 @@
     {
       "id": "1772076582_Agent_D6_Inside_Entry_Fresh",
       "path": "oos_1772076582_Agent_D6_Inside_Entry_Fresh.mss",
-      "label": "Agent D6 Inside Entry Fresh",
+      "label": "Kalyxo: Agent D6 Inside Entry Fresh",
       "created_at": 1772076582,
       "tags": [
         "dungeon",
@@ -564,7 +572,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Inside: Goron Mines (Entrance)",
+        "location": "Kalyxo room $098 Goron Mines",
         "summary": "Mode: Dungeon | GameState: 2"
       },
       "status": "deprecated",
@@ -577,7 +585,7 @@
     {
       "id": "1772076582_Agent_D6_Pre_Entrance_Fresh",
       "path": "oos_1772076582_Agent_D6_Pre_Entrance_Fresh.mss",
-      "label": "Agent D6 Pre-Entrance Fresh",
+      "label": "Kalyxo: Agent D6 Pre-Entrance Fresh",
       "created_at": 1772076582,
       "tags": [
         "dungeon",
@@ -609,7 +617,7 @@
         "oosprog2": 16,
         "crystals": 0,
         "pendants": 0,
-        "location": "Goron Desert",
+        "location": "Kalyxo $36 Garo Desert",
         "summary": "Mode: Overworld | GameState: 2"
       },
       "status": "canon",
@@ -622,7 +630,7 @@
       "captured_by": "agent",
       "created_at": 1769464731,
       "id": "1769464731_Zora_Temple_Entry",
-      "label": "Zora Temple Entry",
+      "label": "Eon Abyss: Temporal Gate (was mislabeled Zora Temple Entry)",
       "md5": "41ebb3077a65186edebbdb1ed5fedd37",
       "metadata": {
         "area": 64,
@@ -636,7 +644,7 @@
         "link_state": 0,
         "link_x": 744,
         "link_y": 531,
-        "location": "Temporal Pyramid",
+        "location": "Eon Abyss $40 Temporal Gate",
         "magic": 120,
         "max_health": 80,
         "module": 9,
@@ -653,8 +661,9 @@
       "path": "oos_1769464731_Zora_Temple_Entry.mss",
       "status": "canon",
       "tags": [
-        "dungeon",
-        "entrance"
+        "overworld",
+        "eon-abyss",
+        "temporal-gate"
       ],
       "verified_at": 1769464736,
       "verified_by": "scawful"
@@ -677,7 +686,7 @@
         "link_state": 0,
         "link_x": 1572,
         "link_y": 2790,
-        "location": "Ranch",
+        "location": "invalid state: see deprecation_reason",
         "magic": 120,
         "max_health": 80,
         "module": 9,
@@ -692,7 +701,7 @@
         "time_speed": 63
       },
       "path": "oos_1769374342_Village_West.mss",
-      "status": "canon",
+      "status": "deprecated",
       "tags": [
         "overworld",
         "village",
@@ -700,7 +709,9 @@
         "large-map"
       ],
       "verified_at": 1769464681,
-      "verified_by": "scawful"
+      "verified_by": "scawful",
+      "deprecation_reason": "2026-11-21 label audit: poked state: area $23 (Kalyxo) with WORLDFLAG 1; screen shows the Eon Abyss pyramid, not Wayward Village (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "capture_quality": "unique",
@@ -720,7 +731,7 @@
         "link_state": 0,
         "link_x": 512,
         "link_y": 512,
-        "location": "Church",
+        "location": "invalid state: see deprecation_reason",
         "magic": 120,
         "max_health": 80,
         "module": 9,
@@ -735,7 +746,7 @@
         "time_speed": 63
       },
       "path": "oos_1769374328_Lost_Woods_Center.mss",
-      "status": "canon",
+      "status": "deprecated",
       "tags": [
         "overworld",
         "lost-woods",
@@ -743,13 +754,15 @@
         "puzzle"
       ],
       "verified_at": 1769464681,
-      "verified_by": "scawful"
+      "verified_by": "scawful",
+      "deprecation_reason": "2026-11-21 label audit: module $00 (intro): not in the game loop, black frame (Scripts/Debug/check_state_labels.py)",
+      "deprecated_at": "2026-11-21T00:00:00Z"
     },
     {
       "capture_quality": "unique",
       "created_at": 1769374193,
       "id": "1769374193_Dark_World_Pyramid_checkpoint",
-      "label": "Dark World Pyramid checkpoint",
+      "label": "Eon Abyss: Dark World Pyramid checkpoint",
       "md5": "46ca8715852b08c781b8c6590994a2a6",
       "metadata": {
         "area": 64,
@@ -763,7 +776,7 @@
         "link_state": 0,
         "link_x": 744,
         "link_y": 531,
-        "location": "Temporal Pyramid",
+        "location": "Eon Abyss $40 Temporal Gate",
         "magic": 120,
         "max_health": 80,
         "module": 9,
@@ -789,7 +802,7 @@
       "verified_by": "scawful"
     },
     {
-      "description": "Early game overworld - Link's house area",
+      "description": "Early-game Eon Abyss state at the Temporal Gate ($40), not Link's house",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -799,8 +812,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Start Area",
-        "location": "Overworld - Link's House",
+        "label": "Eon Abyss: Start Area (Temporal Gate)",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Fresh early-game state, good for boot verification"
       },
       "path": "baseline/oos168x_1.mss",
@@ -815,7 +828,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.837914Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Menu and item system testing state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Menu and item system testing state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -825,8 +838,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Menu Test",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Menu Test')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "State with items for menu testing"
       },
       "path": "baseline/oos168x_2.mss",
@@ -842,7 +855,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838044Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Mid-game progression state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Mid-game progression state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -852,8 +865,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Progression",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Progression')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Mid-game with some items collected"
       },
       "path": "baseline/oos168x_3.mss",
@@ -868,7 +881,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838046Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Dungeon entrance testing state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Dungeon entrance testing state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -878,8 +891,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Dungeon Entry",
-        "location": "Dungeon Entrance",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Dungeon Entry')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Good for dungeon transition testing"
       },
       "path": "baseline/oos168x_4.mss",
@@ -894,7 +907,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838048Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Hookshot and Goldstar dual-equip state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Hookshot and Goldstar dual-equip state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -904,8 +917,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "L/R Swap Test",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'L/R Swap Test')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Both hookshot and goldstar equipped for L/R swap testing"
       },
       "path": "baseline/oos168x_5.mss",
@@ -922,7 +935,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838049Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Overworld transition testing - western area",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Overworld transition testing - western area",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -932,8 +945,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Western OW",
-        "location": "Overworld - Western Area",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Western OW')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Good for screen transition testing"
       },
       "path": "baseline/oos168x_6.mss",
@@ -949,7 +962,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838050Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Water temple / Zora area state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Water temple / Zora area state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -959,8 +972,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Zora Temple",
-        "location": "Zora Temple",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Zora Temple')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Water collision and dungeon testing"
       },
       "path": "baseline/oos168x_7.mss",
@@ -976,7 +989,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838051Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Water gate room - pre-activation",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Water gate room - pre-activation",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -986,8 +999,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Water Gate Pre",
-        "location": "Room 0x27 (Zora Temple)",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Water Gate Pre')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Water gate before activation - for collision testing"
       },
       "path": "baseline/oos168x_8.mss",
@@ -1004,7 +1017,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838052Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Water gate room - post-activation",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Water gate room - post-activation",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1014,8 +1027,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Water Gate Post",
-        "location": "Room 0x27 (Zora Temple)",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Water Gate Post')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Water gate after activation - verify collision tiles active"
       },
       "path": "baseline/oos168x_9.mss",
@@ -1032,7 +1045,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838053Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Late game / boss area state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Late game / boss area state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1042,8 +1055,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Boss Area",
-        "location": "Dungeon - Boss Region",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Boss Area')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Late game progression for boss testing"
       },
       "path": "baseline/oos168x_10.mss",
@@ -1059,7 +1072,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838054Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Extended testing state - full inventory",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Extended testing state - full inventory",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1069,8 +1082,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Full Inventory",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Full Inventory')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Full item set for comprehensive testing"
       },
       "path": "baseline/oos168x_11.mss",
@@ -1086,7 +1099,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838055Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Early game overworld - Link's house area",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Early game overworld - Link's house area",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1096,8 +1109,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Start Area",
-        "location": "Overworld - Link's House",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Start Area')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_1.mss",
@@ -1114,7 +1127,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838056Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Menu and item system testing state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Menu and item system testing state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1124,8 +1137,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Menu Test",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Menu Test')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_2.mss",
@@ -1142,7 +1155,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838057Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Mid-game progression state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Mid-game progression state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1152,8 +1165,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Progression",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Progression')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_3.mss",
@@ -1169,7 +1182,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838058Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Dungeon entrance testing state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Dungeon entrance testing state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1179,8 +1192,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Dungeon Entry",
-        "location": "Dungeon Entrance",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Dungeon Entry')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_4.mss",
@@ -1196,7 +1209,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838059Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Hookshot and Goldstar dual-equip state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Hookshot and Goldstar dual-equip state",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1206,8 +1219,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current L/R Swap Test",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current L/R Swap Test')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_5.mss",
@@ -1225,7 +1238,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838060Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Overworld transition testing - western area",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Overworld transition testing - western area",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1235,8 +1248,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Western OW",
-        "location": "Overworld - Western Area",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Western OW')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_6.mss",
@@ -1253,7 +1266,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838061Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Water temple / Zora area state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Water temple / Zora area state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1263,8 +1276,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Zora Temple",
-        "location": "Zora Temple",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Zora Temple')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_7.mss",
@@ -1281,7 +1294,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838063Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Water gate room - pre-activation",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Water gate room - pre-activation",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1291,8 +1304,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Water Gate Pre",
-        "location": "Room 0x27 (Zora Temple)",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Water Gate Pre')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_8.mss",
@@ -1310,7 +1323,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838064Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Water gate room - post-activation",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Water gate room - post-activation",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1320,8 +1333,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Water Gate Post",
-        "location": "Room 0x27 (Zora Temple)",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Water Gate Post')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_9.mss",
@@ -1339,7 +1352,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838065Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Late game / boss area state",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Late game / boss area state",
       "gameState": {
         "indoors": true,
         "mode": "0x07",
@@ -1349,8 +1362,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Boss Area",
-        "location": "Dungeon - Boss Region",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Boss Area')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_10.mss",
@@ -1367,7 +1380,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838066Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x baseline - Extended testing state - full inventory",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x baseline - Extended testing state - full inventory",
       "gameState": {
         "indoors": false,
         "mode": "0x09",
@@ -1377,8 +1390,8 @@
       "imported": "2026-01-21T00:00:00Z",
       "md5": "2213ffd8bc1eca1dd7a9a8bb49b71b34",
       "meta": {
-        "label": "Current Full Inventory",
-        "location": "Overworld",
+        "label": "Eon Abyss: duplicate of baseline_1 (was 'Current Full Inventory')",
+        "location": "Eon Abyss $40 Temporal Gate",
         "notes": "Alias of oos168x baseline state (refreshed 2026-01-21)."
       },
       "path": "baseline/oos168x_11.mss",
@@ -1395,7 +1408,7 @@
     {
       "deprecated_at": "2026-01-25T22:04:53.838067Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Baseline oos168x - Start Area",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Baseline oos168x - Start Area",
       "gameState": {
         "indoors": false,
         "mode": "0x09"
@@ -1409,12 +1422,16 @@
         "baseline",
         "oos168x",
         "boot"
-      ]
+      ],
+      "label": "Eon Abyss: duplicate of baseline_1 (was '')",
+      "meta": {
+        "location": "Eon Abyss $40 Temporal Gate"
+      }
     },
     {
       "deprecated_at": "2026-01-25T22:04:53.838068Z",
       "deprecated_reason": "Duplicate of baseline_1",
-      "description": "Current oos168x - Start Area",
+      "description": "Duplicate of baseline_1 (Eon Abyss $40 Temporal Gate). Original claim: Current oos168x - Start Area",
       "gameState": {
         "indoors": false,
         "mode": "0x09"
@@ -1428,15 +1445,21 @@
         "current",
         "oos168x",
         "boot"
-      ]
+      ],
+      "label": "Eon Abyss: duplicate of baseline_1 (was '')",
+      "meta": {
+        "location": "Eon Abyss $40 Temporal Gate"
+      }
     },
     {
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_4.mss",
-      "label": "oos91x_4",
+      "label": "Kalyxo: oos91x_4",
       "md5": "47c2490e399aff9d70b8b7bcdff474ff",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $098 Goron Mines"
+      },
       "path": "legacy/oos91x_4.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1449,9 +1472,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_10.mss",
-      "label": "oos91x_10",
+      "label": "Eon Abyss: oos91x_10",
       "md5": "24e83cdbcc6f56975f1e00bb27dfebb6",
-      "metadata": {},
+      "metadata": {
+        "location": "Eon Abyss $5E The Fortress"
+      },
       "path": "legacy/oos91x_10.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1464,9 +1489,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_11.mss",
-      "label": "oos91x_11",
+      "label": "Kalyxo: oos91x_11",
       "md5": "3f0f01048f134e67ae5cef1cf99c19d9",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo $23 Wayward Village"
+      },
       "path": "legacy/oos91x_11.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1479,9 +1506,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_5.mss",
-      "label": "oos91x_5",
+      "label": "Kalyxo: oos91x_5",
       "md5": "a0d09357441189e2989b32fc29af760e",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo $36 Garo Desert"
+      },
       "path": "legacy/oos91x_5.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1494,9 +1523,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_7.mss",
-      "label": "oos91x_7",
+      "label": "Kalyxo: oos91x_7",
       "md5": "edd5390f209fec75c402d53dc721f675",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $012 Hall of Secrets"
+      },
       "path": "legacy/oos91x_7.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1509,9 +1540,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_6.mss",
-      "label": "oos91x_6",
+      "label": "Kalyxo: oos91x_6",
       "md5": "502f1ea1f5c290205ef63812173d078b",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $0B4 Kydrog's Ship"
+      },
       "path": "legacy/oos91x_6.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1524,9 +1557,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_2.mss",
-      "label": "oos91x_2",
+      "label": "Kalyxo: oos91x_2",
       "md5": "9874626bf651d0183fac4430a60d0783",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo $07 Snow Mountain"
+      },
       "path": "legacy/oos91x_2.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1539,9 +1574,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_3.mss",
-      "label": "oos91x_3",
+      "label": "Kalyxo: oos91x_3",
       "md5": "3f0fab08c707217c6d7291fa1d9f732e",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $028 Zora Temple"
+      },
       "path": "legacy/oos91x_3.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1554,9 +1591,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_1.mss",
-      "label": "oos91x_1",
+      "label": "Kalyxo: oos91x_1",
       "md5": "0a17fa1e35c1daccc670d3311a0e0e1b",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo $23 Wayward Village"
+      },
       "path": "legacy/oos91x_1.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1569,9 +1608,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_8.mss",
-      "label": "oos91x_8",
+      "label": "Kalyxo: oos91x_8",
       "md5": "aca5afebcd1c09042ffe1bdaafd42d9b",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $0D8 Goron Mines"
+      },
       "path": "legacy/oos91x_8.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1584,9 +1625,11 @@
       "captured_by": "legacy",
       "created_at": 0,
       "id": "oos91x_9.mss",
-      "label": "oos91x_9",
+      "label": "Kalyxo: oos91x_9",
       "md5": "f390de6866569d01bd4d2e61f00cca13",
-      "metadata": {},
+      "metadata": {
+        "location": "Kalyxo room $012 Hall of Secrets"
+      },
       "path": "legacy/oos91x_9.mss",
       "rom_base": "oos91x",
       "status": "legacy",
@@ -1601,8 +1644,8 @@
       "id": "pre_d6_entrance",
       "md5": "66c5039332a002b013963acd8ffb1a22",
       "meta": {
-        "label": "D6 pre-entrance",
-        "location": "Goron Desert (OW 0x36)",
+        "label": "Kalyxo: D6 pre-entrance",
+        "location": "Kalyxo $36 Garo Desert",
         "notes": "Resaved under current oos168x ROM; deterministic load validated on 2026-02-14."
       },
       "rom_base": "oos168x",
@@ -1624,8 +1667,8 @@
       "id": "inside_d6",
       "md5": "1df311f57ac628d2e026e2513e140f71",
       "meta": {
-        "label": "D6 inside entrance",
-        "location": "Inside: Goron Mines (Entrance, room 0x98)",
+        "label": "Kalyxo: D6 inside entrance",
+        "location": "Kalyxo room $098 Goron Mines",
         "notes": "Resaved under current oos168x ROM; deterministic load validated on 2026-02-14."
       },
       "rom_base": "oos168x",
@@ -1646,7 +1689,8 @@
       "description": "Paused at Zora Temple entrance; walk straight ahead into stairs to attempt repro.",
       "id": "zora_temple_stairs_seed_20260207",
       "meta": {
-        "label": "Zora Temple stairs seed"
+        "label": "Kalyxo: Zora Temple stairs seed",
+        "location": "Kalyxo room $028 Zora Temple"
       },
       "rom_base": "oos168x",
       "rom_md5": "543a8b5c6d548b32578762821a47e211",

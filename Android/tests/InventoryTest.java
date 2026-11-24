@@ -112,6 +112,41 @@ final class InventoryTest {
         heavy.data.put(Inventory.SWORD_SLOT_FLAGS, 0x02);
         Inventory.toggle(row(Inventory.TAB_ITEMS, Inventory.HEAVY_SWORD), heavy, 0);
         check(heavy.readByte(Inventory.SWORD_SLOT_FLAGS) == 0x83, "heavy sword ORs $81");
+
+        Ram masksRam = new Ram();
+        String masksMsg = Inventory.toggle(row(Inventory.TAB_ITEMS, Inventory.ALL_MASKS), masksRam, 0);
+        check(Inventory.MASKS.length == 9 && masksMsg.contains("9 masks") && masksMsg.contains("Fierce Deity"),
+                "all masks message reports all 9 masks: " + masksMsg);
+        for (int mask : Inventory.MASKS) {
+            check(masksRam.readByte(mask) == 1, "all masks grants " + Integer.toHexString(mask));
+        }
+
+        Ram ringsRam = new Ram();
+        ringsRam.data.put(Inventory.MAGIC_RINGS, 0x40);
+        ringsRam.data.put(Inventory.MAGIC_RINGS_EX, 0x08);
+        String ringsMsg = Inventory.toggle(row(Inventory.TAB_ITEMS, Inventory.ALL_RINGS_ACTION), ringsRam, 0);
+        check(ringsMsg.contains("9 rings"), "all rings message reports all 9 rings: " + ringsMsg);
+        check(ringsRam.readByte(Inventory.FOUND_RINGS) == 0x3F
+                && ringsRam.readByte(Inventory.MAGIC_RINGS) == 0x7F, "legacy rings ORed");
+        check(ringsRam.readByte(Inventory.FOUND_RINGS_EX) == 0x07
+                && ringsRam.readByte(Inventory.MAGIC_RINGS_EX) == 0x0F, "extra rings ORed");
+
+        Ram fdPlay = new Ram();
+        String fdMsg = Inventory.toggle(row(Inventory.TAB_ITEMS, Inventory.EQUIP_FIERCE_DEITY), fdPlay, 0);
+        check(fdMsg.contains("Fierce Deity"), "equip FD message: " + fdMsg);
+        check(fdPlay.readByte(Inventory.FIERCE_DEITY_MASK_OWNED) == 1
+                && fdPlay.readByte(Inventory.BOUND_MASK) == 9
+                && fdPlay.readByte(Inventory.ACTIVE_FORM) == Inventory.FORM_FIERCE_DEITY
+                && fdPlay.readByte(Inventory.LINK_GRAPHICS) == 0x7D
+                && fdPlay.sramSyncs == 1, "equip FD sets owned, bound, form=$0D, gfx=$7D, syncs SRAM");
+
+        Ram fdTitle = new Ram();
+        fdTitle.data.put(Inventory.MODULE, 0x01);
+        Inventory.runAction(Inventory.EQUIP_FIERCE_DEITY, fdTitle);
+        check(fdTitle.readByte(Inventory.FIERCE_DEITY_MASK_OWNED) == 1
+                && fdTitle.readByte(Inventory.BOUND_MASK) == 9
+                && fdTitle.readByte(Inventory.ACTIVE_FORM) == 0
+                && fdTitle.sramSyncs == 1, "equip FD outside gameplay skips $7E02B2");
     }
 
     private static void testMaxEverything() {
@@ -130,7 +165,16 @@ final class InventoryTest {
         check(m.readByte(Inventory.GOLDSTAR_OWNED) == 1
                 && m.readByte(Inventory.GOLDSTAR_VERSION) == Inventory.GOLDSTAR_VERSION_OK, "Goldstar + version");
         for (int mask : Inventory.MASKS) check(m.readByte(mask) == 1, "mask set");
+        check(m.readByte(Inventory.CLOCKWORK_BEETLE_OWNED) == 1
+                && m.readByte(Inventory.SWITCH_HOOK_COL21_OWNED) == 1
+                && m.readByte(Inventory.LENS_OF_TRUTH_OWNED) == 1
+                && m.readByte(Inventory.TEMPEST_HARP_OWNED) == 1, "Col 21 main items set");
         check(m.readByte(Inventory.MAGIC_RINGS) == 0x7F && m.readByte(Inventory.FOUND_RINGS) == 0x3F, "rings ORed");
+        check(m.readByte(Inventory.FOUND_RINGS_EX) == 0x07 && m.readByte(Inventory.MAGIC_RINGS_EX) == 0x07,
+                "extra rings ORed");
+        check(m.readByte(Inventory.SONG_BITS) == Inventory.ALL_SONG_BITS, "SongBits $BF set");
+        check(m.readByte(Inventory.SLINGSHOT_BOW_FLAGS) == Inventory.ALL_SLINGSHOT_BOW_FLAGS,
+                "SlingshotBowFlags $83 set");
         check(m.readByte(Inventory.BOTTLE_1) == 6 && m.readByte(Inventory.BOTTLE_1 + 1) == 8, "bottles filled/kept");
         check(m.readByte(Inventory.ABILITY) == 0x87, "ability ORed");
         check(m.readByte(Inventory.SIDE_QUEST_2) == 0x17, "teaches Epona song only");
@@ -186,6 +230,65 @@ final class InventoryTest {
         Inventory.Row flippers = row(Inventory.TAB_ITEMS, "Zora flippers");
         Inventory.toggle(flippers, ram, 0);
         check((ram.readByte(Inventory.ABILITY) & 0x02) == 0x02, "flippers OR swim ability");
+
+        Inventory.Row boundMask = row(Inventory.TAB_ITEMS, "Bound mask (R slot)");
+        check(boundMask.max == 9, "Bound mask max 9");
+        Inventory.toggle(boundMask, ram, 0);
+        check(ram.readByte(Inventory.BOUND_MASK) == 9
+                && "Fierce Deity".equals(Inventory.valueText(boundMask, Inventory.read(boundMask, ram))),
+                "Bound mask 9 is Fierce Deity");
+
+        Inventory.Row activeForm = row(Inventory.TAB_ITEMS, "Active form ($7E02B2)");
+        check(activeForm.max == 14, "Active form max 14");
+        Inventory.toggle(activeForm, ram, 0);
+        check(ram.readByte(Inventory.ACTIVE_FORM) == 14
+                && "Mermaid".equals(Inventory.valueText(activeForm, Inventory.read(activeForm, ram))),
+                "Active form 14 is Mermaid");
+        Inventory.step(activeForm, ram, -1);
+        check(ram.readByte(Inventory.ACTIVE_FORM) == 0x0D
+                && "Fierce Deity".equals(Inventory.valueText(activeForm, Inventory.read(activeForm, ram)))
+                && ram.readByte(Inventory.LINK_GRAPHICS) == 0x7D,
+                "Active form 13 is Fierce Deity with gfx bank $7D");
+
+        Inventory.Row ringSlot = row(Inventory.TAB_ITEMS, "Equipped ring (Slot 1)");
+        check(ringSlot.max == 10, "Ring slot max 10");
+        Inventory.toggle(ringSlot, ram, 0);
+        check("Whisp".equals(Inventory.valueText(ringSlot, Inventory.read(ringSlot, ram))),
+                "Ring slot 10 is Whisp");
+
+        Inventory.Row wardrobe = row(Inventory.TAB_ITEMS, "Wardrobe outfit ($7EF459)");
+        check(wardrobe.max == 8, "Wardrobe max 8");
+        Inventory.toggle(wardrobe, ram, 0);
+        check(ram.readByte(Inventory.WARDROBE_OUTFIT_ID) == 8
+                && "Tingle".equals(Inventory.valueText(wardrobe, Inventory.read(wardrobe, ram))),
+                "Wardrobe outfit 8 is Tingle");
+
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Clockwork Beetle"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Switch Hook (Col 21)"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Lens of Truth"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Tempest Harp"), ram, 0);
+        check(ram.readByte(Inventory.CLOCKWORK_BEETLE_OWNED) == 1
+                && ram.readByte(Inventory.SWITCH_HOOK_COL21_OWNED) == 1
+                && ram.readByte(Inventory.LENS_OF_TRUTH_OWNED) == 1
+                && ram.readByte(Inventory.TEMPEST_HARP_OWNED) == 1,
+                "Col 21 rows write expected SRAM bytes");
+
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Stalfos Mask"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Frog Mask"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Fierce Deity Mask"), ram, 0);
+        check(ram.readByte(Inventory.STALFOS_MASK_OWNED) == 1
+                && ram.readByte(Inventory.FROG_MASK_OWNED) == 1
+                && ram.readByte(Inventory.FIERCE_DEITY_MASK_OWNED) == 1,
+                "Extra mask rows write expected SRAM bytes");
+
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Slingshot owned ($7EF3C3)"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Ring owned: Mana"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Ring owned: Charge"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_ITEMS, "Ring owned: Whisp"), ram, 0);
+        check((ram.readByte(Inventory.SLINGSHOT_BOW_FLAGS) & 0x01) == 0x01
+                && ram.readByte(Inventory.MAGIC_RINGS_EX) == 0x07,
+                "Slingshot and extra ring flags toggle properly");
+
         check(ram.sramSyncs > 0, "individual toggles sync SRAM");
     }
 
@@ -216,7 +319,26 @@ final class InventoryTest {
         Inventory.Row heavyOwned = row(Inventory.TAB_ITEMS, "Heavy sword: Owned");
         Inventory.toggle(heavyOwned, ram, 0);
         check(ram.readByte(Inventory.SWORD_SLOT_FLAGS) == 0x81, "Heavy Sword flag initializes SwordSlotFlags");
-        check(ram.sramSyncs == 6, "all song/flag toggles sync SRAM");
+
+        Inventory.toggle(row(Inventory.TAB_SONGS, "SongBits: Active ($80)"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_SONGS, "SongBit: Healing ($7EF3B1)"), ram, 0);
+        check(ram.readByte(Inventory.SONG_BITS) == 0x81, "SongBits flags toggle");
+
+        Inventory.Row specialTravel = row(Inventory.TAB_SONGS, "SpecialTravelSpots ($7EF438)");
+        check(specialTravel.max == 0x7F, "SpecialTravelSpots max $7F");
+        Inventory.toggle(specialTravel, ram, 0);
+        check(ram.readByte(Inventory.SPECIAL_TRAVEL_SPOTS) == 0x7F, "SpecialTravelSpots toggles to $7F");
+
+        Inventory.Row korl = row(Inventory.TAB_SONGS, "King of Red Lions ($7EF439)");
+        Inventory.toggle(korl, ram, 0);
+        check(ram.readByte(Inventory.KORL_UNLOCKED) == 1, "KORL_UNLOCKED toggles to 1");
+
+        Inventory.Row abyssTravel = row(Inventory.TAB_SONGS, "AbyssTravelSpots ($7EF43A)");
+        check(abyssTravel.max == 0xFF, "AbyssTravelSpots max $FF");
+        Inventory.toggle(abyssTravel, ram, 3);
+        check(ram.readByte(Inventory.ABYSS_TRAVEL_SPOTS) == 0x08, "AbyssTravelSpots bit 3 toggled");
+
+        check(ram.sramSyncs == 11, "all song/flag toggles sync SRAM");
     }
 
     private static void testDungeonAndStoryTabs() {
@@ -256,6 +378,31 @@ final class InventoryTest {
         check(ram.readByte(Inventory.OOSPROG) == 0x02, "bit 1 set via named FLAG on OOSPROG");
         Inventory.toggle(hall, ram, 0);
         check(ram.readByte(Inventory.OOSPROG) == 0x00, "bit 1 cleared via named FLAG on OOSPROG");
+
+        Inventory.toggle(row(Inventory.TAB_DUNGEONS, "Keys: Dungeon $1C ($7EF450)"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_DUNGEONS, "Keys: Dungeon $1E ($7EF451)"), ram, 0);
+        check(ram.readByte(Inventory.KEYS_DUNGEON_1C) == 9 && ram.readByte(Inventory.KEYS_DUNGEON_1E) == 9,
+                "Dungeon $1C/$1E keys rows toggle");
+
+        Inventory.Row jabuWater = row(Inventory.TAB_DUNGEONS, "Jabu Water Level ($7EF482)");
+        check(jabuWater.max == 2, "Jabu Water Level max 2");
+        Inventory.step(jabuWater, ram, 1);
+        check("B1 Flooded".equals(Inventory.valueText(jabuWater, Inventory.read(jabuWater, ram))),
+                "Jabu Water Level 1 = B1 Flooded");
+
+        Inventory.Row trade = row(Inventory.TAB_STORY, "Trading Quest Step ($7EF43D)");
+        check(trade.max == 10, "Trading Quest Step max 10");
+        Inventory.toggle(trade, ram, 0);
+        check("Secrets Seal".equals(Inventory.valueText(trade, Inventory.read(trade, ram))),
+                "Trading Quest Step 10 = Secrets Seal");
+
+        Inventory.toggle(row(Inventory.TAB_STORY, "DekuVillage: Met King"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_STORY, "GlaciaWitches: Courtyard"), ram, 0);
+        Inventory.toggle(row(Inventory.TAB_STORY, "EonJabuQuest ($7EF481)"), ram, 7);
+        check(ram.readByte(Inventory.DEKU_VILLAGE_QUEST) == 0x01
+                && ram.readByte(Inventory.GLACIA_WITCHES_FLAGS) == 0x01
+                && ram.readByte(Inventory.EON_JABU_QUEST) == 0x80,
+                "DekuVillage, GlaciaWitches, EonJabuQuest rows toggle");
     }
 
     private static void check(boolean ok, String message) {

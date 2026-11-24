@@ -111,13 +111,15 @@ final class ProgressionTest {
     static void testBundledData() {
         check(data.error == null, "bundled data parsed without error: " + data.error);
         List<Progression.Checkpoint> all = data.checkpoints;
-        check(all.size() == 25, "25 checkpoints, got " + all.size());
+        check(all.size() >= 40, "at least 40 checkpoints, got " + all.size());
         check(data.skipped.contains("abyss-owl"), "abyss-owl skipped");
         check("GameState".equals(data.names.get(0x7EF3C5)), "GameState name collected");
         check("OOSPROG".equals(data.names.get(0x7EF3D6)), "OOSPROG name collected");
         for (Progression.Checkpoint cp : all) {
             check(!cp.id.equals("abyss-owl"), "abyss-owl has no warps.json area, so it is skipped");
-            check(cp.chain[0].equals("intro-bed"), cp.id + " chain starts at intro-bed");
+            if (!cp.id.startsWith("jump-")) {
+                check(cp.chain[0].equals("intro-bed"), cp.id + " chain starts at intro-bed");
+            }
             check(cp.chain[cp.chain.length - 1].equals(cp.id), cp.id + " chain ends at itself");
             check(cp.writes.length % 3 == 0, cp.id + " write triples");
             if (cp.kind == Progression.Kind.AREA) {

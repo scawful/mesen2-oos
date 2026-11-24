@@ -226,6 +226,8 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
     private String mPendingStudyCmd;
     private String mPendingStudyTag;
     private String mPendingStudyNote;
+    private volatile String mPendingBootRom;
+    private volatile boolean mPendingBootForceSrm;
 
     private boolean mHomeReceiverRegistered;
     private boolean mPgoDumpReceiverRegistered;
@@ -260,26 +262,36 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         return new String[] { "SDL2", "main" };
     }
 
+    private static String resolveIntentRom(Intent intent) {
+        if (intent == null) {
+            return null;
+        }
+        String rom = intent.getStringExtra("rom");
+        if (rom != null && !rom.isEmpty()) {
+            return rom;
+        }
+        Uri data = intent.getData();
+        if (data != null && data.getPath() != null && !data.getPath().isEmpty()) {
+            return data.getPath();
+        }
+        return null;
+    }
+
     @Override
     protected String[] getArguments() {
+        mPendingBootRom = null;
+        mPendingBootForceSrm = false;
         Intent intent = getIntent();
-        if (intent != null) {
-            String rom = intent.getStringExtra("rom");
-            if (rom != null && !rom.isEmpty()) {
-                rememberRom(rom);
-                seedBatterySave(rom);
-                return new String[] { rom };
-            }
-            Uri data = intent.getData();
-            if (data != null && data.getPath() != null && !data.getPath().isEmpty()) {
-                rememberRom(data.getPath());
-                seedBatterySave(data.getPath());
-                return new String[] { data.getPath() };
-            }
+        boolean forceSrm = intent != null && intent.getBooleanExtra("force_srm", false);
+        String intentRom = resolveIntentRom(intent);
+        if (intentRom != null) {
+            rememberRom(intentRom);
+            seedBatterySave(intentRom, forceSrm);
+            return new String[] { intentRom };
         }
         String last = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_LAST_ROM, null);
         if (last != null && new File(last).isFile()) {
-            seedBatterySave(last);
+            seedBatterySave(last, forceSrm);
             return new String[] { last };
         }
         return new String[0];
@@ -438,13 +450,27 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         setIntent(intent);
         applyIntentPrefs(intent);
         if (intent != null) {
-            final String rom = intent.getStringExtra("rom");
-            if (rom != null && !rom.isEmpty() && mNativeReady) {
-                mBgExecutor.execute(() -> {
-                    if (!mDestroyed) {
-                        bootRom(rom);
-                    }
-                });
+            final boolean forceSrm = intent.getBooleanExtra("force_srm", false);
+            String rom = resolveIntentRom(intent);
+            if (rom == null && forceSrm) {
+                rom = currentRomPath();
+            }
+            if (rom != null && !rom.isEmpty()) {
+                final String targetRom = rom;
+                if (mNativeReady) {
+                    mBgExecutor.execute(() -> {
+                        if (!mDestroyed && bootRom(targetRom, forceSrm)) {
+                            mHandler.post(() -> {
+                                if (!mDestroyed && mUi != null && mUi.isOpen()) {
+                                    mUi.close();
+                                }
+                            });
+                        }
+                    });
+                } else if (SDLActivity.mSDLThread != null) {
+                    mPendingBootRom = targetRom;
+                    mPendingBootForceSrm = forceSrm;
+                }
             }
         }
     }
@@ -1336,22 +1362,30 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
 
     @Override
     public boolean bootRom(String path) {
+        return bootRom(path, false);
+    }
+
+    private boolean bootRom(String path, boolean forceSrm) {
         if (!mNativeReady || mDestroyed) {
             return false;
         }
         mHandler.removeCallbacks(mStudyTicker);
         stopStudySessionIfActive("rom_switch");
         stopRecordingIfActive(true);
-        BatterySaveSeed.Status seeded = seedBatterySave(path);
+        String previousRom = currentRomPath();
+        BatterySaveSeed.Status seeded = seedBatterySave(path, forceSrm);
         if (seeded == BatterySaveSeed.Status.SEEDED) {
             File sidecar = BatterySaveSeed.sidecar(new File(path));
             if (sidecar != null) {
-                final String msg = "Imported " + sidecar.getName();
+                final String msg = (forceSrm ? "Force-loaded " : "Imported ") + sidecar.getName();
                 mHandler.post(() -> {
                     if (!mDestroyed) {
                         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
                     }
                 });
+            }
+            if (forceSrm && isSameSaveTarget(previousRom, path)) {
+                syncLiveSramFromFile(BatterySaveSeed.target(new File(path), savesDir()));
             }
         }
         if (!MesenNative.loadRom(path)) {
@@ -1643,9 +1677,24 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
             showHudBar();
         }
         Intent intent = getIntent();
-        boolean romFromIntent = intent != null && intent.hasExtra("rom");
-        if (mUi != null && !romFromIntent && !mUiVisible) {
+        boolean romFromIntent = resolveIntentRom(intent) != null;
+        if (mUi != null && !romFromIntent && mPendingBootRom == null && !mUiVisible) {
             mUi.openLibrary();
+        }
+        if (mPendingBootRom != null && !mBgExecutor.isShutdown()) {
+            final String pendingRom = mPendingBootRom;
+            final boolean pendingForce = mPendingBootForceSrm;
+            mPendingBootRom = null;
+            mPendingBootForceSrm = false;
+            mBgExecutor.execute(() -> {
+                if (!mDestroyed && bootRom(pendingRom, pendingForce)) {
+                    mHandler.post(() -> {
+                        if (!mDestroyed && mUi != null && mUi.isOpen()) {
+                            mUi.close();
+                        }
+                    });
+                }
+            });
         }
         if (mOverlayMask != 0) {
             MesenNative.setDebugOverlayMask(mOverlayMask);
@@ -2483,11 +2532,45 @@ public class MesenActivity extends SDLActivity implements OracleUi.Host {
         }
     }
 
-    /** Copies Name.srm beside the ROM into Saves/ once; never overwrites. */
-    private BatterySaveSeed.Status seedBatterySave(String romPath) {
-        BatterySaveSeed.Status status = BatterySaveSeed.seed(new File(romPath), savesDir());
-        Log.v(TAG, "battery save seed " + status + " for " + romPath);
+    /** Copies Name.srm beside the ROM into Saves/; when forceSrm is true, backs up and overwrites. */
+    private BatterySaveSeed.Status seedBatterySave(String romPath, boolean forceSrm) {
+        File rom = new File(romPath);
+        File saves = savesDir();
+        BatterySaveSeed.Status status = forceSrm
+                ? BatterySaveSeed.forceSeed(rom, saves)
+                : BatterySaveSeed.seed(rom, saves);
+        Log.v(TAG, "battery save " + (forceSrm ? "forceSeed " : "seed ") + status + " for " + romPath);
         return status;
+    }
+
+    private static boolean isSameSaveTarget(String previousRom, String nextRom) {
+        if (previousRom == null || previousRom.isEmpty() || nextRom == null || nextRom.isEmpty()) {
+            return false;
+        }
+        return BatterySaveSeed.baseName(new File(previousRom))
+                .equals(BatterySaveSeed.baseName(new File(nextRom)));
+    }
+
+    private static void syncLiveSramFromFile(File srmFile) {
+        if (srmFile == null || !srmFile.isFile() || srmFile.length() <= 0
+                || srmFile.length() > BatterySaveSeed.MAX_SRM_BYTES) {
+            return;
+        }
+        try (java.io.FileInputStream in = new java.io.FileInputStream(srmFile)) {
+            byte[] buf = new byte[8192];
+            int offset = 0;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                for (int i = 0; i < n; i++) {
+                    if (!MesenNative.writeSram(offset, buf[i] & 0xFF)) {
+                        return;
+                    }
+                    offset++;
+                }
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "syncLiveSramFromFile failed", e);
+        }
     }
 
     private static String romSource(File rom) {

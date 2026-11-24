@@ -65,6 +65,9 @@ final class Inventory {
 
     static final int MODULE = 0x7E0010;
     static final int SUBMODULE = 0x7E0011;
+    static final int LINK_GRAPHICS = 0x7E00BC;
+    static final int ACTIVE_FORM = 0x7E02B2;
+    static final int FORM_FIERCE_DEITY = 0x0D;
 
     // Custom story flags ($7EF300-$7EF30F, Core/sram.asm:228-254, 490-494)
     static final int KYDROG_FARORE_REMOVED = 0x7EF300;
@@ -163,12 +166,16 @@ final class Inventory {
     static final int GARO_MASK_OWNED = 0x7EF3AF;
     static final int BOMBCHU_AMMO = 0x7EF3B0;
     static final int BOMBCHU_AMMO_MAX = 20;
+    static final int SONG_BITS = 0x7EF3B1;
+    static final int ALL_SONG_BITS = 0xBF;
     static final int SKY_SOARING_LEARNED = 0x7EF3B2;
     static final int SKY_SOARING_TOKEN = 0xA5;
     static final int SWORD_STORY_BLADE = 0x7EF3BC;
     static final int SWORD_SLOT_FLAGS = 0x7EF3BD;
     static final int HEAVY_SWORD_GRANT = 0x81;
     static final int EON_GORON_QUEST = 0x7EF3BE;
+    static final int SLINGSHOT_BOW_FLAGS = 0x7EF3C3;
+    static final int ALL_SLINGSHOT_BOW_FLAGS = 0x83;
     static final int RICHARD_QUEST_FLAGS = 0x7EF3C4;
     static final int GAME_STATE = 0x7EF3C5;
     static final int OOSPROG2 = 0x7EF3C6;
@@ -182,14 +189,38 @@ final class Inventory {
     static final int SIDE_QUEST_2 = 0x7EF3D8;
     static final int EPONA_SONG = 0x02;
 
-    // Dreams, Water gates, Travel spots ($7EF410-$7EF412, Core/sram.asm:165-167, 550, 893)
+    // Dreams, Water gates, Travel spots, Quests, Col 21, Extra Masks & Rings ($7EF410-$7EF483)
     static final int DREAMS = 0x7EF410;
     static final int WATER_GATE_STATES = 0x7EF411;
     static final int TRAVEL_SPOTS = 0x7EF412;
+    static final int SPECIAL_TRAVEL_SPOTS = 0x7EF438;
+    static final int KORL_UNLOCKED = 0x7EF439;
+    static final int ABYSS_TRAVEL_SPOTS = 0x7EF43A;
+    static final int TRADING_QUEST_STEP = 0x7EF43D;
+    static final int KEYS_DUNGEON_1C = 0x7EF450;
+    static final int KEYS_DUNGEON_1E = 0x7EF451;
+    static final int DEKU_VILLAGE_QUEST = 0x7EF456;
+    static final int WARDROBE_OUTFIT_ID = 0x7EF459;
+    static final int CLOCKWORK_BEETLE_OWNED = 0x7EF45A;
+    static final int SWITCH_HOOK_COL21_OWNED = 0x7EF45B;
+    static final int LENS_OF_TRUTH_OWNED = 0x7EF45C;
+    static final int TEMPEST_HARP_OWNED = 0x7EF45D;
+    static final int STALFOS_MASK_OWNED = 0x7EF466;
+    static final int FROG_MASK_OWNED = 0x7EF467;
+    static final int FIERCE_DEITY_MASK_OWNED = 0x7EF468;
+    static final int FOUND_RINGS_EX = 0x7EF469;
+    static final int MAGIC_RINGS_EX = 0x7EF46A;
+    static final int ALL_RINGS_EX = 0x07;
+    static final int EON_JABU_QUEST = 0x7EF481;
+    static final int JABU_WATER_LEVEL = 0x7EF482;
+    static final int GLACIA_WITCHES_FLAGS = 0x7EF483;
 
     /** Flute byte: 1 = Ocarina, 2..7 = Ocarina plus songs (Items/ocarina.asm:687-700). */
     static final int FLUTE_ALL_SONGS = 7;
-    static final int[] MASKS = {ZORA_MASK, BUNNY_HOOD, DEKU_MASK, STONE_MASK, WOLF_MASK, GARO_MASK_OWNED};
+    static final int[] MASKS = {
+            ZORA_MASK, BUNNY_HOOD, DEKU_MASK, STONE_MASK, WOLF_MASK,
+            GARO_MASK_OWNED, STALFOS_MASK_OWNED, FROG_MASK_OWNED, FIERCE_DEITY_MASK_OWNED
+    };
 
     static final String TAB_ITEMS = "Items";
     static final String TAB_SONGS = "Songs";
@@ -204,6 +235,7 @@ final class Inventory {
     static final String FILL_BOTTLES = "Fill 4 bottles";
     static final String ALL_MASKS = "All masks";
     static final String ALL_RINGS_ACTION = "All rings";
+    static final String EQUIP_FIERCE_DEITY = "Equip Fierce Deity";
     static final String HEAVY_SWORD = "Heavy sword (broken)";
 
     private static final String[] SWORDS = {"None", "Fighter", "Master", "Tempered", "Golden"};
@@ -215,7 +247,22 @@ final class Inventory {
     private static final String[] BOTTLES = {"None", "Mushroom", "Empty", "Red potion", "Green potion",
             "Blue potion", "Fairy", "Bee", "Good bee"};
     private static final String[] RING_NAMES = {"Empty", "Reserved", "Power", "Armor",
-            "Heart", "Light", "Blast", "Steadfast"};
+            "Heart", "Light", "Blast", "Steadfast", "Mana", "Charge", "Whisp"};
+    private static final String[] BOUND_MASK_NAMES = {"None", "Deku", "Zora", "Wolf",
+            "Bunny", "Stone", "Garo", "Stalfos", "Frog", "Fierce Deity"};
+    private static final String[] FORM_NAMES = {"Normal", "Deku", "Zora", "Wolf",
+            "Bunny", "Minish", "GBC", "Moosh", "Garo", "Horse", "Farore",
+            "Stalfos", "Frog", "Fierce Deity", "Mermaid"};
+    private static final int[] FORM_GFX_BANKS = {
+            0x10, 0x35, 0x36, 0x38, 0x37, 0x39, 0x3B, 0x33,
+            0x42, 0x10, 0x61, 0x7B, 0x7C, 0x7D, 0x3B
+    };
+    private static final String[] WARDROBE_NAMES = {"Minish Link", "ALTTP Link", "Parallel Worlds",
+            "Awakening", "NES Link", "TP Zelda", "Classic Zelda", "Tetra", "Tingle"};
+    private static final String[] TRADING_STEP_NAMES = {"None", "Yoshi Doll", "Velvet Cloak",
+            "Pocket Watch", "Ghost Shroom", "Chateau Brew", "Secret Diary", "Lost Melody",
+            "Owl Quill", "Moth Lantern", "Secrets Seal"};
+    private static final String[] JABU_WATER_NAMES = {"Drained", "B1 Flooded", "1F & B1 Flooded"};
     private static final String[] OCARINA_SONGS = {"Unset", "Healing", "Storms", "Soaring",
             "Time", "Secrets", "Stone"};
     private static final String[] GAME_STATES = {"Start", "LoomBeach", "KydrogComplete", "FaroreRescued"};
@@ -275,10 +322,14 @@ final class Inventory {
 
         // Items tab: quick actions, all Y-items & newest prototypes, masks, bottles, gear, capacities, rings
         for (String label : new String[]{MAX_EVERYTHING, FULL_HEAL, FILL_MAGIC, RUPEES_999,
-                FILL_BOTTLES, ALL_MASKS, ALL_RINGS_ACTION, HEAVY_SWORD, STARTER_KIT}) {
+                FILL_BOTTLES, ALL_MASKS, ALL_RINGS_ACTION, EQUIP_FIERCE_DEITY, HEAVY_SWORD, STARTER_KIT}) {
             rows.add(action(label));
         }
         rows.add(value(TAB_ITEMS, "Bow", BOW, 4));
+        rows.add(flag(TAB_ITEMS, "Slingshot owned ($7EF3C3)", SLINGSHOT_BOW_FLAGS, 0x01));
+        rows.add(flag(TAB_ITEMS, "Full Bow owned ($7EF3C3)", SLINGSHOT_BOW_FLAGS, 0x02));
+        rows.add(flag(TAB_ITEMS, "Slingshot/Bow init ($80)", SLINGSHOT_BOW_FLAGS, 0x80));
+        rows.add(bits(TAB_ITEMS, "Slingshot/Bow raw ($7EF3C3)", SLINGSHOT_BOW_FLAGS));
         rows.add(value(TAB_ITEMS, "Boomerang", BOOMERANG, 2, 1, new String[]{"None", "Blue", "Red"}));
         rows.add(value(TAB_ITEMS, "Hookshot", HOOKSHOT, 2));
         rows.add(value(TAB_ITEMS, "Switch Hook", SWITCH_HOOK_OWNED, 1));
@@ -302,6 +353,10 @@ final class Inventory {
         rows.add(value(TAB_ITEMS, "Portal Rod owned", PORTAL_ROD_OWNED, 1));
         rows.add(value(TAB_ITEMS, "Fishing Rod flag", FISHING_ROD, 1));
         rows.add(value(TAB_ITEMS, "Magic mirror", MIRROR, 2));
+        rows.add(value(TAB_ITEMS, "Clockwork Beetle", CLOCKWORK_BEETLE_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Switch Hook (Col 21)", SWITCH_HOOK_COL21_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Lens of Truth", LENS_OF_TRUTH_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Tempest Harp", TEMPEST_HARP_OWNED, 1));
 
         rows.add(value(TAB_ITEMS, "Zora Mask", ZORA_MASK, 1));
         rows.add(value(TAB_ITEMS, "Bunny Hood", BUNNY_HOOD, 1));
@@ -309,7 +364,12 @@ final class Inventory {
         rows.add(value(TAB_ITEMS, "Stone Mask", STONE_MASK, 1));
         rows.add(value(TAB_ITEMS, "Wolf Mask", WOLF_MASK, 1));
         rows.add(value(TAB_ITEMS, "Garo Mask", GARO_MASK_OWNED, 1));
-        rows.add(value(TAB_ITEMS, "Bound mask (R slot)", BOUND_MASK, 5));
+        rows.add(value(TAB_ITEMS, "Stalfos Mask", STALFOS_MASK_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Frog Mask", FROG_MASK_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Fierce Deity Mask", FIERCE_DEITY_MASK_OWNED, 1));
+        rows.add(value(TAB_ITEMS, "Bound mask (R slot)", BOUND_MASK, 9, 1, BOUND_MASK_NAMES));
+        rows.add(value(TAB_ITEMS, "Active form ($7E02B2)", ACTIVE_FORM, 14, 1, FORM_NAMES));
+        rows.add(value(TAB_ITEMS, "Wardrobe outfit ($7EF459)", WARDROBE_OUTFIT_ID, 8, 1, WARDROBE_NAMES));
 
         rows.add(value(TAB_ITEMS, "Bottle index", BOTTLE_INDEX, 4));
         for (int i = 0; i < 4; i++) {
@@ -344,15 +404,20 @@ final class Inventory {
         rows.add(flag(TAB_ITEMS, "Ability: Swim", ABILITY, 0x02));
         rows.add(flag(TAB_ITEMS, "Ability: Pray", ABILITY, 0x01));
 
-        rows.add(value(TAB_ITEMS, "Equipped ring (Slot 1)", RING_SLOT_1, 7, 1, RING_NAMES));
+        rows.add(value(TAB_ITEMS, "Equipped ring (Slot 1)", RING_SLOT_1, 10, 1, RING_NAMES));
         rows.add(flag(TAB_ITEMS, "Ring owned: Power", MAGIC_RINGS, 0x20));
         rows.add(flag(TAB_ITEMS, "Ring owned: Armor", MAGIC_RINGS, 0x10));
         rows.add(flag(TAB_ITEMS, "Ring owned: Heart", MAGIC_RINGS, 0x08));
         rows.add(flag(TAB_ITEMS, "Ring owned: Light", MAGIC_RINGS, 0x04));
         rows.add(flag(TAB_ITEMS, "Ring owned: Blast", MAGIC_RINGS, 0x02));
         rows.add(flag(TAB_ITEMS, "Ring owned: Steadfast", MAGIC_RINGS, 0x01));
+        rows.add(flag(TAB_ITEMS, "Ring owned: Mana", MAGIC_RINGS_EX, 0x01));
+        rows.add(flag(TAB_ITEMS, "Ring owned: Charge", MAGIC_RINGS_EX, 0x02));
+        rows.add(flag(TAB_ITEMS, "Ring owned: Whisp", MAGIC_RINGS_EX, 0x04));
         rows.add(bits(TAB_ITEMS, "Rings found ($7EF3A1)", FOUND_RINGS));
         rows.add(bits(TAB_ITEMS, "Rings owned ($7EF3A2)", MAGIC_RINGS));
+        rows.add(bits(TAB_ITEMS, "Rings found EX ($7EF469)", FOUND_RINGS_EX));
+        rows.add(bits(TAB_ITEMS, "Rings owned EX ($7EF46A)", MAGIC_RINGS_EX));
 
         rows.add(value(TAB_ITEMS, "Deku sticks", DEKU_STICKS, 30));
         rows.add(value(TAB_ITEMS, "Bananas", BANANAS, 10));
@@ -361,7 +426,7 @@ final class Inventory {
         rows.add(value(TAB_ITEMS, "Seashells", SEASHELLS, 20));
         rows.add(value(TAB_ITEMS, "Honeycomb", HONEYCOMB, 20));
 
-        // Songs tab: Ocarina songs, Epona bit, Sky Soaring, Travel spots
+        // Songs tab: Ocarina songs, SongBits, Epona bit, Sky Soaring, Travel spots, KORL
         rows.add(value(TAB_SONGS, "Ocarina level (1=flute, 2-7=songs)", FLUTE, FLUTE_ALL_SONGS));
         rows.add(song("Song 1: Song of Healing", 2));
         rows.add(song("Song 2: Song of Storms", 3));
@@ -372,10 +437,28 @@ final class Inventory {
         rows.add(song("Elegy of Stone (count 7)", 7));
         rows.add(value(TAB_SONGS, "Saved Ocarina song", SAVED_OCARINA_SONG, 6, 1, OCARINA_SONGS));
         rows.add(value(TAB_SONGS, "Sky Soaring learned ($A5)", SKY_SOARING_LEARNED, SKY_SOARING_TOKEN));
+        rows.add(flag(TAB_SONGS, "SongBit: Healing ($7EF3B1)", SONG_BITS, 0x01));
+        rows.add(flag(TAB_SONGS, "SongBit: Storms", SONG_BITS, 0x02));
+        rows.add(flag(TAB_SONGS, "SongBit: Soaring", SONG_BITS, 0x04));
+        rows.add(flag(TAB_SONGS, "SongBit: Time", SONG_BITS, 0x08));
+        rows.add(flag(TAB_SONGS, "SongBit: Secrets", SONG_BITS, 0x10));
+        rows.add(flag(TAB_SONGS, "SongBit: Epona", SONG_BITS, 0x20));
+        rows.add(flag(TAB_SONGS, "SongBits: Active ($80)", SONG_BITS, 0x80));
+        rows.add(bits(TAB_SONGS, "SongBits raw ($7EF3B1)", SONG_BITS));
         for (int i = 0; i < 8; i++) {
             rows.add(flag(TAB_SONGS, "Travel spot " + i + " ($7EF412)", TRAVEL_SPOTS, 1 << i));
         }
         rows.add(bits(TAB_SONGS, "TravelSpotsVisited raw", TRAVEL_SPOTS));
+        String[] specialSpotNames = {
+                "Korok Cove", "Royal Garrison", "Zora Quay", "Goron Coast",
+                "Crescent Island", "Courage Island", "Frost Glacier"
+        };
+        for (int i = 0; i < specialSpotNames.length; i++) {
+            rows.add(flag(TAB_SONGS, "SpecialTravel: " + specialSpotNames[i], SPECIAL_TRAVEL_SPOTS, 1 << i));
+        }
+        rows.add(value(TAB_SONGS, "SpecialTravelSpots ($7EF438)", SPECIAL_TRAVEL_SPOTS, 0x7F));
+        rows.add(bits(TAB_SONGS, "AbyssTravelSpots ($7EF43A)", ABYSS_TRAVEL_SPOTS));
+        rows.add(value(TAB_SONGS, "King of Red Lions ($7EF439)", KORL_UNLOCKED, 1));
 
         // Dungeons tab: 8 Crystals/Essences, 3 Pendants, 7 Scrolls, D4 Water gates, Tingle, Keys, Dungeon gear
         rows.add(flag(TAB_DUNGEONS, "Crystal: D1 Mushroom Grotto", CRYSTALS, 0x02));
@@ -413,6 +496,9 @@ final class Inventory {
         for (int i = 0; i < KEY_DUNGEONS.length; i++) {
             rows.add(value(TAB_DUNGEONS, "Keys: " + KEY_DUNGEONS[i], KEYS_SEWER + i, 9));
         }
+        rows.add(value(TAB_DUNGEONS, "Keys: Dungeon $1C ($7EF450)", KEYS_DUNGEON_1C, 9));
+        rows.add(value(TAB_DUNGEONS, "Keys: Dungeon $1E ($7EF451)", KEYS_DUNGEON_1E, 9));
+        rows.add(value(TAB_DUNGEONS, "Jabu Water Level ($7EF482)", JABU_WATER_LEVEL, 2, 1, JABU_WATER_NAMES));
         rows.add(bits(TAB_DUNGEONS, "CompassSet1 ($7EF364)", COMPASS_SET_1));
         rows.add(bits(TAB_DUNGEONS, "CompassSet2 ($7EF365)", COMPASS_SET_2));
         rows.add(bits(TAB_DUNGEONS, "BigKeySet1 ($7EF366)", BIG_KEY_SET_1));
@@ -508,6 +594,19 @@ final class Inventory {
         rows.add(flag(TAB_STORY, "Richard: Found at night", RICHARD_QUEST_FLAGS, 0x02));
         rows.add(flag(TAB_STORY, "Richard: Delivered", RICHARD_QUEST_FLAGS, 0x04));
         rows.add(flag(TAB_STORY, "Richard: Rewarded", RICHARD_QUEST_FLAGS, 0x08));
+
+        rows.add(value(TAB_STORY, "Trading Quest Step ($7EF43D)", TRADING_QUEST_STEP, 10, 1, TRADING_STEP_NAMES));
+        rows.add(flag(TAB_STORY, "DekuVillage: Met King", DEKU_VILLAGE_QUEST, 0x01));
+        rows.add(flag(TAB_STORY, "DekuVillage: Trial Active", DEKU_VILLAGE_QUEST, 0x02));
+        rows.add(flag(TAB_STORY, "DekuVillage: Trial Won", DEKU_VILLAGE_QUEST, 0x04));
+        rows.add(flag(TAB_STORY, "DekuVillage: King Blessed", DEKU_VILLAGE_QUEST, 0x08));
+        rows.add(flag(TAB_STORY, "DekuVillage: Merchant Gift", DEKU_VILLAGE_QUEST, 0x10));
+        rows.add(flag(TAB_STORY, "DekuVillage: Cursed", DEKU_VILLAGE_QUEST, 0x20));
+        rows.add(bits(TAB_STORY, "DekuVillageQuest raw ($7EF456)", DEKU_VILLAGE_QUEST));
+        rows.add(bits(TAB_STORY, "EonJabuQuest ($7EF481)", EON_JABU_QUEST));
+        rows.add(flag(TAB_STORY, "GlaciaWitches: Courtyard", GLACIA_WITCHES_FLAGS, 0x01));
+        rows.add(flag(TAB_STORY, "GlaciaWitches: Mountain", GLACIA_WITCHES_FLAGS, 0x02));
+        rows.add(bits(TAB_STORY, "GlaciaWitches raw ($7EF483)", GLACIA_WITCHES_FLAGS));
 
         return Collections.unmodifiableList(rows);
     }
@@ -654,6 +753,9 @@ final class Inventory {
         if (value > 0 && row.addr == BOMBCHU_AMMO) ok = raise(memory, BOMBCHU_OWNED, 1);
         if (value > 0 && row.addr == BOOTS) ok = orBits(memory, ABILITY, 0x04);
         if (value > 0 && row.addr == FLIPPERS) ok = orBits(memory, ABILITY, 0x02);
+        if (row.addr == ACTIVE_FORM && value >= 0 && value < FORM_GFX_BANKS.length) {
+            ok = memory.writeByte(LINK_GRAPHICS, FORM_GFX_BANKS[value]);
+        }
         if (!ok) return row.label + " set, but its companion byte did not write";
         if (!memory.syncSram()) return row.label + " written to WRAM; SRAM sync failed";
         return row.label + ": " + valueText(row, value);
@@ -687,6 +789,8 @@ final class Inventory {
                 {BOMB_CAPACITY, 7}, {ARROW_CAPACITY, 7}, {MAGIC_USAGE, 2},
                 {PORTAL_ROD_OWNED, 1}, {GOLDSTAR_OWNED, 1}, {BYRNA_OWNED, 1},
                 {BOMBCHU_OWNED, 1}, {SWITCH_HOOK_OWNED, 1},
+                {CLOCKWORK_BEETLE_OWNED, 1}, {SWITCH_HOOK_COL21_OWNED, 1},
+                {LENS_OF_TRUTH_OWNED, 1}, {TEMPEST_HARP_OWNED, 1},
                 {BOMBS, 50}, {ARROWS, 70}, {DEKU_STICKS, 10}, {BOMBCHU_AMMO, BOMBCHU_AMMO_MAX},
                 {BANANAS, 10}, {ROCK_MEAT, 5}, {HEALTH_MAX, 0xA0}, {HEART_PIECES, 3}, {MAGIC, 0x80},
         };
@@ -703,6 +807,17 @@ final class Inventory {
             if (cur < 0) return null;
             w.put(ring, cur | ALL_RINGS);
         }
+        for (int ringEx : new int[]{FOUND_RINGS_EX, MAGIC_RINGS_EX}) {
+            int cur = memory.readByte(ringEx);
+            if (cur < 0) return null;
+            w.put(ringEx, cur | ALL_RINGS_EX);
+        }
+        int songBits = memory.readByte(SONG_BITS);
+        if (songBits < 0) return null;
+        w.put(SONG_BITS, songBits | ALL_SONG_BITS);
+        int bowFlags = memory.readByte(SLINGSHOT_BOW_FLAGS);
+        if (bowFlags < 0) return null;
+        w.put(SLINGSHOT_BOW_FLAGS, bowFlags | ALL_SLINGSHOT_BOW_FLAGS);
         int ability = memory.readByte(ABILITY);
         if (ability < 0) return null;
         w.put(ABILITY, ability | 0x86); // lift, run (boots), swim (flippers)
@@ -780,14 +895,31 @@ final class Inventory {
             }
             case ALL_MASKS:
                 for (int mask : MASKS) w.put(mask, 1);
-                return applyAll(w, memory, "Gave all 6 masks (Deku, Zora, Wolf, Bunny, Stone, Garo)");
+                return applyAll(w, memory, "Gave all 9 masks (Deku, Zora, Wolf, Bunny, Stone, Garo, Stalfos, Frog, Fierce Deity)");
             case ALL_RINGS_ACTION:
                 for (int ring : new int[]{FOUND_RINGS, MAGIC_RINGS}) {
                     int cur = memory.readByte(ring);
                     if (cur < 0) return "Could not read rings";
                     w.put(ring, cur | ALL_RINGS);
                 }
-                return applyAll(w, memory, "Gave all 6 rings: equip one from Rings");
+                for (int ringEx : new int[]{FOUND_RINGS_EX, MAGIC_RINGS_EX}) {
+                    int cur = memory.readByte(ringEx);
+                    if (cur < 0) return "Could not read extra rings";
+                    w.put(ringEx, cur | ALL_RINGS_EX);
+                }
+                return applyAll(w, memory, "Gave all 9 rings: equip one from Rings");
+            case EQUIP_FIERCE_DEITY: {
+                w.put(FIERCE_DEITY_MASK_OWNED, 1);
+                w.put(BOUND_MASK, 9);
+                boolean inPlay = gameplayProblem(memory) == null;
+                if (inPlay) {
+                    w.put(ACTIVE_FORM, FORM_FIERCE_DEITY);
+                    w.put(LINK_GRAPHICS, FORM_GFX_BANKS[FORM_FIERCE_DEITY]);
+                }
+                return applyAll(w, memory, inPlay
+                        ? "Equipped Fierce Deity (Mask owned, R=Fierce Deity, form=$0D)"
+                        : "Granted Fierce Deity Mask & R binding");
+            }
             case HEAVY_SWORD: {
                 int cur = memory.readByte(SWORD_SLOT_FLAGS);
                 if (cur < 0) return "Could not read sword slots";

@@ -406,6 +406,17 @@ class OracleUiAsyncTest {
         ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0)
         ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
         pump(mainQueue) { !ui.isBusy && host.fakeMemory.readByte(Inventory.SWORD) == 1 }
+
+        // Row 10 col 3 = Equip FD (one-tap Fierce Deity).
+        repeat(4) { ui.onKey(KeyEvent.KEYCODE_DPAD_DOWN, 0) }
+        repeat(3) { ui.onKey(KeyEvent.KEYCODE_DPAD_RIGHT, 0) }
+        ui.onKey(KeyEvent.KEYCODE_BUTTON_A, 0)
+        pump(mainQueue) {
+            !ui.isBusy &&
+                host.fakeMemory.readByte(Inventory.FIERCE_DEITY_MASK_OWNED) == 1 &&
+                host.fakeMemory.readByte(Inventory.BOUND_MASK) == 9 &&
+                host.fakeMemory.readByte(Inventory.ACTIVE_FORM) == Inventory.FORM_FIERCE_DEITY
+        }
     }
 
     @Test

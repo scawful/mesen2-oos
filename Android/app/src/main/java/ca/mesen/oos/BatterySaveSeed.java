@@ -36,13 +36,15 @@ final class BatterySaveSeed {
     }
 
     static Status seed(File rom, File savesDir) {
+        if (rom == null || savesDir == null) {
+            return Status.FAILED;
+        }
         File source = sidecar(rom);
         File dest = target(rom, savesDir);
         if (dest.isFile()) {
             return Status.ALREADY_PRESENT;
         }
-        if (source == null || !source.isFile() || source.length() == 0
-                || source.length() > MAX_SRM_BYTES) {
+        if (!isValidSidecar(source)) {
             return Status.NO_SIDECAR;
         }
         if (source.getAbsoluteFile().equals(dest.getAbsoluteFile())) {
@@ -51,7 +53,45 @@ final class BatterySaveSeed {
         if (!savesDir.isDirectory() && !savesDir.mkdirs()) {
             return Status.FAILED;
         }
-        File tmp = new File(savesDir, dest.getName() + ".seed-tmp");
+        return copyAtomic(source, dest, ".seed-tmp") ? Status.SEEDED : Status.FAILED;
+    }
+
+    /**
+     * Unconditionally seeds {@code Saves/<base>.srm} from a valid sidecar.
+     * If {@code Saves/<base>.srm} already exists, backs it up atomically to
+     * {@code Saves/<base>.srm.bak} before overwriting.
+     */
+    static Status forceSeed(File rom, File savesDir) {
+        if (rom == null || savesDir == null) {
+            return Status.FAILED;
+        }
+        File source = sidecar(rom);
+        File dest = target(rom, savesDir);
+        if (!isValidSidecar(source)) {
+            return Status.NO_SIDECAR;
+        }
+        if (source.getAbsoluteFile().equals(dest.getAbsoluteFile())) {
+            return Status.ALREADY_PRESENT;
+        }
+        if (!savesDir.isDirectory() && !savesDir.mkdirs()) {
+            return Status.FAILED;
+        }
+        if (dest.isFile()) {
+            File backup = new File(savesDir, dest.getName() + ".bak");
+            if (!copyAtomic(dest, backup, ".bak-tmp")) {
+                return Status.FAILED;
+            }
+        }
+        return copyAtomic(source, dest, ".seed-tmp") ? Status.SEEDED : Status.FAILED;
+    }
+
+    private static boolean isValidSidecar(File source) {
+        return source != null && source.isFile() && source.length() > 0
+                && source.length() <= MAX_SRM_BYTES;
+    }
+
+    private static boolean copyAtomic(File source, File dest, String tempSuffix) {
+        File tmp = new File(dest.getParentFile(), dest.getName() + tempSuffix);
         try (InputStream in = new FileInputStream(source);
              OutputStream out = new FileOutputStream(tmp)) {
             byte[] buffer = new byte[8192];
@@ -61,12 +101,12 @@ final class BatterySaveSeed {
             }
         } catch (IOException e) {
             tmp.delete();
-            return Status.FAILED;
+            return false;
         }
         if (tmp.length() != source.length() || !tmp.renameTo(dest)) {
             tmp.delete();
-            return Status.FAILED;
+            return false;
         }
-        return Status.SEEDED;
+        return true;
     }
 }
