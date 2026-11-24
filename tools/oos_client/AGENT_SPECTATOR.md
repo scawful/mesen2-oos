@@ -55,6 +55,18 @@ transitions between frames can be missed.
 
 ## Run the recorder
 
+It runs as launchd service `com.scawful.oos-probe-recorder` (KeepAlive, approved by scawful 2026-11-23):
+
+| What | Where |
+|---|---|
+| Plist | `~/Library/LaunchAgents/com.scawful.oos-probe-recorder.plist` |
+| Launcher | `probe_runs/run_recorder.sh` (uses the main checkout once it has this version, else the branch worktree) |
+| Log | `~/Library/Logs/oos-probe-recorder.log` |
+| Restart | `launchctl kickstart -k gui/$(id -u)/com.scawful.oos-probe-recorder` |
+| Remove | `launchctl bootout gui/$(id -u)/com.scawful.oos-probe-recorder` then delete the plist |
+
+Restart after editing `agent_spectator.py` (the HTML is read per request). Manual run, when the service is off:
+
 ```sh
 python3 ~/src/hobby/mesen2-oos/tools/oos_client/agent_spectator.py serve      # port 8769, home above
 ```
