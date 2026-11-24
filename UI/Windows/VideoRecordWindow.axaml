@@ -2,53 +2,80 @@
 	xmlns="https://github.com/avaloniaui"
 	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-	xmlns:m="clr-namespace:Mesen"
 	xmlns:c="using:Mesen.Controls"
-	xmlns:cfg="using:Mesen.Config"
 	xmlns:vm="using:Mesen.ViewModels"
-	xmlns:l="using:Mesen.Localization"
 	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-	mc:Ignorable="d"
+	mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="560"
 	x:Class="Mesen.Windows.VideoRecordWindow"
-	Width="500" Height="170"
+	Width="520" Height="560" MinWidth="420" MinHeight="420"
 	x:DataType="vm:VideoRecordConfigViewModel"
-	Title="{l:Translate wndTitle}"
+	Title="Capture"
 >
-	<DockPanel Margin="5">
-		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right">
-			<c:ButtonWithIcon Icon="Assets/Record.png" MinWidth="70" HorizontalContentAlignment="Center" Click="Ok_OnClick" Text="{l:Translate btnOK}" />
-			<Button MinWidth="70" HorizontalContentAlignment="Center" IsCancel="True" Click="Cancel_OnClick" Content="{l:Translate btnCancel}" />
-		</StackPanel>
-
-		<Grid ColumnDefinitions="Auto,1*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-			<TextBlock Text="{l:Translate lblAviFile}" />
-			<TextBox Grid.Column="1" IsReadOnly="True" Text="{Binding SavePath}" />
-			<Button Grid.Column="2" Content="{l:Translate btnBrowse}" Click="OnBrowseClick" />
-
-			<TextBlock Grid.Row="1" Text="{l:Translate lblCodec}" />
-			<c:EnumComboBox
-				Grid.Row="1"
-				Grid.Column="1"
-				SelectedItem="{Binding Config.Codec}"
+	<DockPanel Margin="10">
+		<!-- Record bar -->
+		<Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Margin="0 0 0 8">
+			<c:ButtonWithIcon
+				Icon="Assets/Record.png"
+				Text="{Binding RecordButtonText}"
+				MinWidth="110" Height="34"
+				FontWeight="Bold"
+				HorizontalContentAlignment="Center"
+				Click="OnRecordClick"
 			/>
-
-			<TextBlock Grid.Row="2" Text="{l:Translate lblCompressionLevel}" IsVisible="{Binding CompressionAvailable}" />
-			<Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="Auto,1*,Auto" Margin="5 0" IsVisible="{Binding CompressionAvailable}">
-				<TextBlock Text="{l:Translate lblLowCompression}" />
-				<c:MesenSlider
-					Grid.Column="1"
-					Margin="5 5"
-					HideValue="True"
-					Minimum="0"
-					Maximum="8"
-					TickFrequency="1"
-					Value="{Binding Config.CompressionLevel}"
-				/>
-				<TextBlock Grid.Column="2" Text="{l:Translate lblHighCompression}" />
-			</Grid>
-			
-			<CheckBox Grid.Row="3" Grid.ColumnSpan="3" Content="{l:Translate lblRecordSystemHud}" IsChecked="{Binding Config.RecordSystemHud}" />
-			<CheckBox Grid.Row="4" Grid.ColumnSpan="3" Content="{l:Translate lblRecordInputHud}" IsChecked="{Binding Config.RecordInputHud}" />
+			<StackPanel Grid.Column="1" Margin="10 0 0 0" VerticalAlignment="Center">
+				<TextBlock Text="{Binding ElapsedText}" FontWeight="Bold" Foreground="#E04040" IsVisible="{Binding IsRecording}" />
+				<TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" FontSize="11" />
+			</StackPanel>
 		</Grid>
+
+		<!-- Settings -->
+		<c:GroupBox DockPanel.Dock="Top" Header="Settings" IsEnabled="{Binding CanChangeSettings}">
+			<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="4">
+				<TextBlock Text="Format:" VerticalAlignment="Center" Margin="0 0 8 0" />
+				<ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{x:Static vm:VideoRecordConfigViewModel.FormatNames}" SelectedIndex="{Binding FormatIndex}" />
+
+				<TextBlock Grid.Row="1" Text="Framing:" VerticalAlignment="Center" Margin="0 4 8 0" IsVisible="{Binding FramingAvailable}" />
+				<ComboBox Grid.Row="1" Grid.Column="1" Margin="0 4 0 0" HorizontalAlignment="Stretch" ItemsSource="{x:Static vm:VideoRecordConfigViewModel.FramingNames}" SelectedIndex="{Binding FramingIndex}" IsVisible="{Binding FramingAvailable}" />
+
+				<TextBlock Grid.Row="2" Text="Size:" VerticalAlignment="Center" Margin="0 4 8 0" IsVisible="{Binding ScaleAvailable}" />
+				<ComboBox Grid.Row="2" Grid.Column="1" Margin="0 4 0 0" HorizontalAlignment="Stretch" ItemsSource="{x:Static vm:VideoRecordConfigViewModel.ScaleNames}" SelectedIndex="{Binding ScaleIndex}" IsVisible="{Binding ScaleAvailable}" />
+
+				<StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="16" Margin="0 6 0 0">
+					<CheckBox Content="Show inputs" IsChecked="{Binding Config.RecordInputHud}" />
+					<CheckBox Content="Show emulator messages" IsChecked="{Binding Config.RecordSystemHud}" />
+				</StackPanel>
+
+				<TextBlock Grid.Row="4" Grid.ColumnSpan="2" Text="{Binding FfmpegText}" Foreground="Gray" FontSize="11" TextWrapping="Wrap" IsVisible="{Binding FfmpegText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+			</Grid>
+		</c:GroupBox>
+
+		<!-- Clips -->
+		<c:GroupBox Header="Clips">
+			<DockPanel Margin="4">
+				<Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0 0 0 6">
+					<TextBlock Text="{Binding ClipsFolder}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding ClipsFolder}" />
+					<Button Grid.Column="1" Content="Change..." Click="OnChangeFolderClick" Margin="6 0 0 0" />
+					<Button Grid.Column="2" Content="Open Folder" Click="OnOpenFolderClick" Margin="6 0 0 0" />
+				</Grid>
+				<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6" Margin="0 6 0 0">
+					<Button Content="Refresh" Click="OnRefreshClick" />
+					<Button Content="Copy Path" Click="OnCopyPathClick" IsEnabled="{Binding SelectedClip, Converter={x:Static ObjectConverters.IsNotNull}}" />
+					<Button Content="Show in Finder" Click="OnRevealClick" IsEnabled="{Binding SelectedClip, Converter={x:Static ObjectConverters.IsNotNull}}" />
+					<Button Content="Play" FontWeight="Bold" Click="OnPlayClick" IsEnabled="{Binding SelectedClip, Converter={x:Static ObjectConverters.IsNotNull}}" />
+				</StackPanel>
+				<Border BorderThickness="1" BorderBrush="{StaticResource MesenGrayBorderColor}">
+					<ListBox ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}" DoubleTapped="OnClipDoubleTapped">
+						<ListBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:CaptureClip">
+								<StackPanel>
+									<TextBlock Text="{Binding Name}" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+									<TextBlock Text="{Binding Detail}" FontSize="10" Foreground="Gray" />
+								</StackPanel>
+							</DataTemplate>
+						</ListBox.ItemTemplate>
+					</ListBox>
+				</Border>
+			</DockPanel>
+		</c:GroupBox>
 	</DockPanel>
 </Window>

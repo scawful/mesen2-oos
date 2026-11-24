@@ -168,18 +168,7 @@ namespace Mesen.Utilities
 			if(!EmuApi.IsRunning()) {
 				return;
 			}
-
-			if(RecordApi.AviIsRecording()) {
-				RecordApi.AviStop();
-			} else {
-				string filename = GetOutputFilename(ConfigManager.AviFolder, ConfigManager.Config.VideoRecord.Codec == VideoCodec.GIF ? ".gif" : ".avi");
-				RecordApi.AviRecord(filename, new RecordAviOptions() {
-					Codec = ConfigManager.Config.VideoRecord.Codec,
-					CompressionLevel = ConfigManager.Config.VideoRecord.CompressionLevel,
-					RecordSystemHud = ConfigManager.Config.VideoRecord.RecordSystemHud,
-					RecordInputHud = ConfigManager.Config.VideoRecord.RecordInputHud
-				});
-			}
+			_ = CaptureSession.Toggle();
 		}
 
 		private static void ToggleRecordAudio()

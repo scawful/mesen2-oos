@@ -41,9 +41,38 @@ namespace Mesen.Utilities
 
 		public static async Task<string> ExecuteFormattedAsync(string commandType, IReadOnlyDictionary<string, string>? args = null)
 		{
+			(string? socketPath, string? responseLine, string? error) = await SendAsync(commandType, args).ConfigureAwait(false);
+			if(error != null) {
+				return error;
+			}
+			return FormatResponse(commandType, socketPath!, responseLine!);
+		}
+
+		/// <summary>Sends one command and returns the parsed response object, or an error message.</summary>
+		public static async Task<(JsonObject? Response, string? Error)> ExecuteAsync(string commandType, IReadOnlyDictionary<string, string>? args = null)
+		{
+			(_, string? responseLine, string? error) = await SendAsync(commandType, args).ConfigureAwait(false);
+			if(error != null) {
+				return (null, error);
+			}
+			try {
+				if(JsonNode.Parse(responseLine!) is not JsonObject obj) {
+					return (null, $"Unexpected response to {commandType}: {responseLine}");
+				}
+				if(!(obj["success"]?.GetValue<bool>() ?? false)) {
+					return (obj, obj["error"]?.ToString() ?? $"{commandType} failed");
+				}
+				return (obj, null);
+			} catch(Exception ex) {
+				return (null, $"Could not parse response to {commandType}: {ex.Message}");
+			}
+		}
+
+		private static async Task<(string? SocketPath, string? ResponseLine, string? Error)> SendAsync(string commandType, IReadOnlyDictionary<string, string>? args)
+		{
 			string? socketPath = OracleAgentStatus.GetLocalSocketPath();
 			if(string.IsNullOrWhiteSpace(socketPath)) {
-				return "Local Mesen2 socket is not active for this instance.";
+				return (null, null, "Local Mesen2 socket is not active for this instance.");
 			}
 
 			JsonObject request = new() {
@@ -71,12 +100,11 @@ namespace Mesen.Utilities
 				using StreamReader reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
 				string? responseLine = await reader.ReadLineAsync().ConfigureAwait(false);
 				if(string.IsNullOrWhiteSpace(responseLine)) {
-					return "Empty response from local Mesen2 socket.";
+					return (socketPath, null, "Empty response from local Mesen2 socket.");
 				}
-
-				return FormatResponse(commandType, socketPath, responseLine);
+				return (socketPath, responseLine, null);
 			} catch(Exception ex) {
-				return $"Socket command '{commandType}' failed ({socketPath}): {ex.Message}";
+				return (socketPath, null, $"Socket command '{commandType}' failed ({socketPath}): {ex.Message}");
 			}
 		}
 

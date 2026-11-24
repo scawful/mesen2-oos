@@ -804,18 +804,18 @@ namespace Mesen.ViewModels
 				SubActions = new List<object> {
 					new MainMenuAction() {
 						ActionType = ActionType.Record,
-						IsEnabled = () => IsGameRunning && !RecordApi.AviIsRecording(),
+						IsEnabled = () => IsGameRunning,
 						OnClick = () => {
-							new VideoRecordWindow() {
+							ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new VideoRecordWindow() {
 								DataContext = new VideoRecordConfigViewModel()
-							}.ShowCenteredDialog((Control)wnd);
+							});
 						}
 					},
 					new MainMenuAction() {
 						ActionType = ActionType.Stop,
 						IsEnabled = () => IsGameRunning && RecordApi.AviIsRecording(),
 						OnClick = () => {
-							RecordApi.AviStop();
+							CaptureSession.Stop();
 						}
 					}
 				}

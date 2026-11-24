@@ -1,15 +1,17 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using Mesen.Config;
-using Mesen.Interop;
 using Mesen.Utilities;
 using Mesen.ViewModels;
-using System.Collections.Generic;
+using System;
+using System.Diagnostics;
+using System.IO;
 
 namespace Mesen.Windows
 {
+	/// <summary>Capture window: one-click recording, framing presets and the clip list.</summary>
 	public class VideoRecordWindow : MesenWindow
 	{
 		public VideoRecordWindow()
@@ -25,37 +27,67 @@ namespace Mesen.Windows
 			AvaloniaXamlLoader.Load(this);
 		}
 
-		private async void OnBrowseClick(object sender, RoutedEventArgs e)
-		{
-			VideoRecordConfigViewModel model = (VideoRecordConfigViewModel)DataContext!;
-			bool isGif = model.Config.Codec == VideoCodec.GIF;
+		private VideoRecordConfigViewModel Model => (VideoRecordConfigViewModel)DataContext!;
 
-			string initFilename = EmuApi.GetRomInfo().GetRomName() + (isGif ? ".gif" : ".avi");
-			string? filename = await FileDialogHelper.SaveFile(ConfigManager.AviFolder, initFilename, VisualRoot, isGif ? FileDialogHelper.GifExt : FileDialogHelper.AviExt);
-			
-			if(filename != null) {
-				model.SavePath = filename;
+		protected override void OnClosed(EventArgs e)
+		{
+			base.OnClosed(e);
+			Model.Dispose();
+		}
+
+		private void OnRecordClick(object sender, RoutedEventArgs e) => Model.ToggleRecording();
+
+		private async void OnChangeFolderClick(object sender, RoutedEventArgs e)
+		{
+			string? folder = await FileDialogHelper.OpenFolder(VisualRoot);
+			if(!string.IsNullOrWhiteSpace(folder)) {
+				Model.SetClipsFolder(folder);
 			}
 		}
 
-		private void Ok_OnClick(object sender, RoutedEventArgs e)
+		private void OnOpenFolderClick(object sender, RoutedEventArgs e) => ShellOpen(Model.ClipsFolder, reveal: false);
+		private void OnRefreshClick(object sender, RoutedEventArgs e) => Model.RefreshClips();
+
+		private void OnPlayClick(object sender, RoutedEventArgs e)
 		{
-			VideoRecordConfigViewModel model = (VideoRecordConfigViewModel)DataContext!;
-			model.SaveConfig();
-
-			RecordApi.AviRecord(model.SavePath, new RecordAviOptions() {
-				Codec = model.Config.Codec,
-				CompressionLevel = model.Config.CompressionLevel,
-				RecordSystemHud = model.Config.RecordSystemHud,
-				RecordInputHud = model.Config.RecordInputHud
-			});
-
-			Close(true);
+			if(Model.SelectedClip != null) {
+				ShellOpen(Model.SelectedClip.Path, reveal: false);
+			}
 		}
 
-		private void Cancel_OnClick(object sender, RoutedEventArgs e)
+		private void OnClipDoubleTapped(object? sender, TappedEventArgs e) => OnPlayClick(this, new RoutedEventArgs());
+
+		private void OnRevealClick(object sender, RoutedEventArgs e)
 		{
-			Close(false);
+			if(Model.SelectedClip != null) {
+				ShellOpen(Model.SelectedClip.Path, reveal: true);
+			}
+		}
+
+		private void OnCopyPathClick(object sender, RoutedEventArgs e)
+		{
+			if(Model.SelectedClip != null) {
+				Clipboard?.SetTextAsync(Model.SelectedClip.Path);
+			}
+		}
+
+		private static void ShellOpen(string path, bool reveal)
+		{
+			try {
+				if(OperatingSystem.IsMacOS()) {
+					ProcessStartInfo info = new("open");
+					if(reveal) {
+						info.ArgumentList.Add("-R");
+					}
+					info.ArgumentList.Add(path);
+					Process.Start(info);
+				} else {
+					string target = reveal ? (Path.GetDirectoryName(path) ?? path) : path;
+					Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+				}
+			} catch(Exception) {
+				//Nothing registered to open this file type
+			}
 		}
 	}
 }
