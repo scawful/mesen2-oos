@@ -509,7 +509,9 @@ bool VideoRenderer::StartRecording(string filename, RecordAviOptions options, bo
 			_camera.SetState(state);
 		}
 		_recordThroughCamera = throughCamera;
+#ifdef __ANDROID__
 		_replayRecorder.reset();
+#endif
 		_recorder.reset(recorder);
 		
 		if(!options.RecordSystemHud) {
@@ -541,8 +543,12 @@ void VideoRenderer::AddRecordingSound(int16_t* soundBuffer, uint32_t sampleCount
 void VideoRenderer::StopRecording()
 {
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
+#ifdef __ANDROID__
 	bool wasReplay = _replayRecorder != nullptr;
 	_replayRecorder.reset();
+#else
+	bool wasReplay = false;
+#endif
 	_recorder.reset();
 	_recordThroughCamera = false;
 	_aviRecorderSurface.UpdateSize(0, 0);
@@ -561,14 +567,20 @@ bool VideoRenderer::IsRecording()
 
 bool VideoRenderer::IsFileRecording()
 {
+#ifdef __ANDROID__
 	return _recorder != nullptr && _replayRecorder == nullptr;
+#else
+	return _recorder != nullptr;
+#endif
 }
 
 string VideoRenderer::GetRecordingFile()
 {
+#ifdef __ANDROID__
 	if(_replayRecorder != nullptr) {
 		return "";
 	}
+#endif
 	shared_ptr<IVideoRecorder> recorder = _recorder.lock();
 	return recorder ? recorder->GetOutputFile() : "";
 }
@@ -594,14 +606,20 @@ bool VideoRenderer::StartReplayBuffer(uint32_t windowSeconds, RecordAviOptions o
 
 void VideoRenderer::StopReplayBuffer()
 {
+#ifdef __ANDROID__
 	if(_replayRecorder != nullptr) {
 		StopRecording();
 	}
+#endif
 }
 
 bool VideoRenderer::IsReplayBufferActive()
 {
+#ifdef __ANDROID__
 	return _replayRecorder != nullptr;
+#else
+	return false;
+#endif
 }
 
 uint32_t VideoRenderer::GetReplayBufferedSeconds()

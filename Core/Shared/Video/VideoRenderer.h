@@ -19,7 +19,9 @@ class InputHud;
 class WatchHud;
 
 class IVideoRecorder;
+#ifdef __ANDROID__
 class Mp4VideoRecorder;
+#endif
 enum class VideoCodec;
 
 struct RecordAviOptions
@@ -88,7 +90,9 @@ private:
 	uint32_t _cameraFrameWidth = 0;
 	uint32_t _cameraFrameHeight = 0;
 
+#ifdef __ANDROID__
 	safe_ptr<Mp4VideoRecorder> _replayRecorder;
+#endif
 
 	atomic<uint32_t> _debugOverlayMask{ 0 };
 	vector<uint32_t> _debugOverlayBuffer;
