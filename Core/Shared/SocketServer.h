@@ -181,6 +181,11 @@ struct CommandHistoryEntry {
 	string timestamp;
 	SocketErrorCode errorCode;
 	uint64_t latencyUs;  // Latency in microseconds
+	uint64_t seq = 0;        // Monotonic per process; lets observers poll with since=<seq>
+	uint64_t frame = 0;      // Emulator frame count after the command (0 when no ROM)
+	uint64_t timeMs = 0;     // Unix epoch milliseconds
+	bool success = false;
+	string paramsJson;       // Truncated JSON object of request params
 };
 
 struct SaveLoadResult {
@@ -280,6 +285,8 @@ private:
 	// Command history for debugging (static for use in static handlers)
 	static std::deque<CommandHistoryEntry> _commandHistory;
 	static uint32_t _commandHistoryMaxSize;
+	static uint64_t _commandHistorySeq;
+	static string SummarizeParams(const SocketCommand& cmd);
 	static SimpleLock _historyLock;
 
 	// Save/load serialization guards and status
