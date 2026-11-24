@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Mesen.Interop;
 using Mesen.ViewModels;
 using ReactiveUI.Fody.Helpers;
@@ -26,6 +27,12 @@ namespace Mesen.Config
         // Marks this instance as the player's window: the title shows "Oracle <build> [play]"
         // instead of the agent markers (ACTIVE, [instance], [src:...]).
         [Reactive] public bool PlayerWindow { get; set; } = false;
+
+        // ROM library: folders scanned for build folders and ROM files (empty = ~/Zelda/DevBuilds,
+        // ~/Zelda, ~/src/docs/zelda), the stop-save folder, and whether it replaces the recent-games grid.
+        [Reactive] public List<string> LibraryFolders { get; set; } = new();
+        [Reactive] public string StopSavesFolder { get; set; } = "";
+        [Reactive] public bool LibraryOnStartScreen { get; set; } = true;
 
         public OracleConfig()
         {

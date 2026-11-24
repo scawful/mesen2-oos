@@ -1,0 +1,68 @@
+<UserControl
+	xmlns="https://github.com/avaloniaui"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Mesen.ViewModels"
+	xmlns:u="using:Mesen.Utilities"
+	xmlns:sys="using:System"
+	mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="560"
+	x:Class="Mesen.Views.RomLibraryView"
+	x:DataType="vm:RomLibraryViewModel"
+>
+	<Grid ColumnDefinitions="2*,3*" Margin="12">
+		<!-- ROM list -->
+		<DockPanel Grid.Column="0" Margin="0 0 12 0">
+			<TextBox DockPanel.Dock="Top" Watermark="Search builds, ROMs, notes" Text="{Binding Filter}" Margin="0 0 0 6" />
+			<Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto" Margin="0 6 0 0">
+				<TextBlock Text="{Binding Status}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+				<Button Grid.Column="1" Content="Open File..." Click="OnOpenFileClick" Margin="6 0 0 0" />
+				<Button Grid.Column="2" Content="Refresh" Click="OnRefreshClick" Margin="6 0 0 0" />
+			</Grid>
+			<ListBox ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}" DoubleTapped="OnDoubleTapped">
+				<ListBox.DataTemplates>
+					<DataTemplate DataType="sys:String">
+						<TextBlock Text="{Binding}" FontWeight="Bold" Foreground="Gray" FontSize="11" Margin="0 6 0 0" />
+					</DataTemplate>
+					<DataTemplate DataType="u:LibraryRom">
+						<StackPanel Margin="6 0 0 0">
+							<TextBlock Text="{Binding Display}" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+							<TextBlock Text="{Binding Subtitle}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
+						</StackPanel>
+					</DataTemplate>
+				</ListBox.DataTemplates>
+			</ListBox>
+		</DockPanel>
+
+		<!-- Detail -->
+		<DockPanel Grid.Column="1" IsVisible="{Binding HasSelection}">
+			<StackPanel DockPanel.Dock="Top">
+				<TextBlock Text="{Binding Selected.Display}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
+				<TextBlock Text="{Binding Selected.Subtitle}" Foreground="Gray" TextWrapping="Wrap" Margin="0 2 0 0" />
+				<TextBlock Text="{Binding Selected.RomPath}" FontSize="10" Foreground="Gray" TextWrapping="Wrap" Margin="0 2 0 0" />
+			</StackPanel>
+
+			<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0 8 0 0">
+				<Button Content="Show in Finder" Click="OnRevealClick" />
+				<Button Content="Play" Click="OnPlayClick" FontWeight="Bold" MinWidth="110" Height="34" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+			</StackPanel>
+
+			<TextBlock DockPanel.Dock="Top" Text="Start with" FontWeight="Bold" Margin="0 12 0 4" />
+			<ListBox DockPanel.Dock="Top" ItemsSource="{Binding Saves}" SelectedItem="{Binding SelectedSave}" MaxHeight="230" DoubleTapped="OnDoubleTapped">
+				<ListBox.ItemTemplate>
+					<DataTemplate x:DataType="u:LibrarySave">
+						<StackPanel>
+							<TextBlock Text="{Binding Label}" FontWeight="Bold" />
+							<TextBlock Text="{Binding Detail}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" />
+						</StackPanel>
+					</DataTemplate>
+				</ListBox.ItemTemplate>
+			</ListBox>
+
+			<TextBlock DockPanel.Dock="Top" Text="What changed" FontWeight="Bold" Margin="0 12 0 4" IsVisible="{Binding Selected.Notes, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+			<ScrollViewer IsVisible="{Binding Selected.Notes, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+				<TextBlock Text="{Binding Selected.Notes}" TextWrapping="Wrap" FontSize="12" />
+			</ScrollViewer>
+		</DockPanel>
+	</Grid>
+</UserControl>

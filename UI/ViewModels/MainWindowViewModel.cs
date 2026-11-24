@@ -35,6 +35,10 @@ namespace Mesen.ViewModels
 
 		[Reactive] public bool IsNativeRendererVisible { get; set; }
 		[Reactive] public bool IsSoftwareRendererVisible { get; set; }
+		[Reactive] public bool IsLibraryHomeVisible { get; private set; }
+		[Reactive] public bool IsRecentGridVisible { get; private set; }
+
+		public RomLibraryViewModel Library { get; } = new();
 
 		public SoftwareRendererViewModel SoftwareRenderer { get; } = new();
 		public OracleDebugPanelViewModel OracleDebugPanel { get; } = new();
@@ -59,6 +63,15 @@ namespace Mesen.ViewModels
 			MainMenu.Initialize(wnd);
 			RecentGames.Init(GameScreenMode.RecentGames);
 			OracleDebugPanel.RequestRefresh(true);
+
+			this.WhenAnyValue(x => x.RecentGames.Visible, x => x.RecentGames.Mode).Subscribe(x => {
+				bool library = RecentGames.Visible && RecentGames.Mode == GameScreenMode.RecentGames && Config.Oracle.LibraryOnStartScreen;
+				if(library && !IsLibraryHomeVisible) {
+					Library.Refresh();
+				}
+				IsLibraryHomeVisible = library;
+				IsRecentGridVisible = RecentGames.Visible && !library;
+			});
 
 			this.WhenAnyValue(x => x.RecentGames.Visible, x => x.SoftwareRenderer.FrameSurface).Subscribe(x => {
 				IsNativeRendererVisible = !RecentGames.Visible && SoftwareRenderer.FrameSurface == null;

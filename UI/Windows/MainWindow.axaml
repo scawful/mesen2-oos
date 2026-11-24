@@ -44,7 +44,10 @@
 		<v:OracleToolsPaneView Name="OracleToolsPane" DockPanel.Dock="Right" DataContext="{Binding OracleDebugPanel}" />
 
 		<Panel Name="RendererPanel" Background="Black">
-			<ContentControl Background="#181818" Content="{Binding RecentGames}" IsVisible="{Binding RecentGames.Visible}" />
+			<ContentControl Background="#181818" Content="{Binding RecentGames}" IsVisible="{Binding IsRecentGridVisible}" />
+			<Border Background="#181818" IsVisible="{Binding IsLibraryHomeVisible}">
+				<v:RomLibraryView DataContext="{Binding Library}" />
+			</Border>
 
 			<m:NativeRenderer
 				Name="Renderer"

@@ -102,6 +102,11 @@ namespace Mesen.ViewModels
 		{
 			FileMenuItems = new List<object>() {
 				new MainMenuAction(EmulatorShortcut.OpenFile) { ActionType = ActionType.Open },
+				new MainMenuAction() {
+					ActionType = ActionType.Custom,
+					DynamicText = () => "ROM Library...",
+					OnClick = () => ApplicationHelper.GetOrCreateUniqueWindow(wnd, () => new RomLibraryWindow())
+				},
 				new ContextMenuSeparator(),
 				new MainMenuAction() {
 					ActionType = ActionType.SaveState,
