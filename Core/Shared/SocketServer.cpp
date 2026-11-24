@@ -614,7 +614,9 @@ void SocketServer::Start() {
 		}
 	}
 
-	if (listen(_serverFd, 5) < 0) {
+	//Agents, the Probes recorder and session samplers each open short connections;
+	//a backlog of 5 refused connects when they overlapped.
+	if (listen(_serverFd, SOMAXCONN) < 0) {
 		MessageManager::Log("[SocketServer] Failed to listen on socket");
 		close(_serverFd);
 		_serverFd = -1;
