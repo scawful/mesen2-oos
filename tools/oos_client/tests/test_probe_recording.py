@@ -139,6 +139,17 @@ class RecordingTest(unittest.TestCase):
         self.assertFalse((self.lane.run['dir'] / 'commands.jsonl').exists())
         self.assertTrue((self.lane.run['dir'] / 'frames' / '000001.png').exists())
 
+    def test_restarted_emulator_gets_new_run_and_rechecks_command_log(self):
+        self.mesen.legacy = True; self.lane.tick(10); first = self.lane.run['dir']
+        self.assertEqual(self.lane.command_log, 'unsupported')
+        # Same socket, newer build, frame counter starts over.
+        self.mesen.legacy = False; self.mesen.frame = 0; self.mesen.agent('READ', addr='0x7E0010')
+        self.lane.tick(11.1)
+        self.assertNotEqual(self.lane.run['dir'], first)
+        self.assertIn('restarted', json.loads((first / 'run.json').read_text())['end_reason'])
+        self.assertEqual(self.lane.command_log, 'ok')
+        self.assertIn('READ', [c['command'] for c in self.lane.commands])
+
     def test_run_ends_after_gap_and_new_run_starts(self):
         self.lane.tick(10); first = self.lane.run['dir']
         self.mesen.close(); self.lane.tick(11.1); self.assertIsNotNone(self.lane.run)

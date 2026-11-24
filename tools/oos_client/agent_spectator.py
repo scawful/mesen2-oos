@@ -312,7 +312,14 @@ class Lane:
                     with self.lock:
                         self.rom = rom
                 game = self.client.read('GAMESTATE') if self.game_safe else {}
-                if not self.connected:
+                # A frame count that drops means a new emulator process on the same socket: new run.
+                frame, last_frame = status.get('frame'), self.state.get('frame')
+                restarted = isinstance(frame, int) and isinstance(last_frame, int) and frame + 60 < last_frame
+                if restarted and self.run:
+                    self.end_run('emulator restarted (frame %s -> %s)' % (last_frame, frame))
+                if not self.connected or restarted:
+                    # The process may have changed: re-check the command log support and sequence.
+                    self.command_log = 'unknown'; self.history_seq = None
                     if self.record_fps > 0 and self.run is None:
                         self.start_run()
                     self.emit('connected', rom=self.rom, passive_game_state=self.game_safe,
