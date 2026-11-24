@@ -196,7 +196,7 @@ namespace Mesen.Config
 					return;
 				}
 
-				EmuApi.WriteLogEntry("[UI] Migrating legacy Mesen data from: " + legacyFolder);
+				LogEarly("[UI] Migrating legacy Mesen data from: " + legacyFolder);
 				CopyDirectory(legacyFolder, destinationFolder);
 				File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O"));
 			} catch {
@@ -429,6 +429,37 @@ namespace Mesen.Config
 			return false;
 		}
 
+		private static readonly List<string> _earlyLog = new();
+
+		/// <summary>
+		/// Log through the core when it can be loaded. Choosing the home folder runs before the
+		/// native dependencies are extracted into it; on Linux the core is not next to the
+		/// executable, so those messages wait in a queue until <see cref="FlushEarlyLog"/>.
+		/// </summary>
+		private static void LogEarly(string message)
+		{
+			try {
+				EmuApi.WriteLogEntry(message);
+			} catch(Exception ex) when(ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is BadImageFormatException) {
+				lock(_earlyLog) {
+					_earlyLog.Add(message);
+				}
+			}
+		}
+
+		/// <summary>Write the messages queued before the core could be loaded (call after extraction).</summary>
+		public static void FlushEarlyLog()
+		{
+			string[] pending;
+			lock(_earlyLog) {
+				pending = _earlyLog.ToArray();
+				_earlyLog.Clear();
+			}
+			foreach(string message in pending) {
+				LogEarly(message);
+			}
+		}
+
 		public static void ResetHomeFolder()
 		{
 			_homeFolder = null;
@@ -443,7 +474,7 @@ namespace Mesen.Config
 					if(!string.IsNullOrWhiteSpace(overrideFolder)) {
 						_homeFolder = overrideFolder;
 						Directory.CreateDirectory(_homeFolder);
-						EmuApi.WriteLogEntry("[UI] Using MESEN2_HOME override: " + _homeFolder);
+						LogEarly("[UI] Using MESEN2_HOME override: " + _homeFolder);
 						return _homeFolder;
 					}
 
@@ -455,7 +486,7 @@ namespace Mesen.Config
 					string defaultConfig = Path.Combine(documentsFolder, "settings.json");
 					bool ignorePortableConfig = OperatingSystem.IsMacOS() && IsMacAppBundlePath(portableFolder);
 					if(ignorePortableConfig && File.Exists(portableConfig)) {
-						EmuApi.WriteLogEntry("[UI] Ignoring portable config inside app bundle: " + portableFolder);
+						LogEarly("[UI] Ignoring portable config inside app bundle: " + portableFolder);
 					}
 					if(File.Exists(portableConfig) && !ignorePortableConfig) {
 						candidates.Add(portableFolder);
@@ -470,9 +501,9 @@ namespace Mesen.Config
 					if(!string.IsNullOrWhiteSpace(selectedFolder)) {
 						_homeFolder = selectedFolder;
 						if(!string.Equals(selectedFolder, documentsFolder, StringComparison.OrdinalIgnoreCase) && !string.Equals(selectedFolder, portableFolder, StringComparison.OrdinalIgnoreCase)) {
-							EmuApi.WriteLogEntry("[UI] Using legacy config folder: " + _homeFolder);
+							LogEarly("[UI] Using legacy config folder: " + _homeFolder);
 						} else {
-							EmuApi.WriteLogEntry("[UI] Using config folder: " + _homeFolder);
+							LogEarly("[UI] Using config folder: " + _homeFolder);
 						}
 					} else if(File.Exists(portableConfig) && !ignorePortableConfig) {
 						_homeFolder = portableFolder;
@@ -505,7 +536,7 @@ namespace Mesen.Config
 				}
 			} catch {
 				//If the folder doesn't exist and we couldn't create it, use the default folder
-				EmuApi.WriteLogEntry("[UI] Folder could not be created: " + folder);
+				LogEarly("[UI] Folder could not be created: " + folder);
 				folder = defaultFolderName;
 			}
 			return folder;

@@ -65,6 +65,7 @@ namespace Mesen
 					ConfigManager.CreateConfig(false);
 				} else {
 					ExtractNativeDependencies(ConfigManager.HomeFolder);
+					ConfigManager.FlushEarlyLog();
 					App.ShowConfigWindow = true;
 					BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnMainWindowClose);
 					if(File.Exists(ConfigManager.GetConfigFile())) {
@@ -82,6 +83,7 @@ namespace Mesen
 
 			//Extract core dll & other native dependencies
 			ExtractNativeDependencies(ConfigManager.HomeFolder);
+			ConfigManager.FlushEarlyLog();
 			InstanceLog.Start(ConfigManager.HomeFolder, args, headlessRequested);
 
 			if(CommandLineHelper.IsTestRunner(args)) {
